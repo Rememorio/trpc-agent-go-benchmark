@@ -1,0 +1,1759 @@
+//
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
+// Package main runs SkillCraft tasks with trpc-agent-go and compares a plain
+// baseline against the evolution skill-learning loop.
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"log"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"runtime"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/evolution"
+	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/model/openai"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
+	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+	"trpc.group/trpc-go/trpc-agent-go/skill"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
+	mcpcfg "trpc.group/trpc-go/trpc-agent-go/tool/mcp"
+)
+
+type runMode string
+
+const (
+	modeBaseline  runMode = "baseline"
+	modeEvolution runMode = "evolution"
+	modeCompare   runMode = "compare"
+)
+
+const (
+	defaultTaskRoot          = "tasks/scaled_tasks"
+	defaultOutputRelative    = "../results"
+	defaultAgentMaxTokens    = 4096
+	defaultToolIterations    = 16
+	defaultFallbackTaskLimit = 900
+	defaultMCPTimeoutSec     = 120
+)
+
+var (
+	flagSkillCraftRoot = flag.String(
+		"skillcraft-root",
+		envOrDefault("SKILLCRAFT_ROOT", ""),
+		"Path to the local SkillCraft checkout",
+	)
+	flagTaskRoot = flag.String(
+		"task-root",
+		defaultTaskRoot,
+		"Task root relative to SkillCraft root",
+	)
+	flagBaseTask = flag.String(
+		"base-task",
+		"",
+		"Base task family under task-root, e.g. cat-facts-collector",
+	)
+	flagScales = flag.String(
+		"scales",
+		"e1,e2,e3",
+		"Comma-separated task scales when -base-task is used",
+	)
+	flagTasks = flag.String(
+		"tasks",
+		"",
+		"Explicit comma-separated task directories (relative to SkillCraft root or absolute paths)",
+	)
+	flagMode = flag.String(
+		"mode",
+		string(modeCompare),
+		"Run mode: baseline, evolution, compare",
+	)
+	flagModel = flag.String(
+		"model",
+		envOrDefault("MODEL_NAME", "gpt-4o-mini"),
+		"Agent model name",
+	)
+	flagReviewerModel = flag.String(
+		"reviewer-model",
+		"",
+		"Evolution reviewer model name (defaults to -model)",
+	)
+	flagVariant = flag.String(
+		"variant",
+		"",
+		"Optional OpenAI-compatible provider variant",
+	)
+	flagOutput = flag.String(
+		"output",
+		defaultOutputRelative,
+		"Output directory for benchmark results",
+	)
+	flagTaskTimeoutSeconds = flag.Int(
+		"task-timeout-seconds",
+		0,
+		"Per-task timeout override in seconds (0 = use SkillCraft task_config timeout)",
+	)
+	flagMaxToolIterations = flag.Int(
+		"max-tool-iterations",
+		defaultToolIterations,
+		"Maximum tool iterations per task",
+	)
+	flagMaxTokens = flag.Int(
+		"max-tokens",
+		defaultAgentMaxTokens,
+		"Maximum output tokens per model call",
+	)
+	flagMCPTimeoutSeconds = flag.Int(
+		"mcp-timeout-seconds",
+		defaultMCPTimeoutSec,
+		"MCP server init/call timeout in seconds",
+	)
+	flagKeepWorkspaces = flag.Bool(
+		"keep-workspaces",
+		true,
+		"Keep per-task workspaces after evaluation",
+	)
+	flagVerbose = flag.Bool(
+		"verbose",
+		false,
+		"Print verbose per-task progress",
+	)
+)
+
+type benchmarkConfig struct {
+	SkillCraftRoot    string
+	TaskRoot          string
+	BaseTask          string
+	Scales            []string
+	ExplicitTasks     []string
+	Mode              runMode
+	ModelName         string
+	ReviewerModelName string
+	Variant           string
+	OutputDir         string
+	TaskTimeout       time.Duration
+	MaxToolIterations int
+	MaxTokens         int
+	MCPTimeout        time.Duration
+	KeepWorkspaces    bool
+	Verbose           bool
+}
+
+type rawTaskConfig struct {
+	TaskName         string   `json:"task_name"`
+	TaskType         string   `json:"task_type"`
+	NeededMCPServers []string `json:"needed_mcp_servers"`
+	NeededLocalTools []string `json:"needed_local_tools"`
+	MaxTurns         int      `json:"max_turns"`
+	Timeout          int      `json:"timeout"`
+	Meta             struct {
+		BaseTask    string `json:"base_task"`
+		ScaleLevel  string `json:"scale_level"`
+		Difficulty  string `json:"difficulty"`
+		Description string `json:"description"`
+	} `json:"meta"`
+}
+
+type taskDefinition struct {
+	ID                string   `json:"id"`
+	Name              string   `json:"name"`
+	BaseTask          string   `json:"baseTask"`
+	Scale             string   `json:"scale"`
+	Difficulty        string   `json:"difficulty"`
+	Description       string   `json:"description"`
+	Dir               string   `json:"dir"`
+	TaskDocPath       string   `json:"taskDocPath"`
+	TaskDoc           string   `json:"taskDoc"`
+	AgentPromptPath   string   `json:"agentPromptPath,omitempty"`
+	AgentPrompt       string   `json:"agentPrompt,omitempty"`
+	EvaluationScript  string   `json:"evaluationScript"`
+	InitialWorkspace  string   `json:"initialWorkspace,omitempty"`
+	NeededMCPServers  []string `json:"neededMCPServers"`
+	NeededLocalTools  []string `json:"neededLocalTools"`
+	MaxTurns          int      `json:"maxTurns"`
+	TimeoutSeconds    int      `json:"timeoutSeconds"`
+	HasInitialContent bool     `json:"hasInitialContent"`
+}
+
+type benchmarkResult struct {
+	Timestamp         string         `json:"timestamp"`
+	RequestedMode     runMode        `json:"requestedMode"`
+	Model             string         `json:"model"`
+	ReviewerModel     string         `json:"reviewerModel"`
+	Variant           string         `json:"variant,omitempty"`
+	SkillCraftRoot    string         `json:"skillcraftRoot"`
+	TaskRoot          string         `json:"taskRoot"`
+	BaseTask          string         `json:"baseTask,omitempty"`
+	Scales            []string       `json:"scales,omitempty"`
+	Tasks             []*taskSummary `json:"tasks"`
+	Baseline          *modeResult    `json:"baseline,omitempty"`
+	Evolution         *modeResult    `json:"evolution,omitempty"`
+	Comparison        *compareResult `json:"comparison,omitempty"`
+	OutputDir         string         `json:"outputDir"`
+	KeepWorkspaces    bool           `json:"keepWorkspaces"`
+	MaxToolIterations int            `json:"maxToolIterations"`
+	TaskTimeoutSec    int            `json:"taskTimeoutSeconds"`
+}
+
+type taskSummary struct {
+	ID                string   `json:"id"`
+	Name              string   `json:"name"`
+	BaseTask          string   `json:"baseTask"`
+	Scale             string   `json:"scale"`
+	Difficulty        string   `json:"difficulty"`
+	Description       string   `json:"description"`
+	NeededMCPServers  []string `json:"neededMCPServers"`
+	NeededLocalTools  []string `json:"neededLocalTools"`
+	MaxTurns          int      `json:"maxTurns"`
+	TimeoutSeconds    int      `json:"timeoutSeconds"`
+	HasInitialContent bool     `json:"hasInitialContent"`
+}
+
+type modeResult struct {
+	Mode    runMode          `json:"mode"`
+	Cases   []*taskRunResult `json:"cases"`
+	Summary *modeSummary     `json:"summary"`
+}
+
+type subsetSummary struct {
+	Tasks                   int     `json:"tasks"`
+	PassedTasks             int     `json:"passedTasks"`
+	PassRate                float64 `json:"passRate"`
+	AverageScorePercent     float64 `json:"averageScorePercent"`
+	AverageDurationSec      float64 `json:"averageDurationSeconds"`
+	AveragePromptTokens     float64 `json:"averagePromptTokens"`
+	AverageOutputTokens     float64 `json:"averageOutputTokens"`
+	AverageTotalTokens      float64 `json:"averageTotalTokens"`
+	AverageReviewerTokens   float64 `json:"averageReviewerTokens,omitempty"`
+	AverageEndToEndTokens   float64 `json:"averageEndToEndTokens,omitempty"`
+	ClaimDoneRate           float64 `json:"claimDoneRate"`
+	SkillUsageObservedTasks int     `json:"skillUsageObservedTasks,omitempty"`
+	SkillUsageObservedRate  float64 `json:"skillUsageObservedRate,omitempty"`
+}
+
+type modeSummary struct {
+	Tasks                    int            `json:"tasks"`
+	PassedTasks              int            `json:"passedTasks"`
+	PassRate                 float64        `json:"passRate"`
+	AverageScorePercent      float64        `json:"averageScorePercent"`
+	AverageDurationSec       float64        `json:"averageDurationSeconds"`
+	AveragePromptTokens      float64        `json:"averagePromptTokens"`
+	AverageOutputTokens      float64        `json:"averageOutputTokens"`
+	AverageTotalTokens       float64        `json:"averageTotalTokens"`
+	AverageReviewerTokens    float64        `json:"averageReviewerTokens,omitempty"`
+	AverageEndToEndTokens    float64        `json:"averageEndToEndTokens,omitempty"`
+	ClaimDoneRate            float64        `json:"claimDoneRate"`
+	SkillUsageObservedTasks  int            `json:"skillUsageObservedTasks,omitempty"`
+	SkillUsageObservedRate   float64        `json:"skillUsageObservedRate,omitempty"`
+	ReviewerPromptTokens     int            `json:"reviewerPromptTokens,omitempty"`
+	ReviewerCompletionTokens int            `json:"reviewerCompletionTokens,omitempty"`
+	ReviewerTotalTokens      int            `json:"reviewerTotalTokens,omitempty"`
+	AgentErrorCount          int            `json:"agentErrorCount"`
+	EvalErrorCount           int            `json:"evalErrorCount"`
+	SkillsGenerated          int            `json:"skillsGenerated,omitempty"`
+	FinalSkillNames          []string       `json:"finalSkillNames,omitempty"`
+	WarmStart                *subsetSummary `json:"warmStart,omitempty"`
+	ColdStart                *subsetSummary `json:"coldStart,omitempty"`
+}
+
+type compareResult struct {
+	PassRateDelta               float64 `json:"passRateDelta"`
+	ScoreDelta                  float64 `json:"scoreDelta"`
+	DurationDeltaSec            float64 `json:"durationDeltaSeconds"`
+	TokenDelta                  float64 `json:"tokenDelta"`
+	EndToEndTokenDelta          float64 `json:"endToEndTokenDelta"`
+	ReviewerTokenDelta          float64 `json:"reviewerTokenDelta"`
+	ClaimDoneDelta              float64 `json:"claimDoneDelta"`
+	SkillUsageObservedDelta     float64 `json:"skillUsageObservedDelta"`
+	WarmStartTaskCount          int     `json:"warmStartTaskCount,omitempty"`
+	WarmStartPassRateDelta      float64 `json:"warmStartPassRateDelta,omitempty"`
+	WarmStartScoreDelta         float64 `json:"warmStartScoreDelta,omitempty"`
+	WarmStartDurationDeltaSec   float64 `json:"warmStartDurationDeltaSeconds,omitempty"`
+	WarmStartTokenDelta         float64 `json:"warmStartTokenDelta,omitempty"`
+	WarmStartEndToEndTokenDelta float64 `json:"warmStartEndToEndTokenDelta,omitempty"`
+}
+
+type taskRunResult struct {
+	TaskID                   string            `json:"taskId"`
+	TaskName                 string            `json:"taskName"`
+	BaseTask                 string            `json:"baseTask"`
+	Scale                    string            `json:"scale"`
+	Mode                     runMode           `json:"mode"`
+	Status                   string            `json:"status"`
+	DurationSeconds          float64           `json:"durationSeconds"`
+	PromptTokens             int               `json:"promptTokens"`
+	CompletionTokens         int               `json:"completionTokens"`
+	TotalTokens              int               `json:"totalTokens"`
+	ReviewerPromptTokens     int               `json:"reviewerPromptTokens,omitempty"`
+	ReviewerCompletionTokens int               `json:"reviewerCompletionTokens,omitempty"`
+	ReviewerTotalTokens      int               `json:"reviewerTotalTokens,omitempty"`
+	EndToEndTotalTokens      int               `json:"endToEndTotalTokens,omitempty"`
+	ToolCalls                []string          `json:"toolCalls,omitempty"`
+	SkillToolCalls           []string          `json:"skillToolCalls,omitempty"`
+	LoadedSkillNames         []string          `json:"loadedSkillNames,omitempty"`
+	ClaimDoneCalled          bool              `json:"claimDoneCalled"`
+	HadAvailableSkills       bool              `json:"hadAvailableSkills,omitempty"`
+	SkillUsageObserved       bool              `json:"skillUsageObserved,omitempty"`
+	FinalResponse            string            `json:"finalResponse,omitempty"`
+	Workspace                string            `json:"workspace,omitempty"`
+	AgentError               string            `json:"agentError,omitempty"`
+	EventErrors              []string          `json:"eventErrors,omitempty"`
+	Evaluation               *officialEval     `json:"evaluation,omitempty"`
+	EvaluationError          string            `json:"evaluationError,omitempty"`
+	SkillCountBefore         int               `json:"skillCountBefore,omitempty"`
+	SkillCountAfter          int               `json:"skillCountAfter,omitempty"`
+	LearnedSkillNames        []string          `json:"learnedSkillNames,omitempty"`
+	Metadata                 map[string]string `json:"metadata,omitempty"`
+}
+
+type officialEval struct {
+	Passed   bool         `json:"passed"`
+	Status   string       `json:"status"`
+	Score    scorePayload `json:"score"`
+	Items    []scoreItem  `json:"items,omitempty"`
+	Errors   []string     `json:"errors,omitempty"`
+	Warnings []string     `json:"warnings,omitempty"`
+	Raw      interface{}  `json:"raw,omitempty"`
+}
+
+type scorePayload struct {
+	Achieved float64 `json:"achieved"`
+	Max      float64 `json:"max"`
+	Percent  float64 `json:"percent"`
+}
+
+type scoreItem struct {
+	Name     string  `json:"name"`
+	Score    float64 `json:"score"`
+	MaxScore float64 `json:"max_score"`
+	Status   string  `json:"status"`
+	Details  string  `json:"details"`
+}
+
+type runStats struct {
+	PromptTokens             int
+	CompletionTokens         int
+	TotalTokens              int
+	ReviewerPromptTokens     int
+	ReviewerCompletionTokens int
+	ReviewerTotalTokens      int
+	EndToEndTotalTokens      int
+	ToolCalls                []string
+	SkillToolCalls           []string
+	LoadedSkillNames         []string
+	ClaimDoneCalled          bool
+	SkillUsageObserved       bool
+	FinalResponse            string
+	EventErrors              []string
+}
+
+type trackedUsage struct {
+	PromptTokens     int
+	CompletionTokens int
+	TotalTokens      int
+}
+
+type usageTracker struct {
+	mu    sync.Mutex
+	usage trackedUsage
+}
+
+func (t *usageTracker) add(usage *model.Usage) {
+	if t == nil || usage == nil {
+		return
+	}
+	t.mu.Lock()
+	t.usage.PromptTokens += usage.PromptTokens
+	t.usage.CompletionTokens += usage.CompletionTokens
+	t.usage.TotalTokens += usage.TotalTokens
+	t.mu.Unlock()
+}
+
+func (t *usageTracker) snapshot() trackedUsage {
+	if t == nil {
+		return trackedUsage{}
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.usage
+}
+
+type trackingModel struct {
+	base    model.Model
+	tracker *usageTracker
+}
+
+func newTrackingModel(base model.Model) (*trackingModel, *usageTracker) {
+	tracker := &usageTracker{}
+	return &trackingModel{base: base, tracker: tracker}, tracker
+}
+
+func (m *trackingModel) GenerateContent(
+	ctx context.Context,
+	request *model.Request,
+) (<-chan *model.Response, error) {
+	respCh, err := m.base.GenerateContent(ctx, request)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make(chan *model.Response)
+	go func() {
+		defer close(out)
+
+		var lastUsage *model.Usage
+		for resp := range respCh {
+			if resp != nil && resp.Usage != nil {
+				usageCopy := *resp.Usage
+				lastUsage = &usageCopy
+			}
+			out <- resp
+		}
+		if lastUsage != nil {
+			m.tracker.add(lastUsage)
+		}
+	}()
+	return out, nil
+}
+
+func (m *trackingModel) Info() model.Info {
+	return m.base.Info()
+}
+
+func main() {
+	flag.Parse()
+
+	cfg, err := buildConfig()
+	if err != nil {
+		log.Fatalf("invalid flags: %v", err)
+	}
+
+	tasks, err := collectTasks(cfg)
+	if err != nil {
+		log.Fatalf("load tasks: %v", err)
+	}
+
+	result := &benchmarkResult{
+		Timestamp:         time.Now().Format(time.RFC3339),
+		RequestedMode:     cfg.Mode,
+		Model:             cfg.ModelName,
+		ReviewerModel:     cfg.ReviewerModelName,
+		Variant:           cfg.Variant,
+		SkillCraftRoot:    cfg.SkillCraftRoot,
+		TaskRoot:          cfg.TaskRoot,
+		BaseTask:          cfg.BaseTask,
+		Scales:            cfg.Scales,
+		Tasks:             summarizeTasks(tasks),
+		OutputDir:         cfg.OutputDir,
+		KeepWorkspaces:    cfg.KeepWorkspaces,
+		MaxToolIterations: cfg.MaxToolIterations,
+		TaskTimeoutSec:    int(cfg.TaskTimeout.Seconds()),
+	}
+
+	log.Printf("SkillCraft root: %s", cfg.SkillCraftRoot)
+	log.Printf("Selected %d tasks", len(tasks))
+	for i, task := range tasks {
+		log.Printf("  %d. %s (%s)", i+1, task.ID, task.Description)
+	}
+
+	if cfg.Mode == modeBaseline || cfg.Mode == modeCompare {
+		result.Baseline, err = runModeTasks(cfg, modeBaseline, tasks)
+		if err != nil {
+			log.Fatalf("baseline run failed: %v", err)
+		}
+	}
+
+	if cfg.Mode == modeEvolution || cfg.Mode == modeCompare {
+		result.Evolution, err = runModeTasks(cfg, modeEvolution, tasks)
+		if err != nil {
+			log.Fatalf("evolution run failed: %v", err)
+		}
+	}
+
+	if result.Baseline != nil && result.Evolution != nil {
+		result.Comparison = buildComparison(result.Baseline, result.Evolution)
+	}
+
+	if err := os.MkdirAll(cfg.OutputDir, 0o755); err != nil {
+		log.Fatalf("create output dir: %v", err)
+	}
+	if err := writeResults(cfg.OutputDir, result); err != nil {
+		log.Fatalf("write results: %v", err)
+	}
+	if err := writeReport(cfg.OutputDir, result); err != nil {
+		log.Fatalf("write report: %v", err)
+	}
+
+	log.Printf("Saved benchmark outputs to %s", cfg.OutputDir)
+}
+
+func buildConfig() (*benchmarkConfig, error) {
+	if strings.TrimSpace(*flagSkillCraftRoot) == "" {
+		return nil, errors.New("missing -skillcraft-root or SKILLCRAFT_ROOT")
+	}
+	skillcraftRoot, err := filepath.Abs(strings.TrimSpace(*flagSkillCraftRoot))
+	if err != nil {
+		return nil, fmt.Errorf("resolve skillcraft root: %w", err)
+	}
+	info, err := os.Stat(skillcraftRoot)
+	if err != nil || !info.IsDir() {
+		return nil, fmt.Errorf("invalid skillcraft root: %s", skillcraftRoot)
+	}
+
+	mode := runMode(strings.ToLower(strings.TrimSpace(*flagMode)))
+	switch mode {
+	case modeBaseline, modeEvolution, modeCompare:
+	default:
+		return nil, fmt.Errorf("unsupported -mode %q", *flagMode)
+	}
+	if strings.TrimSpace(*flagModel) == "" {
+		return nil, errors.New("missing -model")
+	}
+	if *flagMaxToolIterations <= 0 {
+		return nil, fmt.Errorf("invalid -max-tool-iterations %d", *flagMaxToolIterations)
+	}
+	if *flagMaxTokens <= 0 {
+		return nil, fmt.Errorf("invalid -max-tokens %d", *flagMaxTokens)
+	}
+	if *flagMCPTimeoutSeconds <= 0 {
+		return nil, fmt.Errorf("invalid -mcp-timeout-seconds %d", *flagMCPTimeoutSeconds)
+	}
+	outputDir, err := filepath.Abs(strings.TrimSpace(*flagOutput))
+	if err != nil {
+		return nil, fmt.Errorf("resolve output dir: %w", err)
+	}
+
+	reviewerModel := strings.TrimSpace(*flagReviewerModel)
+	if reviewerModel == "" {
+		reviewerModel = strings.TrimSpace(*flagModel)
+	}
+
+	cfg := &benchmarkConfig{
+		SkillCraftRoot:    skillcraftRoot,
+		TaskRoot:          strings.Trim(strings.TrimSpace(*flagTaskRoot), "/"),
+		BaseTask:          strings.Trim(strings.TrimSpace(*flagBaseTask), "/"),
+		Scales:            parseCSV(*flagScales),
+		ExplicitTasks:     parseCSV(*flagTasks),
+		Mode:              mode,
+		ModelName:         strings.TrimSpace(*flagModel),
+		ReviewerModelName: reviewerModel,
+		Variant:           strings.TrimSpace(*flagVariant),
+		OutputDir:         outputDir,
+		MaxToolIterations: *flagMaxToolIterations,
+		MaxTokens:         *flagMaxTokens,
+		MCPTimeout:        time.Duration(*flagMCPTimeoutSeconds) * time.Second,
+		KeepWorkspaces:    *flagKeepWorkspaces,
+		Verbose:           *flagVerbose,
+	}
+	if *flagTaskTimeoutSeconds > 0 {
+		cfg.TaskTimeout = time.Duration(*flagTaskTimeoutSeconds) * time.Second
+	}
+	if len(cfg.ExplicitTasks) == 0 && cfg.BaseTask == "" {
+		return nil, errors.New("set either -tasks or -base-task")
+	}
+	if len(cfg.ExplicitTasks) > 0 && cfg.BaseTask != "" {
+		return nil, errors.New("use either -tasks or -base-task, not both")
+	}
+	if len(cfg.ExplicitTasks) == 0 && len(cfg.Scales) == 0 {
+		return nil, errors.New("missing -scales")
+	}
+	return cfg, nil
+}
+
+func collectTasks(cfg *benchmarkConfig) ([]*taskDefinition, error) {
+	var specs []string
+	if len(cfg.ExplicitTasks) > 0 {
+		specs = append(specs, cfg.ExplicitTasks...)
+	} else {
+		for _, scale := range cfg.Scales {
+			if strings.Contains(cfg.BaseTask, "/") {
+				specs = append(specs, filepath.Join(cfg.BaseTask, scale))
+				continue
+			}
+			specs = append(specs, filepath.Join(cfg.TaskRoot, cfg.BaseTask, scale))
+		}
+	}
+
+	out := make([]*taskDefinition, 0, len(specs))
+	for _, spec := range specs {
+		task, err := loadTaskDefinition(cfg.SkillCraftRoot, spec)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, task)
+	}
+	return out, nil
+}
+
+func loadTaskDefinition(skillcraftRoot, spec string) (*taskDefinition, error) {
+	taskDir, err := resolveTaskDir(skillcraftRoot, spec)
+	if err != nil {
+		return nil, err
+	}
+
+	configPath := filepath.Join(taskDir, "task_config.json")
+	raw, err := os.ReadFile(configPath)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", configPath, err)
+	}
+	var taskCfg rawTaskConfig
+	if err := json.Unmarshal(raw, &taskCfg); err != nil {
+		return nil, fmt.Errorf("parse %s: %w", configPath, err)
+	}
+
+	taskDocPath := filepath.Join(taskDir, "docs", "task.md")
+	taskDoc, err := os.ReadFile(taskDocPath)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", taskDocPath, err)
+	}
+	agentPromptPath := filepath.Join(taskDir, "docs", "agent_system_prompt.md")
+	agentPrompt, _ := readOptionalFile(agentPromptPath)
+	evalPath := filepath.Join(taskDir, "evaluation", "main.py")
+	if _, err := os.Stat(evalPath); err != nil {
+		return nil, fmt.Errorf("missing evaluation script for %s", taskDir)
+	}
+	initialWorkspace := filepath.Join(taskDir, "initial_workspace")
+	hasInitialContent := false
+	if info, err := os.Stat(initialWorkspace); err == nil && info.IsDir() {
+		hasInitialContent = true
+	} else {
+		initialWorkspace = ""
+	}
+
+	baseTask := strings.TrimSpace(taskCfg.Meta.BaseTask)
+	scale := strings.TrimSpace(taskCfg.Meta.ScaleLevel)
+	if baseTask == "" {
+		baseTask = inferBaseTask(taskDir)
+	}
+	if scale == "" {
+		scale = filepath.Base(taskDir)
+	}
+	taskID := strings.Trim(baseTask+"/"+scale, "/")
+
+	return &taskDefinition{
+		ID:                taskID,
+		Name:              strings.TrimSpace(taskCfg.TaskName),
+		BaseTask:          baseTask,
+		Scale:             scale,
+		Difficulty:        strings.TrimSpace(taskCfg.Meta.Difficulty),
+		Description:       strings.TrimSpace(taskCfg.Meta.Description),
+		Dir:               taskDir,
+		TaskDocPath:       taskDocPath,
+		TaskDoc:           strings.TrimSpace(string(taskDoc)),
+		AgentPromptPath:   agentPromptPath,
+		AgentPrompt:       strings.TrimSpace(agentPrompt),
+		EvaluationScript:  evalPath,
+		InitialWorkspace:  initialWorkspace,
+		NeededMCPServers:  append([]string(nil), taskCfg.NeededMCPServers...),
+		NeededLocalTools:  append([]string(nil), taskCfg.NeededLocalTools...),
+		MaxTurns:          taskCfg.MaxTurns,
+		TimeoutSeconds:    taskCfg.Timeout,
+		HasInitialContent: hasInitialContent,
+	}, nil
+}
+
+func resolveTaskDir(skillcraftRoot, spec string) (string, error) {
+	spec = strings.TrimSpace(spec)
+	if spec == "" {
+		return "", errors.New("empty task spec")
+	}
+
+	candidates := make([]string, 0, 4)
+	if filepath.IsAbs(spec) {
+		candidates = append(candidates, spec)
+	} else {
+		candidates = append(candidates,
+			filepath.Join(skillcraftRoot, spec),
+			filepath.Join(skillcraftRoot, "tasks", spec),
+			filepath.Join(skillcraftRoot, defaultTaskRoot, spec),
+		)
+	}
+
+	for _, candidate := range candidates {
+		configPath := filepath.Join(candidate, "task_config.json")
+		if info, err := os.Stat(configPath); err == nil && !info.IsDir() {
+			return filepath.Clean(candidate), nil
+		}
+	}
+	return "", fmt.Errorf("could not resolve task spec %q", spec)
+}
+
+func runModeTasks(
+	cfg *benchmarkConfig,
+	mode runMode,
+	tasks []*taskDefinition,
+) (*modeResult, error) {
+	log.Printf("=== Running %s ===", mode)
+
+	var skillsDir string
+	if mode == modeEvolution {
+		skillsDir = filepath.Join(cfg.OutputDir, "managed_skills")
+		if err := os.RemoveAll(skillsDir); err != nil {
+			return nil, fmt.Errorf("reset managed skills dir: %w", err)
+		}
+		if err := os.MkdirAll(skillsDir, 0o755); err != nil {
+			return nil, fmt.Errorf("create managed skills dir: %w", err)
+		}
+	}
+
+	results := make([]*taskRunResult, 0, len(tasks))
+	for idx, task := range tasks {
+		log.Printf("[%s %d/%d] %s", mode, idx+1, len(tasks), task.ID)
+		runResult, err := runSingleTask(cfg, mode, task, idx, skillsDir)
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, runResult)
+	}
+
+	var finalSkillNames []string
+	if mode == modeEvolution {
+		names, err := skillNamesFromDir(skillsDir)
+		if err != nil {
+			return nil, err
+		}
+		finalSkillNames = names
+	}
+
+	return &modeResult{
+		Mode:    mode,
+		Cases:   results,
+		Summary: summarizeMode(results, finalSkillNames),
+	}, nil
+}
+
+func runSingleTask(
+	cfg *benchmarkConfig,
+	mode runMode,
+	task *taskDefinition,
+	index int,
+	skillsDir string,
+) (*taskRunResult, error) {
+	workspace := filepath.Join(cfg.OutputDir, "workspaces", string(mode), sanitizeName(task.ID))
+	if err := prepareWorkspace(task, workspace); err != nil {
+		return nil, fmt.Errorf("prepare workspace for %s: %w", task.ID, err)
+	}
+	if cfg.Verbose {
+		files, _ := listRelativeFiles(workspace)
+		log.Printf("  workspace: %s", workspace)
+		if len(files) > 0 {
+			log.Printf("  initial files: %s", strings.Join(files, ", "))
+		}
+	}
+
+	result := &taskRunResult{
+		TaskID:    task.ID,
+		TaskName:  task.Name,
+		BaseTask:  task.BaseTask,
+		Scale:     task.Scale,
+		Mode:      mode,
+		Status:    "ok",
+		Workspace: workspace,
+		Metadata: map[string]string{
+			"taskDir": task.Dir,
+		},
+	}
+
+	start := time.Now()
+
+	var (
+		skillRepo        *skill.FSRepository
+		skillNamesBefore []string
+	)
+	if mode == modeEvolution {
+		if err := os.MkdirAll(skillsDir, 0o755); err != nil {
+			return nil, fmt.Errorf("create skills dir: %w", err)
+		}
+		skillRepo, _ = skill.NewFSRepository(skillsDir)
+		if skillRepo != nil {
+			skillNamesBefore = summariesToNames(skillRepo.Summaries())
+			result.SkillCountBefore = len(skillNamesBefore)
+			result.HadAvailableSkills = result.SkillCountBefore > 0
+		}
+	}
+
+	stats, runErr := executeTask(cfg, task, mode, workspace, skillRepo, skillsDir, index)
+	result.DurationSeconds = round2(time.Since(start).Seconds())
+	if stats != nil {
+		result.PromptTokens = stats.PromptTokens
+		result.CompletionTokens = stats.CompletionTokens
+		result.TotalTokens = stats.TotalTokens
+		result.ReviewerPromptTokens = stats.ReviewerPromptTokens
+		result.ReviewerCompletionTokens = stats.ReviewerCompletionTokens
+		result.ReviewerTotalTokens = stats.ReviewerTotalTokens
+		result.EndToEndTotalTokens = stats.EndToEndTotalTokens
+		result.ToolCalls = stats.ToolCalls
+		result.SkillToolCalls = stats.SkillToolCalls
+		result.LoadedSkillNames = stats.LoadedSkillNames
+		result.ClaimDoneCalled = stats.ClaimDoneCalled
+		result.SkillUsageObserved = stats.SkillUsageObserved
+		result.FinalResponse = stats.FinalResponse
+		result.EventErrors = stats.EventErrors
+	}
+	if runErr != nil {
+		result.Status = "agent_error"
+		result.AgentError = runErr.Error()
+		log.Printf("  agent error: %v", runErr)
+	}
+
+	eval, evalErr := evaluateTask(cfg, task, workspace)
+	if eval != nil {
+		result.Evaluation = eval
+		if eval.Passed {
+			log.Printf("  evaluation: pass (%.1f%%)", eval.Score.Percent)
+		} else {
+			log.Printf("  evaluation: %s (%.1f%%)", eval.Status, eval.Score.Percent)
+		}
+		if result.Status == "ok" && !eval.Passed {
+			result.Status = resultStatusFromEvaluation(eval)
+		}
+	}
+	if evalErr != nil {
+		if result.Status == "ok" {
+			result.Status = "evaluation_error"
+		}
+		result.EvaluationError = evalErr.Error()
+		log.Printf("  evaluation error: %v", evalErr)
+	}
+
+	if mode == modeEvolution {
+		namesAfter, err := skillNamesFromDir(skillsDir)
+		if err != nil {
+			return nil, fmt.Errorf("list learned skills: %w", err)
+		}
+		result.SkillCountAfter = len(namesAfter)
+		result.LearnedSkillNames = diffStrings(skillNamesBefore, namesAfter)
+		if len(result.LearnedSkillNames) > 0 {
+			log.Printf("  learned skills: %s", strings.Join(result.LearnedSkillNames, ", "))
+		}
+	}
+
+	if !cfg.KeepWorkspaces {
+		if err := os.RemoveAll(workspace); err != nil {
+			return nil, fmt.Errorf("cleanup workspace %s: %w", workspace, err)
+		}
+		result.Workspace = ""
+	}
+
+	return result, nil
+}
+
+func executeTask(
+	cfg *benchmarkConfig,
+	task *taskDefinition,
+	mode runMode,
+	workspace string,
+	repo *skill.FSRepository,
+	skillsDir string,
+	index int,
+) (*runStats, error) {
+	modelInstance := newOpenAIModel(cfg.ModelName, cfg.Variant)
+	sessionService := sessioninmemory.NewSessionService()
+	stats := &runStats{}
+	var availableSkills []string
+
+	localTools, err := newLocalBridgeToolSet(cfg, task, workspace)
+	if err != nil {
+		return nil, fmt.Errorf("init local bridge: %w", err)
+	}
+
+	filesystemTools, err := newFilesystemToolSet(cfg, workspace)
+	if err != nil {
+		return nil, fmt.Errorf("init filesystem mcp: %w", err)
+	}
+
+	hasSkills := repo != nil && len(repo.Summaries()) > 0
+	if hasSkills {
+		availableSkills = summariesToNames(repo.Summaries())
+	}
+	genConfig := model.GenerationConfig{
+		MaxTokens: intPtr(cfg.MaxTokens),
+		Stream:    false,
+	}
+
+	agentOpts := []llmagent.Option{
+		llmagent.WithModel(modelInstance),
+		llmagent.WithDescription("SkillCraft benchmark agent"),
+		llmagent.WithInstruction(buildInstruction(task, workspace, availableSkills)),
+		llmagent.WithGenerationConfig(genConfig),
+		llmagent.WithToolSets([]tool.ToolSet{localTools, filesystemTools}),
+		llmagent.WithMaxToolIterations(cfg.MaxToolIterations),
+	}
+	if task.MaxTurns > 0 {
+		agentOpts = append(agentOpts, llmagent.WithMaxLLMCalls(task.MaxTurns))
+	}
+	if hasSkills {
+		agentOpts = append(agentOpts,
+			llmagent.WithSkills(repo),
+			llmagent.WithSkillToolProfile(llmagent.SkillToolProfileKnowledgeOnly),
+		)
+	}
+
+	agentInstance := llmagent.New("skillcraft-bench-agent", agentOpts...)
+
+	runnerOpts := []runner.Option{
+		runner.WithSessionService(sessionService),
+	}
+	var reviewerTracker *usageTracker
+	if mode == modeEvolution {
+		reviewerBaseModel := newOpenAIModel(cfg.ReviewerModelName, cfg.Variant)
+		reviewerModel, tracker := newTrackingModel(reviewerBaseModel)
+		reviewerTracker = tracker
+		evoSvc := evolution.NewService(
+			reviewerModel,
+			evolution.WithManagedSkillsDir(skillsDir),
+			evolution.WithSkillRepository(repo),
+		)
+		runnerOpts = append(runnerOpts, runner.WithEvolutionService(evoSvc))
+	}
+
+	run := runner.NewRunner("skillcraft-benchmark", agentInstance, runnerOpts...)
+	runClosed := false
+	defer func() {
+		if !runClosed {
+			_ = run.Close()
+		}
+	}()
+
+	taskTimeout := task.TimeoutSeconds
+	if cfg.TaskTimeout > 0 {
+		taskTimeout = int(cfg.TaskTimeout.Seconds())
+	}
+	if taskTimeout <= 0 {
+		taskTimeout = defaultFallbackTaskLimit
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(taskTimeout)*time.Second)
+	defer cancel()
+
+	userID := "skillcraft-benchmark-user"
+	sessionID := fmt.Sprintf("%s-%s-%d-%d", mode, sanitizeName(task.ID), index, time.Now().UnixNano())
+	userPrompt := buildUserPrompt(task, workspace, availableSkills)
+
+	eventCh, err := run.Run(ctx, userID, sessionID, model.NewUserMessage(userPrompt))
+	if err != nil {
+		return nil, err
+	}
+
+	stats = consumeEvents(eventCh)
+	if err := run.Close(); err != nil {
+		return stats, err
+	}
+	runClosed = true
+	if reviewerTracker != nil {
+		reviewerUsage := reviewerTracker.snapshot()
+		stats.ReviewerPromptTokens = reviewerUsage.PromptTokens
+		stats.ReviewerCompletionTokens = reviewerUsage.CompletionTokens
+		stats.ReviewerTotalTokens = reviewerUsage.TotalTokens
+	}
+	stats.EndToEndTotalTokens = stats.TotalTokens + stats.ReviewerTotalTokens
+	if ctx.Err() != nil {
+		return stats, ctx.Err()
+	}
+	if len(stats.EventErrors) > 0 {
+		return stats, fmt.Errorf(strings.Join(stats.EventErrors, "; "))
+	}
+	return stats, nil
+}
+
+func newLocalBridgeToolSet(
+	cfg *benchmarkConfig,
+	task *taskDefinition,
+	workspace string,
+) (*mcpcfg.ToolSet, error) {
+	bridgePath, err := bridgeScriptPath()
+	if err != nil {
+		return nil, err
+	}
+	args := []string{
+		"run",
+		"--project", cfg.SkillCraftRoot,
+		"python",
+		bridgePath,
+		"--skillcraft-root", cfg.SkillCraftRoot,
+		"--workspace", workspace,
+	}
+	for _, toolset := range task.NeededLocalTools {
+		args = append(args, "--toolset", toolset)
+	}
+
+	toolSet := mcpcfg.NewMCPToolSet(mcpcfg.ConnectionConfig{
+		Transport: "stdio",
+		Command:   "uv",
+		Args:      args,
+		Timeout:   cfg.MCPTimeout,
+	})
+	if err := toolSet.Init(context.Background()); err != nil {
+		return nil, err
+	}
+	return toolSet, nil
+}
+
+func newFilesystemToolSet(
+	cfg *benchmarkConfig,
+	workspace string,
+) (*mcpcfg.ToolSet, error) {
+	toolSet := mcpcfg.NewMCPToolSet(mcpcfg.ConnectionConfig{
+		Transport: "stdio",
+		Command:   "npx",
+		Args: []string{
+			"-y",
+			"@modelcontextprotocol/server-filesystem",
+			workspace,
+		},
+		Timeout: cfg.MCPTimeout,
+	})
+	if err := toolSet.Init(context.Background()); err != nil {
+		return nil, err
+	}
+	return toolSet, nil
+}
+
+func evaluateTask(
+	cfg *benchmarkConfig,
+	task *taskDefinition,
+	workspace string,
+) (*officialEval, error) {
+	cmd := exec.Command(
+		"uv",
+		"run",
+		"--project", cfg.SkillCraftRoot,
+		"python",
+		task.EvaluationScript,
+		"--agent_workspace", workspace,
+		"--groundtruth_workspace", task.Dir,
+		"--res_log_file", "",
+		"--launch_time", time.Now().Format(time.RFC3339),
+	)
+	cmd.Dir = cfg.SkillCraftRoot
+	output, err := cmd.CombinedOutput()
+
+	eval, parseErr := parseEvaluationOutput(output)
+	if parseErr != nil {
+		if err != nil {
+			return nil, fmt.Errorf("evaluation command failed: %w; output: %s", err, strings.TrimSpace(string(output)))
+		}
+		return nil, parseErr
+	}
+	if err != nil {
+		return eval, nil
+	}
+	return eval, nil
+}
+
+func parseEvaluationOutput(output []byte) (*officialEval, error) {
+	re := regexp.MustCompile(`(?s)=== SCORE_JSON_START ===\s*(\{.*?\})\s*=== SCORE_JSON_END ===`)
+	matches := re.FindSubmatch(output)
+	if len(matches) != 2 {
+		return nil, errors.New("could not locate SCORE_JSON block")
+	}
+
+	var eval officialEval
+	if err := json.Unmarshal(matches[1], &eval); err != nil {
+		return nil, fmt.Errorf("parse score json: %w", err)
+	}
+	var raw interface{}
+	if err := json.Unmarshal(matches[1], &raw); err == nil {
+		eval.Raw = raw
+	}
+	return &eval, nil
+}
+
+func consumeEvents(evtCh <-chan *event.Event) *runStats {
+	stats := &runStats{}
+	for evt := range evtCh {
+		if evt == nil {
+			continue
+		}
+		if evt.Error != nil {
+			if strings.TrimSpace(evt.Error.Message) != "" {
+				stats.EventErrors = append(stats.EventErrors, evt.Error.Message)
+			}
+			continue
+		}
+		if evt.Response == nil {
+			continue
+		}
+		if evt.Response.Usage != nil {
+			stats.PromptTokens += evt.Response.Usage.PromptTokens
+			stats.CompletionTokens += evt.Response.Usage.CompletionTokens
+			stats.TotalTokens += evt.Response.Usage.TotalTokens
+		}
+		for _, choice := range evt.Response.Choices {
+			if len(choice.Message.ToolCalls) > 0 {
+				for _, call := range choice.Message.ToolCalls {
+					rawName := strings.TrimSpace(call.Function.Name)
+					if rawName == "" {
+						continue
+					}
+					normalizedName := normalizeToolCallName(rawName)
+					stats.ToolCalls = append(stats.ToolCalls, rawName)
+					if normalizedName == "local-claim_done" {
+						stats.ClaimDoneCalled = true
+					}
+					if isSkillToolName(normalizedName) {
+						stats.SkillUsageObserved = true
+						stats.SkillToolCalls = appendUniqueString(stats.SkillToolCalls, normalizedName)
+						if normalizedName == "skill_load" {
+							if skillName := extractLoadedSkillName(call.Function.Arguments); skillName != "" {
+								stats.LoadedSkillNames = appendUniqueString(stats.LoadedSkillNames, skillName)
+							}
+						}
+					}
+				}
+			}
+			if choice.Message.Role == model.RoleAssistant &&
+				strings.TrimSpace(choice.Message.Content) != "" {
+				stats.FinalResponse = strings.TrimSpace(choice.Message.Content)
+			}
+			if choice.Delta.Content != "" {
+				stats.FinalResponse = strings.TrimSpace(stats.FinalResponse + choice.Delta.Content)
+			}
+		}
+	}
+	return stats
+}
+
+func normalizeToolCallName(name string) string {
+	name = strings.TrimSpace(name)
+	name = strings.TrimPrefix(name, "mcp_")
+	return name
+}
+
+func isSkillToolName(name string) bool {
+	return strings.HasPrefix(name, "skill_")
+}
+
+func extractLoadedSkillName(arguments []byte) string {
+	var payload struct {
+		Skill string `json:"skill"`
+	}
+	if err := json.Unmarshal(arguments, &payload); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(payload.Skill)
+}
+
+func buildInstruction(task *taskDefinition, workspace string, availableSkills []string) string {
+	parts := []string{
+		"You are solving one SkillCraft benchmark task in a single uninterrupted session.",
+	}
+	if task.AgentPrompt != "" {
+		parts = append(parts, task.AgentPrompt)
+	}
+	parts = append(parts,
+		"There will be no follow-up user clarifications. Complete the task autonomously.",
+		"Inspect available tools before assuming arguments, and save every required output file into the workspace before you finish.",
+		"The task docs may mention filesystem tools using names like filesystem-write_file or filesystem-read_file. In this runtime, use the actual filesystem MCP tool names that are exposed to you, such as write_file, read_file, list_directory, edit_file, create_directory, move_file, search_files, get_file_info, and list_allowed_directories.",
+		"SkillCraft local tools keep their actual names, which usually start with local-.",
+		"Do not blindly repeat the same tool call on the same input. Retry only when the earlier result was missing, invalid, or clearly incomplete.",
+		fmt.Sprintf("Your workspace directory is %s.", workspace),
+	)
+	if len(availableSkills) > 0 {
+		parts = append(parts,
+			fmt.Sprintf(
+				"Managed skills from earlier tasks are available: %s.",
+				strings.Join(availableSkills, ", "),
+			),
+			"Read the full task specification before deciding whether a managed skill applies.",
+			"If a managed skill is relevant, load it with skill_load and use it as a reusable checklist, not as the source of truth.",
+			"Managed skills may come from smaller or earlier tasks and can be incomplete. The current task specification, required output, and tool results always override the skill.",
+			"If the current task needs extra fields, extra steps, or a stricter tool order than the skill mentions, you must still follow the current task.",
+			"Before relying on a managed skill, compare it against the current task's required APIs, ordering constraints, and required output fields. If any required part is missing, treat the skill as incomplete and follow the task specification directly.",
+			"These managed skills are textual procedures, not prebuilt executable scripts.",
+		)
+	}
+	if taskDocMayContainPreviewMarkers(task.TaskDoc) {
+		parts = append(parts,
+			"The task docs may abbreviate long literals with trailing `...`. Treat obvious preview markers as formatting unless the task explicitly says the dots are literal input characters.",
+		)
+	}
+	if containsString(task.NeededLocalTools, "claim_done") {
+		parts = append(parts,
+			"When the required output is saved and checked, call local-claim_done as the final tool.",
+			"For JSON outputs, prefer one complete write with write_file when feasible.",
+			"Accumulate results in memory while you work, then write the final output once near the end instead of repeatedly rewriting the output file after each subtask.",
+			"Do not create draft files, scratch files, or auxiliary reports unless the task explicitly asks for them. Focus on producing the required final output file.",
+			"Use local-file_append or local-file_write_json_chunk only when a single complete write is impractical, and make sure the final saved file is valid JSON before calling local-claim_done.",
+		)
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+func buildUserPrompt(task *taskDefinition, workspace string, availableSkills []string) string {
+	var b strings.Builder
+	b.WriteString("Complete the following SkillCraft task.\n\n")
+	b.WriteString("## Workspace\n")
+	fmt.Fprintf(&b, "- directory: %s\n", workspace)
+	files, _ := listRelativeFiles(workspace)
+	if len(files) > 0 {
+		b.WriteString("- initial files:\n")
+		for _, name := range files {
+			fmt.Fprintf(&b, "  - %s\n", name)
+		}
+	}
+	b.WriteString("\n## Task Specification\n\n")
+	b.WriteString(strings.TrimSpace(task.TaskDoc))
+	if taskDocMayContainPreviewMarkers(task.TaskDoc) {
+		b.WriteString("\n\n## Interpretation Note\n")
+		b.WriteString("- Long literals in the task doc may be shown as previews ending with `...`; do not assume the dots are literal input characters unless the task explicitly says so.\n")
+	}
+	if len(availableSkills) > 0 {
+		b.WriteString("\n## Managed Skills Available\n")
+		for _, name := range availableSkills {
+			fmt.Fprintf(&b, "- %s\n", name)
+		}
+		b.WriteString("\nUse these skills only as reusable reference after understanding the full task. The current task specification overrides any skill.\n")
+	}
+	return b.String()
+}
+
+func taskDocMayContainPreviewMarkers(doc string) bool {
+	return strings.Contains(doc, "...")
+}
+
+func resultStatusFromEvaluation(eval *officialEval) string {
+	if eval == nil || eval.Passed {
+		return "ok"
+	}
+	status := strings.ToLower(strings.TrimSpace(eval.Status))
+	if status == "" || status == "pass" {
+		return "evaluation_failed"
+	}
+	return status
+}
+
+func summarizeMode(results []*taskRunResult, finalSkillNames []string) *modeSummary {
+	summary := &modeSummary{
+		Tasks:           len(results),
+		FinalSkillNames: finalSkillNames,
+		SkillsGenerated: len(finalSkillNames),
+	}
+	if len(results) == 0 {
+		return summary
+	}
+
+	for _, res := range results {
+		if res.AgentError != "" {
+			summary.AgentErrorCount++
+		}
+		if res.EvaluationError != "" {
+			summary.EvalErrorCount++
+		}
+		summary.ReviewerPromptTokens += res.ReviewerPromptTokens
+		summary.ReviewerCompletionTokens += res.ReviewerCompletionTokens
+		summary.ReviewerTotalTokens += res.ReviewerTotalTokens
+	}
+
+	if overall := summarizeTaskSubset(results); overall != nil {
+		summary.Tasks = overall.Tasks
+		summary.PassedTasks = overall.PassedTasks
+		summary.PassRate = overall.PassRate
+		summary.AverageScorePercent = overall.AverageScorePercent
+		summary.AverageDurationSec = overall.AverageDurationSec
+		summary.AveragePromptTokens = overall.AveragePromptTokens
+		summary.AverageOutputTokens = overall.AverageOutputTokens
+		summary.AverageTotalTokens = overall.AverageTotalTokens
+		summary.AverageReviewerTokens = overall.AverageReviewerTokens
+		summary.AverageEndToEndTokens = overall.AverageEndToEndTokens
+		summary.ClaimDoneRate = overall.ClaimDoneRate
+		summary.SkillUsageObservedTasks = overall.SkillUsageObservedTasks
+		summary.SkillUsageObservedRate = overall.SkillUsageObservedRate
+	}
+
+	var warmStartResults []*taskRunResult
+	var coldStartResults []*taskRunResult
+	for _, res := range results {
+		if res.HadAvailableSkills {
+			warmStartResults = append(warmStartResults, res)
+			continue
+		}
+		coldStartResults = append(coldStartResults, res)
+	}
+	if len(warmStartResults) > 0 {
+		summary.WarmStart = summarizeTaskSubset(warmStartResults)
+	}
+	if len(coldStartResults) > 0 {
+		summary.ColdStart = summarizeTaskSubset(coldStartResults)
+	}
+	return summary
+}
+
+func buildComparison(
+	baseline *modeResult,
+	evolution *modeResult,
+) *compareResult {
+	if baseline == nil || evolution == nil ||
+		baseline.Summary == nil || evolution.Summary == nil {
+		return nil
+	}
+
+	comp := &compareResult{
+		PassRateDelta:           round2(evolution.Summary.PassRate - baseline.Summary.PassRate),
+		ScoreDelta:              round2(evolution.Summary.AverageScorePercent - baseline.Summary.AverageScorePercent),
+		DurationDeltaSec:        round2(evolution.Summary.AverageDurationSec - baseline.Summary.AverageDurationSec),
+		TokenDelta:              round2(evolution.Summary.AverageTotalTokens - baseline.Summary.AverageTotalTokens),
+		EndToEndTokenDelta:      round2(evolution.Summary.AverageEndToEndTokens - baseline.Summary.AverageEndToEndTokens),
+		ReviewerTokenDelta:      round2(evolution.Summary.AverageReviewerTokens - baseline.Summary.AverageReviewerTokens),
+		ClaimDoneDelta:          round2(evolution.Summary.ClaimDoneRate - baseline.Summary.ClaimDoneRate),
+		SkillUsageObservedDelta: round2(evolution.Summary.SkillUsageObservedRate - baseline.Summary.SkillUsageObservedRate),
+	}
+	warmIDs := warmStartTaskIDs(evolution.Cases)
+	if len(warmIDs) == 0 {
+		return comp
+	}
+
+	baselineWarm := summarizeTaskSubset(filterTaskResultsByID(baseline.Cases, warmIDs))
+	evolutionWarm := summarizeTaskSubset(filterTaskResultsByID(evolution.Cases, warmIDs))
+	if baselineWarm == nil || evolutionWarm == nil {
+		return comp
+	}
+
+	comp.WarmStartTaskCount = len(warmIDs)
+	comp.WarmStartPassRateDelta = round2(evolutionWarm.PassRate - baselineWarm.PassRate)
+	comp.WarmStartScoreDelta = round2(evolutionWarm.AverageScorePercent - baselineWarm.AverageScorePercent)
+	comp.WarmStartDurationDeltaSec = round2(
+		evolutionWarm.AverageDurationSec - baselineWarm.AverageDurationSec,
+	)
+	comp.WarmStartTokenDelta = round2(
+		evolutionWarm.AverageTotalTokens - baselineWarm.AverageTotalTokens,
+	)
+	comp.WarmStartEndToEndTokenDelta = round2(
+		evolutionWarm.AverageEndToEndTokens - baselineWarm.AverageEndToEndTokens,
+	)
+	return comp
+}
+
+func summarizeTaskSubset(results []*taskRunResult) *subsetSummary {
+	if len(results) == 0 {
+		return nil
+	}
+
+	summary := &subsetSummary{Tasks: len(results)}
+	var (
+		totalScore      float64
+		totalDuration   float64
+		totalPrompt     float64
+		totalCompletion float64
+		totalTokens     float64
+		totalReviewer   float64
+		totalEndToEnd   float64
+		claimDone       int
+		skillUsage      int
+	)
+
+	for _, res := range results {
+		totalDuration += res.DurationSeconds
+		totalPrompt += float64(res.PromptTokens)
+		totalCompletion += float64(res.CompletionTokens)
+		totalTokens += float64(res.TotalTokens)
+		totalReviewer += float64(res.ReviewerTotalTokens)
+		totalEndToEnd += float64(res.EndToEndTotalTokens)
+		if res.ClaimDoneCalled {
+			claimDone++
+		}
+		if res.SkillUsageObserved {
+			skillUsage++
+		}
+		if res.Evaluation != nil {
+			totalScore += res.Evaluation.Score.Percent
+			if res.Evaluation.Passed {
+				summary.PassedTasks++
+			}
+		}
+	}
+
+	count := float64(len(results))
+	summary.PassRate = round2(float64(summary.PassedTasks) / count * 100)
+	summary.AverageScorePercent = round2(totalScore / count)
+	summary.AverageDurationSec = round2(totalDuration / count)
+	summary.AveragePromptTokens = round2(totalPrompt / count)
+	summary.AverageOutputTokens = round2(totalCompletion / count)
+	summary.AverageTotalTokens = round2(totalTokens / count)
+	summary.AverageReviewerTokens = round2(totalReviewer / count)
+	summary.AverageEndToEndTokens = round2(totalEndToEnd / count)
+	summary.ClaimDoneRate = round2(float64(claimDone) / count * 100)
+	summary.SkillUsageObservedTasks = skillUsage
+	summary.SkillUsageObservedRate = round2(float64(skillUsage) / count * 100)
+	return summary
+}
+
+func warmStartTaskIDs(results []*taskRunResult) []string {
+	var ids []string
+	for _, res := range results {
+		if !res.HadAvailableSkills {
+			continue
+		}
+		ids = append(ids, res.TaskID)
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+func filterTaskResultsByID(results []*taskRunResult, ids []string) []*taskRunResult {
+	if len(ids) == 0 {
+		return nil
+	}
+	allowed := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		allowed[id] = struct{}{}
+	}
+	var out []*taskRunResult
+	for _, res := range results {
+		if _, ok := allowed[res.TaskID]; ok {
+			out = append(out, res)
+		}
+	}
+	return out
+}
+
+func writeResults(outputDir string, result *benchmarkResult) error {
+	path := filepath.Join(outputDir, "results.json")
+	data, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o644)
+}
+
+func writeReport(outputDir string, result *benchmarkResult) error {
+	var b strings.Builder
+	b.WriteString("# SkillCraft Benchmark Report\n\n")
+	fmt.Fprintf(&b, "- Time: `%s`\n", result.Timestamp)
+	fmt.Fprintf(&b, "- Requested mode: `%s`\n", result.RequestedMode)
+	fmt.Fprintf(&b, "- Model: `%s`\n", result.Model)
+	fmt.Fprintf(&b, "- Reviewer model: `%s`\n", result.ReviewerModel)
+	if result.BaseTask != "" {
+		fmt.Fprintf(&b, "- Base task: `%s`\n", result.BaseTask)
+	}
+	if len(result.Scales) > 0 {
+		fmt.Fprintf(&b, "- Scales: `%s`\n", strings.Join(result.Scales, ","))
+	}
+	b.WriteString("\n## Task Set\n\n")
+	for _, task := range result.Tasks {
+		fmt.Fprintf(&b, "- `%s`: %s\n", task.ID, task.Description)
+	}
+
+	if result.Baseline != nil {
+		appendModeSection(&b, result.Baseline)
+	}
+	if result.Evolution != nil {
+		appendModeSection(&b, result.Evolution)
+	}
+	if result.Comparison != nil {
+		b.WriteString("\n## Comparison\n\n")
+		fmt.Fprintf(&b, "- Overall pass rate delta: %.2f\n", result.Comparison.PassRateDelta)
+		fmt.Fprintf(&b, "- Overall score delta: %.2f\n", result.Comparison.ScoreDelta)
+		fmt.Fprintf(&b, "- Overall duration delta (s): %.2f\n", result.Comparison.DurationDeltaSec)
+		fmt.Fprintf(&b, "- Agent-token delta: %.2f\n", result.Comparison.TokenDelta)
+		fmt.Fprintf(&b, "- End-to-end token delta: %.2f\n", result.Comparison.EndToEndTokenDelta)
+		fmt.Fprintf(&b, "- Reviewer-token delta: %.2f\n", result.Comparison.ReviewerTokenDelta)
+		fmt.Fprintf(&b, "- Claim-done delta: %.2f\n", result.Comparison.ClaimDoneDelta)
+		fmt.Fprintf(&b, "- Skill-usage-observed delta: %.2f\n", result.Comparison.SkillUsageObservedDelta)
+		if result.Comparison.WarmStartTaskCount > 0 {
+			fmt.Fprintf(&b, "- Warm-start tasks compared: %d\n", result.Comparison.WarmStartTaskCount)
+			fmt.Fprintf(&b, "- Warm-start pass rate delta: %.2f\n", result.Comparison.WarmStartPassRateDelta)
+			fmt.Fprintf(&b, "- Warm-start score delta: %.2f\n", result.Comparison.WarmStartScoreDelta)
+			fmt.Fprintf(&b, "- Warm-start duration delta (s): %.2f\n", result.Comparison.WarmStartDurationDeltaSec)
+			fmt.Fprintf(&b, "- Warm-start agent-token delta: %.2f\n", result.Comparison.WarmStartTokenDelta)
+			fmt.Fprintf(&b, "- Warm-start end-to-end token delta: %.2f\n", result.Comparison.WarmStartEndToEndTokenDelta)
+		}
+	}
+
+	return os.WriteFile(filepath.Join(outputDir, "REPORT.md"), []byte(b.String()), 0o644)
+}
+
+func appendModeSection(b *strings.Builder, modeRes *modeResult) {
+	if modeRes == nil || modeRes.Summary == nil {
+		return
+	}
+	s := modeRes.Summary
+	fmt.Fprintf(b, "\n## %s\n\n", strings.Title(string(modeRes.Mode)))
+	fmt.Fprintf(b, "- Tasks: %d\n", s.Tasks)
+	fmt.Fprintf(b, "- Passed tasks: %d\n", s.PassedTasks)
+	fmt.Fprintf(b, "- Pass rate: %.2f%%\n", s.PassRate)
+	fmt.Fprintf(b, "- Average score: %.2f%%\n", s.AverageScorePercent)
+	fmt.Fprintf(b, "- Average duration: %.2fs\n", s.AverageDurationSec)
+	fmt.Fprintf(b, "- Average agent tokens: %.2f\n", s.AverageTotalTokens)
+	fmt.Fprintf(b, "- Average reviewer tokens: %.2f\n", s.AverageReviewerTokens)
+	fmt.Fprintf(b, "- Average end-to-end tokens: %.2f\n", s.AverageEndToEndTokens)
+	fmt.Fprintf(b, "- Claim-done rate: %.2f%%\n", s.ClaimDoneRate)
+	fmt.Fprintf(b, "- Skill-usage-observed rate: %.2f%%\n", s.SkillUsageObservedRate)
+	if len(s.FinalSkillNames) > 0 {
+		fmt.Fprintf(b, "- Learned skills: `%s`\n", strings.Join(s.FinalSkillNames, "`, `"))
+	}
+	if s.WarmStart != nil {
+		fmt.Fprintf(
+			b,
+			"- Warm-start subset: %d tasks, %.2f%% score, %.2f agent tokens\n",
+			s.WarmStart.Tasks,
+			s.WarmStart.AverageScorePercent,
+			s.WarmStart.AverageTotalTokens,
+		)
+	}
+	if s.ColdStart != nil {
+		fmt.Fprintf(
+			b,
+			"- Cold-start subset: %d tasks, %.2f%% score, %.2f agent tokens\n",
+			s.ColdStart.Tasks,
+			s.ColdStart.AverageScorePercent,
+			s.ColdStart.AverageTotalTokens,
+		)
+	}
+
+	b.WriteString("\n| Task | Status | Score | Agent Tokens | End-to-end Tokens | Claim Done | Skill Used |\n")
+	b.WriteString("|------|--------|------:|-------------:|------------------:|-----------:|-----------:|\n")
+	for _, res := range modeRes.Cases {
+		score := 0.0
+		if res.Evaluation != nil {
+			score = res.Evaluation.Score.Percent
+		}
+		claimDone := "no"
+		if res.ClaimDoneCalled {
+			claimDone = "yes"
+		}
+		skillUsed := "no"
+		if res.SkillUsageObserved {
+			skillUsed = "yes"
+		}
+		fmt.Fprintf(
+			b,
+			"| `%s` | `%s` | %.1f | %d | %d | %s | %s |\n",
+			res.TaskID,
+			res.Status,
+			score,
+			res.TotalTokens,
+			res.EndToEndTotalTokens,
+			claimDone,
+			skillUsed,
+		)
+	}
+}
+
+func prepareWorkspace(task *taskDefinition, workspace string) error {
+	if err := os.RemoveAll(workspace); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		return err
+	}
+	if task.InitialWorkspace == "" {
+		return nil
+	}
+	return copyDir(task.InitialWorkspace, workspace)
+}
+
+func copyDir(src, dst string) error {
+	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dst, rel)
+		if info.IsDir() {
+			return os.MkdirAll(target, 0o755)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(target, data, info.Mode())
+	})
+}
+
+func listRelativeFiles(root string) ([]string, error) {
+	var out []string
+	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		out = append(out, rel)
+		return nil
+	})
+	sort.Strings(out)
+	return out, err
+}
+
+func summariesToNames(summaries []skill.Summary) []string {
+	out := make([]string, 0, len(summaries))
+	for _, summary := range summaries {
+		if strings.TrimSpace(summary.Name) == "" {
+			continue
+		}
+		out = append(out, summary.Name)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func skillNamesFromDir(root string) ([]string, error) {
+	repo, err := skill.NewFSRepository(root)
+	if err != nil {
+		return nil, err
+	}
+	return summariesToNames(repo.Summaries()), nil
+}
+
+func summarizeTasks(tasks []*taskDefinition) []*taskSummary {
+	out := make([]*taskSummary, 0, len(tasks))
+	for _, task := range tasks {
+		out = append(out, &taskSummary{
+			ID:                task.ID,
+			Name:              task.Name,
+			BaseTask:          task.BaseTask,
+			Scale:             task.Scale,
+			Difficulty:        task.Difficulty,
+			Description:       task.Description,
+			NeededMCPServers:  append([]string(nil), task.NeededMCPServers...),
+			NeededLocalTools:  append([]string(nil), task.NeededLocalTools...),
+			MaxTurns:          task.MaxTurns,
+			TimeoutSeconds:    task.TimeoutSeconds,
+			HasInitialContent: task.HasInitialContent,
+		})
+	}
+	return out
+}
+
+func newOpenAIModel(name, variant string) model.Model {
+	opts := []openai.Option{}
+	if strings.TrimSpace(variant) != "" {
+		opts = append(opts, openai.WithVariant(openai.Variant(variant)))
+	}
+	return openai.New(name, opts...)
+}
+
+func bridgeScriptPath() (string, error) {
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		return "", errors.New("resolve bridge path: runtime.Caller failed")
+	}
+	return filepath.Join(filepath.Dir(file), "bridge", "skillcraft_local_tools_mcp.py"), nil
+}
+
+func inferBaseTask(taskDir string) string {
+	parent := filepath.Base(filepath.Dir(taskDir))
+	if parent != "" && parent != "." && parent != string(filepath.Separator) {
+		return parent
+	}
+	return filepath.Base(taskDir)
+}
+
+func readOptionalFile(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", nil
+		}
+		return "", err
+	}
+	return string(data), nil
+}
+
+func parseCSV(raw string) []string {
+	parts := strings.Split(strings.TrimSpace(raw), ",")
+	out := make([]string, 0, len(parts))
+	seen := map[string]struct{}{}
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		part = strings.Trim(part, "/")
+		if part == "" {
+			continue
+		}
+		if _, ok := seen[part]; ok {
+			continue
+		}
+		seen[part] = struct{}{}
+		out = append(out, part)
+	}
+	return out
+}
+
+func diffStrings(before, after []string) []string {
+	set := make(map[string]struct{}, len(before))
+	for _, item := range before {
+		set[item] = struct{}{}
+	}
+	var out []string
+	for _, item := range after {
+		if _, ok := set[item]; ok {
+			continue
+		}
+		out = append(out, item)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func appendUniqueString(items []string, value string) []string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return items
+	}
+	for _, item := range items {
+		if item == value {
+			return items
+		}
+	}
+	return append(items, value)
+}
+
+func sanitizeName(value string) string {
+	value = strings.ReplaceAll(value, "\\", "_")
+	value = strings.ReplaceAll(value, "/", "_")
+	value = strings.ReplaceAll(value, " ", "_")
+	return value
+}
+
+func containsString(items []string, target string) bool {
+	for _, item := range items {
+		if item == target {
+			return true
+		}
+	}
+	return false
+}
+
+func round2(v float64) float64 {
+	return float64(int(v*100+0.5)) / 100
+}
+
+func envOrDefault(key, fallback string) string {
+	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+		return value
+	}
+	return fallback
+}
+
+func intPtr(v int) *int {
+	return &v
+}
