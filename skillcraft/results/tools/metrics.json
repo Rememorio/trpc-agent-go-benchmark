@@ -1,0 +1,463 @@
+{
+  "runDir": "multi_family_compare",
+  "skillDirsOnDisk": 16,
+  "baseline": {
+    "tasks": 18,
+    "passedTasks": 15,
+    "passRate": 83.33,
+    "averageScorePercent": 80.46,
+    "averageDurationSeconds": 98.93,
+    "averageTotalTokens": 185590.44,
+    "averageReviewerTokens": null,
+    "averageEndToEndTokens": 185590.44,
+    "claimDoneRate": 77.78,
+    "agentErrorCount": 4,
+    "skillsGenerated": null,
+    "finalSkillNames": null,
+    "warmStart": null,
+    "coldStart": {
+      "tasks": 18,
+      "passedTasks": 15,
+      "passRate": 83.33,
+      "averageScorePercent": 80.46,
+      "averageDurationSeconds": 98.93,
+      "averagePromptTokens": 183664.33,
+      "averageOutputTokens": 1926.11,
+      "averageTotalTokens": 185590.44,
+      "averageEndToEndTokens": 185590.44,
+      "claimDoneRate": 77.78
+    },
+    "byFamily": {
+      "openmeteo-weather": {
+        "tasks": 6,
+        "passed": 5,
+        "passRate": 83.33,
+        "avgScorePercent": 81.28,
+        "avgAgentTokens": 210685
+      },
+      "recipe-cookbook-builder": {
+        "tasks": 6,
+        "passed": 6,
+        "passRate": 100.0,
+        "avgScorePercent": 93.43,
+        "avgAgentTokens": 175231
+      },
+      "world-bank-economic-snapshot": {
+        "tasks": 6,
+        "passed": 4,
+        "passRate": 66.67,
+        "avgScorePercent": 66.67,
+        "avgAgentTokens": 170856
+      }
+    },
+    "perTask": [
+      {
+        "taskId": "openmeteo-weather/e1",
+        "baseTask": "openmeteo-weather",
+        "passed": false,
+        "scorePercent": 0.0,
+        "agentTokens": 714167,
+        "endToEndTokens": 714167
+      },
+      {
+        "taskId": "openmeteo-weather/e2",
+        "baseTask": "openmeteo-weather",
+        "passed": true,
+        "scorePercent": 100.0,
+        "agentTokens": 72641,
+        "endToEndTokens": 72641
+      },
+      {
+        "taskId": "openmeteo-weather/e3",
+        "baseTask": "openmeteo-weather",
+        "passed": true,
+        "scorePercent": 95.0,
+        "agentTokens": 72278,
+        "endToEndTokens": 72278
+      },
+      {
+        "taskId": "openmeteo-weather/m1",
+        "baseTask": "openmeteo-weather",
+        "passed": true,
+        "scorePercent": 100.0,
+        "agentTokens": 101619,
+        "endToEndTokens": 101619
+      },
+      {
+        "taskId": "openmeteo-weather/m2",
+        "baseTask": "openmeteo-weather",
+        "passed": true,
+        "scorePercent": 96.0,
+        "agentTokens": 131287,
+        "endToEndTokens": 131287
+      },
+      {
+        "taskId": "openmeteo-weather/h1",
+        "baseTask": "openmeteo-weather",
+        "passed": true,
+        "scorePercent": 96.7,
+        "agentTokens": 172117,
+        "endToEndTokens": 172117
+      },
+      {
+        "taskId": "recipe-cookbook-builder/e1",
+        "baseTask": "recipe-cookbook-builder",
+        "passed": true,
+        "scorePercent": 94.3,
+        "agentTokens": 99147,
+        "endToEndTokens": 99147
+      },
+      {
+        "taskId": "recipe-cookbook-builder/e2",
+        "baseTask": "recipe-cookbook-builder",
+        "passed": true,
+        "scorePercent": 91.7,
+        "agentTokens": 305005,
+        "endToEndTokens": 305005
+      },
+      {
+        "taskId": "recipe-cookbook-builder/e3",
+        "baseTask": "recipe-cookbook-builder",
+        "passed": true,
+        "scorePercent": 91.7,
+        "agentTokens": 116444,
+        "endToEndTokens": 116444
+      },
+      {
+        "taskId": "recipe-cookbook-builder/m1",
+        "baseTask": "recipe-cookbook-builder",
+        "passed": true,
+        "scorePercent": 94.3,
+        "agentTokens": 88445,
+        "endToEndTokens": 88445
+      },
+      {
+        "taskId": "recipe-cookbook-builder/m2",
+        "baseTask": "recipe-cookbook-builder",
+        "passed": true,
+        "scorePercent": 94.3,
+        "agentTokens": 118146,
+        "endToEndTokens": 118146
+      },
+      {
+        "taskId": "recipe-cookbook-builder/h1",
+        "baseTask": "recipe-cookbook-builder",
+        "passed": true,
+        "scorePercent": 94.3,
+        "agentTokens": 324197,
+        "endToEndTokens": 324197
+      },
+      {
+        "taskId": "world-bank-economic-snapshot/e1",
+        "baseTask": "world-bank-economic-snapshot",
+        "passed": true,
+        "scorePercent": 100.0,
+        "agentTokens": 67222,
+        "endToEndTokens": 67222
+      },
+      {
+        "taskId": "world-bank-economic-snapshot/e2",
+        "baseTask": "world-bank-economic-snapshot",
+        "passed": false,
+        "scorePercent": 0.0,
+        "agentTokens": 307614,
+        "endToEndTokens": 307614
+      },
+      {
+        "taskId": "world-bank-economic-snapshot/e3",
+        "baseTask": "world-bank-economic-snapshot",
+        "passed": true,
+        "scorePercent": 100.0,
+        "agentTokens": 49284,
+        "endToEndTokens": 49284
+      },
+      {
+        "taskId": "world-bank-economic-snapshot/m1",
+        "baseTask": "world-bank-economic-snapshot",
+        "passed": true,
+        "scorePercent": 100.0,
+        "agentTokens": 124263,
+        "endToEndTokens": 124263
+      },
+      {
+        "taskId": "world-bank-economic-snapshot/m2",
+        "baseTask": "world-bank-economic-snapshot",
+        "passed": false,
+        "scorePercent": 0.0,
+        "agentTokens": 350403,
+        "endToEndTokens": 350403
+      },
+      {
+        "taskId": "world-bank-economic-snapshot/h1",
+        "baseTask": "world-bank-economic-snapshot",
+        "passed": true,
+        "scorePercent": 100.0,
+        "agentTokens": 126349,
+        "endToEndTokens": 126349
+      }
+    ],
+    "catastrophic": [
+      {
+        "taskId": "openmeteo-weather/e1",
+        "agentTokens": 714167,
+        "passed": false
+      },
+      {
+        "taskId": "recipe-cookbook-builder/e2",
+        "agentTokens": 305005,
+        "passed": true
+      },
+      {
+        "taskId": "recipe-cookbook-builder/h1",
+        "agentTokens": 324197,
+        "passed": true
+      },
+      {
+        "taskId": "world-bank-economic-snapshot/e2",
+        "agentTokens": 307614,
+        "passed": false
+      },
+      {
+        "taskId": "world-bank-economic-snapshot/m2",
+        "agentTokens": 350403,
+        "passed": false
+      }
+    ]
+  },
+  "evolution": {
+    "tasks": 18,
+    "passedTasks": 18,
+    "passRate": 100,
+    "averageScorePercent": 97.68,
+    "averageDurationSeconds": 79.68,
+    "averageTotalTokens": 118670.06,
+    "averageReviewerTokens": 10243.17,
+    "averageEndToEndTokens": 128913.22,
+    "claimDoneRate": 100,
+    "agentErrorCount": 0,
+    "skillsGenerated": 16,
+    "finalSkillNames": [
+      "Collect Weather Data for Five Cities with Historical Data",
+      "Collect Weather Data for Four Cities with Historical Data",
+      "Collect Weather Data for Four Cities with Summary Statistics",
+      "Collect Weather Data for Multiple Cities",
+      "Collect Weather Data for Three Cities with Historical Data",
+      "Collect Weather Data for Three Cities with Summary Statistics",
+      "Create Cookbook for Four International Dishes",
+      "Create Economic Snapshot for Five Countries",
+      "Create Economic Snapshot for Four Countries",
+      "Create Economic Snapshot for Three Countries",
+      "Create Economic Snapshots for Multiple Countries",
+      "Create Recipe Cookbook for Five International Dishes",
+      "Create Recipe Cookbook for Four International Dishes",
+      "Create Recipe Cookbook with 3 International Dishes",
+      "Create Recipe Cookbook with International Dishes",
+      "Create Recipe Cookbook with Specific Dishes"
+    ],
+    "warmStart": {
+      "tasks": 17,
+      "passedTasks": 17,
+      "passRate": 100,
+      "averageScorePercent": 97.55,
+      "averageDurationSeconds": 81.04,
+      "averagePromptTokens": 119586.88,
+      "averageOutputTokens": 1066.18,
+      "averageTotalTokens": 120653.06,
+      "averageReviewerTokens": 10357.88,
+      "averageEndToEndTokens": 131010.94,
+      "claimDoneRate": 100
+    },
+    "coldStart": {
+      "tasks": 1,
+      "passedTasks": 1,
+      "passRate": 100,
+      "averageScorePercent": 100,
+      "averageDurationSeconds": 56.53,
+      "averagePromptTokens": 83621,
+      "averageOutputTokens": 1338,
+      "averageTotalTokens": 84959,
+      "averageReviewerTokens": 8293,
+      "averageEndToEndTokens": 93252,
+      "claimDoneRate": 100
+    },
+    "byFamily": {
+      "openmeteo-weather": {
+        "tasks": 6,
+        "passed": 6,
+        "passRate": 100.0,
+        "avgScorePercent": 97.95,
+        "avgAgentTokens": 105838
+      },
+      "recipe-cookbook-builder": {
+        "tasks": 6,
+        "passed": 6,
+        "passRate": 100.0,
+        "avgScorePercent": 95.1,
+        "avgAgentTokens": 123503
+      },
+      "world-bank-economic-snapshot": {
+        "tasks": 6,
+        "passed": 6,
+        "passRate": 100.0,
+        "avgScorePercent": 100.0,
+        "avgAgentTokens": 126669
+      }
+    },
+    "perTask": [
+      {
+        "taskId": "openmeteo-weather/e1",
+        "baseTask": "openmeteo-weather",
+        "passed": true,
+        "scorePercent": 100.0,
+        "agentTokens": 84959,
+        "endToEndTokens": 93252
+      },
+      {
+        "taskId": "openmeteo-weather/e2",
+        "baseTask": "openmeteo-weather",
+        "passed": true,
+        "scorePercent": 100.0,
+        "agentTokens": 77651,
+        "endToEndTokens": 84303
+      },
+      {
+        "taskId": "openmeteo-weather/e3",
+        "baseTask": "openmeteo-weather",
+        "passed": true,
+        "scorePercent": 95.0,
+        "agentTokens": 100107,
+        "endToEndTokens": 107847
+      },
+      {
+        "taskId": "openmeteo-weather/m1",
+        "baseTask": "openmeteo-weather",
+        "passed": true,
+        "scorePercent": 100.0,
+        "agentTokens": 107369,
+        "endToEndTokens": 117403
+      },
+      {
+        "taskId": "openmeteo-weather/m2",
+        "baseTask": "openmeteo-weather",
+        "passed": true,
+        "scorePercent": 96.0,
+        "agentTokens": 139386,
+        "endToEndTokens": 151213
+      },
+      {
+        "taskId": "openmeteo-weather/h1",
+        "baseTask": "openmeteo-weather",
+        "passed": true,
+        "scorePercent": 96.7,
+        "agentTokens": 125557,
+        "endToEndTokens": 137862
+      },
+      {
+        "taskId": "recipe-cookbook-builder/e1",
+        "baseTask": "recipe-cookbook-builder",
+        "passed": true,
+        "scorePercent": 94.3,
+        "agentTokens": 72017,
+        "endToEndTokens": 78887
+      },
+      {
+        "taskId": "recipe-cookbook-builder/e2",
+        "baseTask": "recipe-cookbook-builder",
+        "passed": true,
+        "scorePercent": 96.7,
+        "agentTokens": 69156,
+        "endToEndTokens": 75583
+      },
+      {
+        "taskId": "recipe-cookbook-builder/e3",
+        "baseTask": "recipe-cookbook-builder",
+        "passed": true,
+        "scorePercent": 96.7,
+        "agentTokens": 79573,
+        "endToEndTokens": 86592
+      },
+      {
+        "taskId": "recipe-cookbook-builder/m1",
+        "baseTask": "recipe-cookbook-builder",
+        "passed": true,
+        "scorePercent": 94.3,
+        "agentTokens": 132049,
+        "endToEndTokens": 143924
+      },
+      {
+        "taskId": "recipe-cookbook-builder/m2",
+        "baseTask": "recipe-cookbook-builder",
+        "passed": true,
+        "scorePercent": 94.3,
+        "agentTokens": 174443,
+        "endToEndTokens": 188838
+      },
+      {
+        "taskId": "recipe-cookbook-builder/h1",
+        "baseTask": "recipe-cookbook-builder",
+        "passed": true,
+        "scorePercent": 94.3,
+        "agentTokens": 213779,
+        "endToEndTokens": 231553
+      },
+      {
+        "taskId": "world-bank-economic-snapshot/e1",
+        "baseTask": "world-bank-economic-snapshot",
+        "passed": true,
+        "scorePercent": 100.0,
+        "agentTokens": 77008,
+        "endToEndTokens": 82923
+      },
+      {
+        "taskId": "world-bank-economic-snapshot/e2",
+        "baseTask": "world-bank-economic-snapshot",
+        "passed": true,
+        "scorePercent": 100.0,
+        "agentTokens": 101499,
+        "endToEndTokens": 109841
+      },
+      {
+        "taskId": "world-bank-economic-snapshot/e3",
+        "baseTask": "world-bank-economic-snapshot",
+        "passed": true,
+        "scorePercent": 100.0,
+        "agentTokens": 92493,
+        "endToEndTokens": 101335
+      },
+      {
+        "taskId": "world-bank-economic-snapshot/m1",
+        "baseTask": "world-bank-economic-snapshot",
+        "passed": true,
+        "scorePercent": 100.0,
+        "agentTokens": 110672,
+        "endToEndTokens": 119152
+      },
+      {
+        "taskId": "world-bank-economic-snapshot/m2",
+        "baseTask": "world-bank-economic-snapshot",
+        "passed": true,
+        "scorePercent": 100.0,
+        "agentTokens": 129368,
+        "endToEndTokens": 142637
+      },
+      {
+        "taskId": "world-bank-economic-snapshot/h1",
+        "baseTask": "world-bank-economic-snapshot",
+        "passed": true,
+        "scorePercent": 100.0,
+        "agentTokens": 248975,
+        "endToEndTokens": 267293
+      }
+    ],
+    "catastrophic": []
+  },
+  "delta": {
+    "passDelta": 3,
+    "passRatePPDelta": 16.67,
+    "scorePPDelta": 17.22,
+    "agentTokensPctChange": -36.06,
+    "endToEndTokensPctChange": -30.54,
+    "durationPctChange": -19.46,
+    "claimDoneRatePPDelta": 22.22
+  }
+}
