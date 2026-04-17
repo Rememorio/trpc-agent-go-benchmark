@@ -54,7 +54,7 @@ const (
 	defaultAgentMaxTokens    = 4096
 	defaultToolIterations    = 16
 	defaultFallbackTaskLimit = 900
-	defaultMCPTimeoutSec     = 120
+	defaultMCPTimeoutSec     = 60
 )
 
 var (
@@ -462,7 +462,7 @@ func main() {
 		SkillCraftRoot:    cfg.SkillCraftRoot,
 		TaskRoot:          cfg.TaskRoot,
 		BaseTask:          cfg.BaseTask,
-		Scales:            cfg.Scales,
+		Scales:            reportScales(cfg),
 		Tasks:             summarizeTasks(tasks),
 		OutputDir:         cfg.OutputDir,
 		KeepWorkspaces:    cfg.KeepWorkspaces,
@@ -476,27 +476,41 @@ func main() {
 		log.Printf("  %d. %s (%s)", i+1, task.ID, task.Description)
 	}
 
-	if cfg.Mode == modeBaseline || cfg.Mode == modeCompare {
-		result.Baseline, err = runModeTasks(cfg, modeBaseline, tasks)
-		if err != nil {
-			log.Fatalf("baseline run failed: %v", err)
+	if err := os.MkdirAll(cfg.OutputDir, 0o755); err != nil {
+		log.Fatalf("create output dir: %v", err)
+	}
+	flushPartial := func() {
+		if writeErr := writeResults(cfg.OutputDir, result); writeErr != nil {
+			log.Printf("warning: failed to flush partial results.json: %v", writeErr)
 		}
 	}
 
-	if cfg.Mode == modeEvolution || cfg.Mode == modeCompare {
-		result.Evolution, err = runModeTasks(cfg, modeEvolution, tasks)
+	if cfg.Mode == modeBaseline || cfg.Mode == modeCompare {
+		result.Baseline, err = runModeTasks(cfg, modeBaseline, tasks, func() {
+			flushPartial()
+		})
 		if err != nil {
+			flushPartial()
+			log.Fatalf("baseline run failed: %v", err)
+		}
+		flushPartial()
+	}
+
+	if cfg.Mode == modeEvolution || cfg.Mode == modeCompare {
+		result.Evolution, err = runModeTasks(cfg, modeEvolution, tasks, func() {
+			flushPartial()
+		})
+		if err != nil {
+			flushPartial()
 			log.Fatalf("evolution run failed: %v", err)
 		}
+		flushPartial()
 	}
 
 	if result.Baseline != nil && result.Evolution != nil {
 		result.Comparison = buildComparison(result.Baseline, result.Evolution)
 	}
 
-	if err := os.MkdirAll(cfg.OutputDir, 0o755); err != nil {
-		log.Fatalf("create output dir: %v", err)
-	}
 	if err := writeResults(cfg.OutputDir, result); err != nil {
 		log.Fatalf("write results: %v", err)
 	}
@@ -702,6 +716,7 @@ func runModeTasks(
 	cfg *benchmarkConfig,
 	mode runMode,
 	tasks []*taskDefinition,
+	onProgress func(),
 ) (*modeResult, error) {
 	log.Printf("=== Running %s ===", mode)
 
@@ -717,29 +732,36 @@ func runModeTasks(
 	}
 
 	results := make([]*taskRunResult, 0, len(tasks))
+	modeRes := &modeResult{Mode: mode, Cases: results}
 	for idx, task := range tasks {
 		log.Printf("[%s %d/%d] %s", mode, idx+1, len(tasks), task.ID)
 		runResult, err := runSingleTask(cfg, mode, task, idx, skillsDir)
 		if err != nil {
-			return nil, err
+			modeRes.Summary = summarizeMode(results, currentSkillNames(mode, skillsDir))
+			return modeRes, err
 		}
 		results = append(results, runResult)
-	}
-
-	var finalSkillNames []string
-	if mode == modeEvolution {
-		names, err := skillNamesFromDir(skillsDir)
-		if err != nil {
-			return nil, err
+		modeRes.Cases = results
+		modeRes.Summary = summarizeMode(results, currentSkillNames(mode, skillsDir))
+		if onProgress != nil {
+			onProgress()
 		}
-		finalSkillNames = names
 	}
 
-	return &modeResult{
-		Mode:    mode,
-		Cases:   results,
-		Summary: summarizeMode(results, finalSkillNames),
-	}, nil
+	modeRes.Summary = summarizeMode(results, currentSkillNames(mode, skillsDir))
+	return modeRes, nil
+}
+
+func currentSkillNames(mode runMode, skillsDir string) []string {
+	if mode != modeEvolution || skillsDir == "" {
+		return nil
+	}
+	names, err := skillNamesFromDir(skillsDir)
+	if err != nil {
+		log.Printf("warning: list managed skills: %v", err)
+		return nil
+	}
+	return names
 }
 
 func runSingleTask(
@@ -824,7 +846,9 @@ func runSingleTask(
 		} else {
 			log.Printf("  evaluation: %s (%.1f%%)", eval.Status, eval.Score.Percent)
 		}
-		if result.Status == "ok" && !eval.Passed {
+		if eval.Passed {
+			result.Status = resultStatusFromEvaluation(eval)
+		} else if result.Status == "ok" {
 			result.Status = resultStatusFromEvaluation(eval)
 		}
 	}
@@ -886,8 +910,12 @@ func executeTask(
 	if hasSkills {
 		availableSkills = summariesToNames(repo.Summaries())
 	}
+	maxTokens := cfg.MaxTokens
+	if taskNeedsLowerCompletionBudget(task) && maxTokens > 2048 {
+		maxTokens = 2048
+	}
 	genConfig := model.GenerationConfig{
-		MaxTokens: intPtr(cfg.MaxTokens),
+		MaxTokens: intPtr(maxTokens),
 		Stream:    false,
 	}
 
@@ -898,6 +926,10 @@ func executeTask(
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithToolSets([]tool.ToolSet{localTools, filesystemTools}),
 		llmagent.WithMaxToolIterations(cfg.MaxToolIterations),
+		llmagent.WithEnableContextCompaction(true),
+		llmagent.WithContextCompactionKeepRecentRequests(0),
+		llmagent.WithContextCompactionToolResultMaxTokens(128),
+		llmagent.WithContextCompactionOversizedToolResultMaxTokens(1024),
 	}
 	if task.MaxTurns > 0 {
 		agentOpts = append(agentOpts, llmagent.WithMaxLLMCalls(task.MaxTurns))
@@ -923,6 +955,9 @@ func executeTask(
 			reviewerModel,
 			evolution.WithManagedSkillsDir(skillsDir),
 			evolution.WithSkillRepository(repo),
+			evolution.WithReviewerOptions(
+				evolution.WithMessageContentMaxChars(2000),
+			),
 		)
 		runnerOpts = append(runnerOpts, runner.WithEvolutionService(evoSvc))
 	}
@@ -1166,9 +1201,36 @@ func buildInstruction(task *taskDefinition, workspace string, availableSkills []
 		"Inspect available tools before assuming arguments, and save every required output file into the workspace before you finish.",
 		"The task docs may mention filesystem tools using names like filesystem-write_file or filesystem-read_file. In this runtime, use the actual filesystem MCP tool names that are exposed to you, such as write_file, read_file, list_directory, edit_file, create_directory, move_file, search_files, get_file_info, and list_allowed_directories.",
 		"SkillCraft local tools keep their actual names, which usually start with local-.",
-		"Do not blindly repeat the same tool call on the same input. Retry only when the earlier result was missing, invalid, or clearly incomplete.",
+		"Once a tool call has returned a usable result for given arguments, do not call the same tool with the same arguments again. Move on to the next required step. Re-call only if the earlier call returned an error or was clearly incomplete.",
 		fmt.Sprintf("Your workspace directory is %s.", workspace),
 	)
+	if task.HasInitialContent {
+		parts = append(parts,
+			"Initial workspace files may be helper inputs, draft plans, or candidate pools. They are not authoritative when the task specification gives an exact list, exact count, exact tool order, or exact output contract.",
+		)
+	}
+	if entities := extractTaskEntities(task.TaskDoc); entities != nil {
+		parts = append(parts,
+			fmt.Sprintf(
+				"The task specification requires exactly these %s: %s.",
+				entities.Label,
+				strings.Join(entities.Values, ", "),
+			),
+			fmt.Sprintf(
+				"Do not add extra %s from initial workspace files, helper plans, or your own substitutions.",
+				entities.Label,
+			),
+			"If any workspace file contains a larger candidate list, filter it down to the exact task-specified set before making tool calls or writing outputs.",
+		)
+	}
+	if outputFile := extractRequiredOutputFile(task.TaskDoc); outputFile != "" {
+		parts = append(parts,
+			fmt.Sprintf("Required final deliverable: %s. Helper or plan files are not substitutes.", outputFile),
+			fmt.Sprintf("Save it by calling local-write_final_json with {\"path\":\"%s\",\"content\":<raw JSON text>}. Fall back to write_file only if that tool errors.", outputFile),
+			"In content, put raw JSON text. Do not JSON-encode the document as a quoted string, do not escape every newline as \\n, do not wrap in markdown fences.",
+			fmt.Sprintf("Never end your turn with the final JSON only inside an assistant message. The JSON must be persisted to %s via a tool call before you call local-claim_done.", outputFile),
+		)
+	}
 	if len(availableSkills) > 0 {
 		parts = append(parts,
 			fmt.Sprintf(
@@ -1180,6 +1242,7 @@ func buildInstruction(task *taskDefinition, workspace string, availableSkills []
 			"Managed skills may come from smaller or earlier tasks and can be incomplete. The current task specification, required output, and tool results always override the skill.",
 			"If the current task needs extra fields, extra steps, or a stricter tool order than the skill mentions, you must still follow the current task.",
 			"Before relying on a managed skill, compare it against the current task's required APIs, ordering constraints, and required output fields. If any required part is missing, treat the skill as incomplete and follow the task specification directly.",
+			"If a managed skill mentions a tool that is not in the tool list available for this task, skip that step entirely and use whatever tool the task specification names instead.",
 			"These managed skills are textual procedures, not prebuilt executable scripts.",
 		)
 	}
@@ -1197,6 +1260,19 @@ func buildInstruction(task *taskDefinition, workspace string, availableSkills []
 			"Use local-file_append or local-file_write_json_chunk only when a single complete write is impractical, and make sure the final saved file is valid JSON before calling local-claim_done.",
 		)
 	}
+	if outputFile := extractRequiredOutputFile(task.TaskDoc); outputFile != "" {
+		parts = append(parts,
+			fmt.Sprintf("Before calling local-claim_done, verify that %s exists in the workspace and contains the complete final JSON.", outputFile),
+		)
+	}
+	if taskNeedsWorkingNotes(task) {
+		parts = append(parts,
+			"For larger multi-entity tasks, do not rely on raw tool outputs staying in context forever.",
+			"After finishing one entity, you may keep a single compact helper JSON file such as working_notes.json with only derived summaries and required fields for completed entities.",
+			"If you use working_notes.json, keep it compact, rewrite it with valid JSON, and read it back later instead of depending on full earlier tool outputs.",
+			"Do not store raw arrays or raw tool dumps in helper notes, and do not treat helper notes as the final deliverable.",
+		)
+	}
 	return strings.Join(parts, "\n\n")
 }
 
@@ -1212,8 +1288,34 @@ func buildUserPrompt(task *taskDefinition, workspace string, availableSkills []s
 			fmt.Fprintf(&b, "  - %s\n", name)
 		}
 	}
+	if task.HasInitialContent {
+		b.WriteString("- note: initial workspace files may contain helper plans or candidate supersets; when the task specification gives an exact list or exact count, the task specification is authoritative.\n")
+	}
+	if outputFile := extractRequiredOutputFile(task.TaskDoc); outputFile != "" {
+		fmt.Fprintf(&b, "- required final output file: %s\n", outputFile)
+	}
 	b.WriteString("\n## Task Specification\n\n")
 	b.WriteString(strings.TrimSpace(task.TaskDoc))
+	if entities := extractTaskEntities(task.TaskDoc); entities != nil {
+		b.WriteString("\n\n## Exact Required Entities\n")
+		fmt.Fprintf(&b, "- %s: %s\n", titleCaseASCII(entities.Label), strings.Join(entities.Values, ", "))
+		b.WriteString("- Do not add extra entries from initial workspace files or your own substitutions.\n")
+		b.WriteString("- If an initial workspace file contains a larger candidate list, filter it down to this exact set before making tool calls or writing outputs.\n")
+	}
+	if outputFile := extractRequiredOutputFile(task.TaskDoc); outputFile != "" {
+		b.WriteString("\n## Finalization Rules\n")
+		fmt.Fprintf(&b, "- Required deliverable: `%s`. Helper or plan files are not substitutes.\n", outputFile)
+		fmt.Fprintf(&b, "- Save it via `local-write_final_json` with `{\"path\":\"%s\",\"content\":<raw JSON>}`; fall back to `write_file` only if that tool errors.\n", outputFile)
+		b.WriteString("- `content` must be raw JSON text: not a JSON-encoded string, no `\\n`-escaped newlines, no markdown fences.\n")
+		fmt.Fprintf(&b, "- Do not end your turn with the final JSON only in chat. The JSON must be persisted to `%s` via a tool call before `local-claim_done`.\n", outputFile)
+	}
+	if taskNeedsWorkingNotes(task) {
+		b.WriteString("\n## Context Management\n")
+		b.WriteString("- This is a larger multi-entity task. Raw tool outputs may become too large to keep in context.\n")
+		b.WriteString("- After completing an entity, you may keep a single compact helper JSON file such as `working_notes.json` with only derived summaries and required fields.\n")
+		b.WriteString("- If you use `working_notes.json`, keep it valid JSON and read it back later instead of relying on full earlier tool outputs.\n")
+		b.WriteString("- Do not store raw arrays or raw tool dumps in helper notes.\n")
+	}
 	if taskDocMayContainPreviewMarkers(task.TaskDoc) {
 		b.WriteString("\n\n## Interpretation Note\n")
 		b.WriteString("- Long literals in the task doc may be shown as previews ending with `...`; do not assume the dots are literal input characters unless the task explicitly says so.\n")
@@ -1232,11 +1334,173 @@ func taskDocMayContainPreviewMarkers(doc string) bool {
 	return strings.Contains(doc, "...")
 }
 
+func extractRequiredOutputFile(doc string) string {
+	re := regexp.MustCompile("Save results to `([^`]+)`")
+	matches := re.FindStringSubmatch(doc)
+	if len(matches) != 2 {
+		return ""
+	}
+	return strings.TrimSpace(matches[1])
+}
+
+type taskEntities struct {
+	Label  string
+	Values []string
+}
+
+func extractTaskEntities(doc string) *taskEntities {
+	lines := strings.Split(doc, "\n")
+	sectionLabels := map[string]string{
+		"cities to analyze":    "cities",
+		"countries to analyze": "countries",
+		"dishes to include":    "dishes",
+	}
+	for i, line := range lines {
+		header := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "##")))
+		label, ok := sectionLabels[header]
+		if !ok {
+			continue
+		}
+		values := extractTableColumnValues(lines[i+1:], label)
+		if len(values) == 0 {
+			return nil
+		}
+		return &taskEntities{
+			Label:  label,
+			Values: values,
+		}
+	}
+	return nil
+}
+
+func extractTableColumnValues(lines []string, label string) []string {
+	targetColumn := map[string]string{
+		"cities":    "city",
+		"countries": "country",
+		"dishes":    "dish",
+	}[label]
+	if targetColumn == "" {
+		return nil
+	}
+	for i := 0; i < len(lines); i++ {
+		if !strings.HasPrefix(strings.TrimSpace(lines[i]), "|") {
+			continue
+		}
+		headerCells := parseMarkdownTableRow(lines[i])
+		if len(headerCells) == 0 {
+			continue
+		}
+		targetIdx := indexOfNormalizedCell(headerCells, targetColumn)
+		if targetIdx < 0 {
+			continue
+		}
+		var values []string
+		for j := i + 1; j < len(lines); j++ {
+			row := strings.TrimSpace(lines[j])
+			if row == "" || !strings.HasPrefix(row, "|") {
+				break
+			}
+			cells := parseMarkdownTableRow(row)
+			if len(cells) == 0 || isMarkdownDividerRow(cells) || targetIdx >= len(cells) {
+				continue
+			}
+			value := strings.TrimSpace(cells[targetIdx])
+			if value == "" {
+				continue
+			}
+			values = append(values, value)
+		}
+		return values
+	}
+	return nil
+}
+
+func parseMarkdownTableRow(line string) []string {
+	trimmed := strings.TrimSpace(line)
+	trimmed = strings.TrimPrefix(trimmed, "|")
+	trimmed = strings.TrimSuffix(trimmed, "|")
+	if trimmed == "" {
+		return nil
+	}
+	rawCells := strings.Split(trimmed, "|")
+	cells := make([]string, 0, len(rawCells))
+	for _, cell := range rawCells {
+		cells = append(cells, strings.TrimSpace(cell))
+	}
+	return cells
+}
+
+func isMarkdownDividerRow(cells []string) bool {
+	if len(cells) == 0 {
+		return false
+	}
+	for _, cell := range cells {
+		if strings.Trim(cell, "-: ") != "" {
+			return false
+		}
+	}
+	return true
+}
+
+func indexOfNormalizedCell(cells []string, target string) int {
+	for i, cell := range cells {
+		if strings.EqualFold(strings.TrimSpace(cell), target) {
+			return i
+		}
+	}
+	return -1
+}
+
+func taskNeedsWorkingNotes(task *taskDefinition) bool {
+	if task == nil {
+		return false
+	}
+	if task.MaxTurns >= 100 {
+		return true
+	}
+	if entities := extractTaskEntities(task.TaskDoc); entities != nil && len(entities.Values) >= 5 {
+		return true
+	}
+	lower := strings.ToLower(task.TaskDoc)
+	return strings.Contains(lower, "output only summary statistics") ||
+		strings.Contains(lower, "summarize large datasets")
+}
+
+func taskNeedsLowerCompletionBudget(task *taskDefinition) bool {
+	if task == nil {
+		return false
+	}
+	if task.MaxTurns >= 100 {
+		return true
+	}
+	return taskNeedsWorkingNotes(task)
+}
+
+func titleCaseASCII(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
+}
+
+func reportScales(cfg *benchmarkConfig) []string {
+	if cfg == nil || len(cfg.ExplicitTasks) > 0 {
+		return nil
+	}
+	return append([]string(nil), cfg.Scales...)
+}
+
 func resultStatusFromEvaluation(eval *officialEval) string {
-	if eval == nil || eval.Passed {
+	if eval == nil {
 		return "ok"
 	}
 	status := strings.ToLower(strings.TrimSpace(eval.Status))
+	if eval.Passed {
+		if status == "partial" {
+			return "partial"
+		}
+		return "ok"
+	}
 	if status == "" || status == "pass" {
 		return "evaluation_failed"
 	}

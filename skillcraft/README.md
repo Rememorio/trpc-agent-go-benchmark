@@ -35,6 +35,14 @@ For each selected SkillCraft task, the runner:
 5. Invokes SkillCraft's native `evaluation/main.py` to get the official score JSON.
 6. In `evolution` mode, stores learned `SKILL.md` files and makes them available to later tasks.
 
+The MCP bridge also ships a small extra tool `local-write_final_json` that writes
+the final JSON deliverable directly to the workspace, validates that the content
+is valid JSON, and transparently recovers from common encoding mistakes (such as
+JSON-encoded JSON strings or content where every newline was emitted as a
+literal `\n`). Prompts steer the agent to prefer this tool for the final
+deliverable so it can finish the task even when the `npx`-spawned filesystem
+MCP server hits a transient `file already closed` or write parse error.
+
 ## Key Flags
 
 | Flag | Description |
