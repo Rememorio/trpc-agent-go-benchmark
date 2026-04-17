@@ -8,10 +8,6 @@ on:
 permissions:
   contents: read
 
-env:
-  SKILLCRAFT_TRPC_AGENT_GO_REPO: https://github.com/Rememorio/trpc-agent-go.git
-  SKILLCRAFT_TRPC_AGENT_GO_SHA: 7e982e308202825d3bbc059a6ae0208f426695ae
-
 jobs:
   discover-go-modules:
     name: discover go modules
@@ -49,15 +45,6 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.24.9"
-      - name: Prepare SkillCraft companion trpc-agent-go checkout
-        if: matrix.module == 'skillcraft/trpc-agent-go-impl/go.mod'
-        shell: bash
-        run: |
-          set -euo pipefail
-          dep_dir="${GITHUB_WORKSPACE}/../my-trpc-agent-go"
-          rm -rf "${dep_dir}"
-          git clone "${SKILLCRAFT_TRPC_AGENT_GO_REPO}" "${dep_dir}"
-          git -C "${dep_dir}" checkout "${SKILLCRAFT_TRPC_AGENT_GO_SHA}"
       - name: Test module
         shell: bash
         run: bash .github/scripts/run-go-tests.sh --module "${{ matrix.module }}"
@@ -70,14 +57,6 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.24.9"
-      - name: Prepare SkillCraft companion trpc-agent-go checkout
-        shell: bash
-        run: |
-          set -euo pipefail
-          dep_dir="${GITHUB_WORKSPACE}/../my-trpc-agent-go"
-          rm -rf "${dep_dir}"
-          git clone "${SKILLCRAFT_TRPC_AGENT_GO_REPO}" "${dep_dir}"
-          git -C "${dep_dir}" checkout "${SKILLCRAFT_TRPC_AGENT_GO_SHA}"
       - name: Check go.mod and go.sum are tidy
         shell: bash
         run: bash .github/scripts/check-go-mod-tidy.sh
