@@ -12,6 +12,9 @@ This benchmark runs local [SkillCraft](https://github.com/shiqichen17/SkillCraft
 export SKILLCRAFT_ROOT=/path/to/SkillCraft
 export OPENAI_API_KEY=your-api-key
 
+git clone https://github.com/Rememorio/trpc-agent-go.git ../my-trpc-agent-go
+git -C ../my-trpc-agent-go checkout 7e982e308202825d3bbc059a6ae0208f426695ae
+
 cd skillcraft/trpc-agent-go-impl
 
 go run . \
@@ -70,6 +73,7 @@ The output directory contains:
 ## Requirements
 
 - A working SkillCraft checkout with `uv` dependencies available
+- A companion `trpc-agent-go` checkout at `../my-trpc-agent-go` pinned to the framework PR companion commit (`trpc-group/trpc-agent-go#1651`)
 - `uv` on `PATH`
 - `npx` on `PATH` for `@modelcontextprotocol/server-filesystem`
 - Network access for the public APIs used by the selected SkillCraft tasks
