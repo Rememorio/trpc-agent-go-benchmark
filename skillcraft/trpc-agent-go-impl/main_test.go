@@ -1,15 +1,19 @@
 package main
 
 import (
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/evolution"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
-func TestConsumeEventsTracksClaimDoneAndSkillUsage(t *testing.T) {
+func TestConsumeEventsTracksClaimDoneAndSkillToolInvocations(t *testing.T) {
 	evtCh := make(chan *event.Event, 1)
 	evtCh <- &event.Event{
 		Response: &model.Response{
@@ -44,7 +48,7 @@ func TestConsumeEventsTracksClaimDoneAndSkillUsage(t *testing.T) {
 
 	stats := consumeEvents(evtCh)
 	require.True(t, stats.ClaimDoneCalled)
-	require.True(t, stats.SkillUsageObserved)
+	require.True(t, stats.SkillToolInvoked)
 	require.Equal(t, []string{"skill_load"}, stats.SkillToolCalls)
 	require.Equal(t, []string{"Perform DNA Sequence Analysis"}, stats.LoadedSkillNames)
 }
@@ -78,7 +82,7 @@ func TestBuildComparisonUsesWarmStartSubset(t *testing.T) {
 			ReviewerTotalTokens: 30,
 			EndToEndTotalTokens: 150,
 			HadAvailableSkills:  true,
-			SkillUsageObserved:  true,
+			SkillToolInvoked:    true,
 			Evaluation:          &officialEval{Passed: true, Score: scorePayload{Percent: 80}},
 		},
 	}
@@ -100,7 +104,8 @@ func TestBuildComparisonUsesWarmStartSubset(t *testing.T) {
 	require.InDelta(t, 20.0, comp.WarmStartScoreDelta, 0.02)
 	require.InDelta(t, -80.0, comp.WarmStartTokenDelta, 0.02)
 	require.InDelta(t, -50.0, comp.WarmStartEndToEndTokenDelta, 0.02)
-	require.InDelta(t, 50.0, comp.SkillUsageObservedDelta, 0.02)
+	require.InDelta(t, 50.0, comp.SkillsOfferedDelta, 0.02)
+	require.InDelta(t, 50.0, comp.SkillToolInvokedDelta, 0.02)
 }
 
 func TestBuildInstructionPrioritizesTaskSpecOverSkills(t *testing.T) {
@@ -112,8 +117,11 @@ func TestBuildInstructionPrioritizesTaskSpecOverSkills(t *testing.T) {
 	prompt := buildInstruction(task, "/tmp/workspace", []string{"DNA Sequence Analysis Workflow"})
 
 	require.Contains(t, prompt, "Read the full task specification before deciding whether a managed skill applies.")
+	require.Contains(t, prompt, "Managed skills from earlier tasks may be available through skill_load")
+	require.Contains(t, prompt, "routing hints only")
 	require.Contains(t, prompt, "Managed skills may come from smaller or earlier tasks and can be incomplete.")
 	require.Contains(t, prompt, "compare it against the current task's required APIs")
+	require.Contains(t, prompt, "stop reconsidering that skill summary")
 	require.Contains(t, prompt, "trailing `...`")
 	require.Contains(t, prompt, "do not call the same tool with the same arguments again")
 	require.Contains(t, prompt, "prefer one complete write with write_file")
@@ -128,6 +136,23 @@ func TestBuildInstructionPrioritizesTaskSpecOverSkills(t *testing.T) {
 	require.Contains(t, prompt, "do not escape every newline as \\n")
 	require.Contains(t, prompt, "Never end your turn with the final JSON only inside an assistant message")
 	require.Contains(t, prompt, "If a managed skill mentions a tool that is not in the tool list available for this task, skip that step")
+}
+
+func TestBuildInstructionDoesNotMentionSkillManage(t *testing.T) {
+	// trpc-agent-go intentionally keeps skill management on the
+	// reviewer-driven async path, so the agent prompt must never
+	// reference the (deliberately-removed) skill_manage tool.
+	task := &taskDefinition{
+		TaskDoc:          "SEQ_01: ATGC...\n\nSave results to `dna_results.json`:",
+		NeededLocalTools: []string{"claim_done"},
+	}
+
+	prompt := buildInstruction(task, "/tmp/workspace", nil)
+	require.NotContains(t, prompt, "skill_manage")
+
+	userPrompt := buildUserPrompt(task, "/tmp/workspace", nil)
+	require.NotContains(t, userPrompt, "skill_manage")
+	require.NotContains(t, userPrompt, "## Skill Authoring")
 }
 
 func TestExtractTaskEntitiesParsesPrimaryTaskTable(t *testing.T) {
@@ -164,7 +189,7 @@ func TestBuildInstructionEnforcesExactTaskEntitiesOverInitialFiles(t *testing.T)
 | 2 | China | CHN | East Asia & Pacific |
 | 3 | Japan | JPN | East Asia & Pacific |
 | 4 | Germany | DEU | Europe & Central Asia |`,
-		NeededLocalTools: []string{"claim_done"},
+		NeededLocalTools:  []string{"claim_done"},
 		HasInitialContent: true,
 	}
 
@@ -184,11 +209,12 @@ func TestBuildUserPromptPutsTaskSpecBeforeManagedSkills(t *testing.T) {
 	prompt := buildUserPrompt(task, "/tmp/workspace", []string{"DNA Sequence Analysis Workflow"})
 
 	require.Contains(t, prompt, "## Task Specification")
-	require.Contains(t, prompt, "## Managed Skills Available")
+	require.Contains(t, prompt, "## Managed Skills")
 	require.Less(t,
 		strings.Index(prompt, "## Task Specification"),
-		strings.Index(prompt, "## Managed Skills Available"),
+		strings.Index(prompt, "## Managed Skills"),
 	)
+	require.Contains(t, prompt, "routing hints only")
 	require.Contains(t, prompt, "task specification overrides any skill")
 }
 
@@ -271,6 +297,131 @@ func TestResultStatusFromEvaluation(t *testing.T) {
 	require.Equal(t, "partial", resultStatusFromEvaluation(&officialEval{Passed: true, Status: "partial"}))
 	require.Equal(t, "fail", resultStatusFromEvaluation(&officialEval{Passed: false, Status: "fail"}))
 	require.Equal(t, "evaluation_failed", resultStatusFromEvaluation(&officialEval{Passed: false}))
+}
+
+func TestOutcomeFromEval(t *testing.T) {
+	t.Run("agent error wins over everything", func(t *testing.T) {
+		o := outcomeFromEval(errors.New("max tool iterations"), &officialEval{Passed: true}, nil)
+		require.Equal(t, evolution.OutcomeAgentError, o.Status)
+		require.Contains(t, o.Notes, "max tool iterations")
+		require.Equal(t, "skillcraft", o.Evaluator)
+	})
+
+	t.Run("evaluator runtime error reported as agent_error", func(t *testing.T) {
+		o := outcomeFromEval(nil, nil, errors.New("python missing"))
+		require.Equal(t, evolution.OutcomeAgentError, o.Status)
+		require.Contains(t, o.Notes, "python missing")
+	})
+
+	t.Run("nil eval falls back to unknown", func(t *testing.T) {
+		o := outcomeFromEval(nil, nil, nil)
+		require.Equal(t, evolution.OutcomeUnknown, o.Status)
+		require.NotEmpty(t, o.Notes)
+	})
+
+	t.Run("passed=true status=pass becomes success with score", func(t *testing.T) {
+		o := outcomeFromEval(nil, &officialEval{
+			Passed: true,
+			Status: "pass",
+			Score:  scorePayload{Percent: 100},
+		}, nil)
+		require.Equal(t, evolution.OutcomeSuccess, o.Status)
+		require.NotNil(t, o.Score)
+		require.InDelta(t, 1.0, *o.Score, 1e-9)
+	})
+
+	t.Run("passed=true status=partial becomes partial with notes", func(t *testing.T) {
+		o := outcomeFromEval(nil, &officialEval{
+			Passed: true,
+			Status: "partial",
+			Score:  scorePayload{Percent: 50},
+			Items: []scoreItem{
+				{Name: "indicator GDP", Status: "fail", Details: "wrong code"},
+			},
+		}, nil)
+		require.Equal(t, evolution.OutcomePartial, o.Status)
+		require.NotNil(t, o.Score)
+		require.Contains(t, o.Notes, "indicator GDP")
+		require.Contains(t, o.Notes, "wrong code")
+	})
+
+	t.Run("passed=false becomes fail with errors notes", func(t *testing.T) {
+		o := outcomeFromEval(nil, &officialEval{
+			Passed: false,
+			Status: "fail",
+			Errors: []string{"economic_snapshot.json not found"},
+			Score:  scorePayload{Percent: 0},
+		}, nil)
+		require.Equal(t, evolution.OutcomeFail, o.Status)
+		require.NotNil(t, o.Score)
+		require.Contains(t, o.Notes, "economic_snapshot.json not found")
+	})
+
+	t.Run("notes are truncated to keep reviewer prompt small", func(t *testing.T) {
+		long := strings.Repeat("x", 1000)
+		o := outcomeFromEval(errors.New(long), nil, nil)
+		require.LessOrEqual(t, len(o.Notes), 600)
+		require.Contains(t, o.Notes, "agent error: ")
+	})
+}
+
+func TestSeedManagedSkillsCopiesFolderTreeAndSkipsTopLevelFiles(t *testing.T) {
+	src := t.TempDir()
+	dst := t.TempDir()
+
+	// Two skill folders with an extra top-level file that must be ignored
+	// (the on-disk layout is one folder per skill).
+	skillA := filepath.Join(src, "weather-monitor")
+	require.NoError(t, os.MkdirAll(filepath.Join(skillA, "docs"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(skillA, "SKILL.md"),
+		[]byte("---\nname: Weather Monitor\n---\nbody"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(skillA, "docs", "notes.md"),
+		[]byte("nested doc"), 0o644))
+
+	skillB := filepath.Join(src, "recipe-cookbook")
+	require.NoError(t, os.MkdirAll(skillB, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(skillB, "SKILL.md"),
+		[]byte("---\nname: Recipe Cookbook\n---\nbody"), 0o644))
+
+	require.NoError(t, os.WriteFile(filepath.Join(src, "stray.txt"),
+		[]byte("ignored top-level file"), 0o644))
+
+	n, err := seedManagedSkills(src, dst)
+	require.NoError(t, err)
+	require.Equal(t, 2, n)
+
+	require.FileExists(t, filepath.Join(dst, "weather-monitor", "SKILL.md"))
+	require.FileExists(t, filepath.Join(dst, "weather-monitor", "docs", "notes.md"))
+	require.FileExists(t, filepath.Join(dst, "recipe-cookbook", "SKILL.md"))
+	_, err = os.Stat(filepath.Join(dst, "stray.txt"))
+	require.True(t, os.IsNotExist(err), "top-level files must not be seeded")
+}
+
+func TestSeedManagedSkillsOverwritesExistingSkillFolder(t *testing.T) {
+	src := t.TempDir()
+	dst := t.TempDir()
+
+	require.NoError(t, os.MkdirAll(filepath.Join(src, "weather-monitor"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(src, "weather-monitor", "SKILL.md"),
+		[]byte("new body"), 0o644))
+
+	// Pre-populate dst with stale content that should be replaced.
+	require.NoError(t, os.MkdirAll(filepath.Join(dst, "weather-monitor"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dst, "weather-monitor", "SKILL.md"),
+		[]byte("old body"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dst, "weather-monitor", "stale.md"),
+		[]byte("stale sibling"), 0o644))
+
+	n, err := seedManagedSkills(src, dst)
+	require.NoError(t, err)
+	require.Equal(t, 1, n)
+
+	body, err := os.ReadFile(filepath.Join(dst, "weather-monitor", "SKILL.md"))
+	require.NoError(t, err)
+	require.Equal(t, "new body", string(body))
+
+	_, err = os.Stat(filepath.Join(dst, "weather-monitor", "stale.md"))
+	require.True(t, os.IsNotExist(err), "stale siblings must be removed before seeding")
 }
 
 func TestReportScalesOmittedForExplicitTasks(t *testing.T) {

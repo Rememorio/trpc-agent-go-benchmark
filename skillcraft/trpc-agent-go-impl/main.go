@@ -34,6 +34,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -47,6 +48,15 @@ const (
 	modeEvolution runMode = "evolution"
 	modeCompare   runMode = "compare"
 )
+
+// modeLearnsSkills reports whether the given mode runs the background
+// evolution reviewer + publisher pipeline. trpc-agent-go intentionally
+// keeps skill management on the reviewer-driven async path, so this is
+// a single-mode predicate today; it stays as a function for clarity at
+// the call sites and to make future modes easy to add.
+func modeLearnsSkills(m runMode) bool {
+	return m == modeEvolution
+}
 
 const (
 	defaultTaskRoot          = "tasks/scaled_tasks"
@@ -86,7 +96,7 @@ var (
 	flagMode = flag.String(
 		"mode",
 		string(modeCompare),
-		"Run mode: baseline, evolution, compare",
+		"Run mode: baseline, evolution, or compare (runs baseline + evolution back-to-back)",
 	)
 	flagModel = flag.String(
 		"model",
@@ -138,25 +148,56 @@ var (
 		false,
 		"Print verbose per-task progress",
 	)
+	flagLoadSkillsFrom = flag.String(
+		"load-skills-from",
+		"",
+		"Optional managed_skills directory to seed evolution mode with before the run. "+
+			"Each subdirectory is treated as one skill and copied verbatim into "+
+			"<output>/managed_skills/. Useful for accumulating skills across runs and "+
+			"for exercising the failure-aware learning loop on already-warm libraries.",
+	)
+	flagReviewerSkillBodyChars = flag.Int(
+		"reviewer-skill-body-chars",
+		0,
+		"Per-skill body excerpt budget (chars) the reviewer sees for each existing "+
+			"skill in the library. 0 uses the framework default; a negative value "+
+			"disables bodies and shows description-only entries. Increase when "+
+			"existing SKILL.md files are long enough that the head excerpt misses "+
+			"meaningful procedural content.",
+	)
+	flagMaxPromptSkills = flag.Int(
+		"max-prompt-skills",
+		0,
+		"Cap on the number of managed-skill summaries (name + full description) "+
+			"injected into the agent's system prompt for evolution-mode tasks. 0 "+
+			"means no cap (default). When positive and the library exceeds the cap, "+
+			"only the first N summaries are rendered with descriptions; remaining "+
+			"skill names are listed as a compact tail so skill_load can still reach "+
+			"them. Use this to keep large warm-start libraries from pushing the "+
+			"prompt close to the model's context window.",
+	)
 )
 
 type benchmarkConfig struct {
-	SkillCraftRoot    string
-	TaskRoot          string
-	BaseTask          string
-	Scales            []string
-	ExplicitTasks     []string
-	Mode              runMode
-	ModelName         string
-	ReviewerModelName string
-	Variant           string
-	OutputDir         string
-	TaskTimeout       time.Duration
-	MaxToolIterations int
-	MaxTokens         int
-	MCPTimeout        time.Duration
-	KeepWorkspaces    bool
-	Verbose           bool
+	SkillCraftRoot         string
+	TaskRoot               string
+	BaseTask               string
+	Scales                 []string
+	ExplicitTasks          []string
+	Mode                   runMode
+	ModelName              string
+	ReviewerModelName      string
+	Variant                string
+	OutputDir              string
+	TaskTimeout            time.Duration
+	MaxToolIterations      int
+	MaxTokens              int
+	MCPTimeout             time.Duration
+	KeepWorkspaces         bool
+	Verbose                bool
+	LoadSkillsFrom         string
+	ReviewerSkillBodyChars int
+	MaxPromptSkills        int
 }
 
 type rawTaskConfig struct {
@@ -236,19 +277,21 @@ type modeResult struct {
 }
 
 type subsetSummary struct {
-	Tasks                   int     `json:"tasks"`
-	PassedTasks             int     `json:"passedTasks"`
-	PassRate                float64 `json:"passRate"`
-	AverageScorePercent     float64 `json:"averageScorePercent"`
-	AverageDurationSec      float64 `json:"averageDurationSeconds"`
-	AveragePromptTokens     float64 `json:"averagePromptTokens"`
-	AverageOutputTokens     float64 `json:"averageOutputTokens"`
-	AverageTotalTokens      float64 `json:"averageTotalTokens"`
-	AverageReviewerTokens   float64 `json:"averageReviewerTokens,omitempty"`
-	AverageEndToEndTokens   float64 `json:"averageEndToEndTokens,omitempty"`
-	ClaimDoneRate           float64 `json:"claimDoneRate"`
-	SkillUsageObservedTasks int     `json:"skillUsageObservedTasks,omitempty"`
-	SkillUsageObservedRate  float64 `json:"skillUsageObservedRate,omitempty"`
+	Tasks                 int     `json:"tasks"`
+	PassedTasks           int     `json:"passedTasks"`
+	PassRate              float64 `json:"passRate"`
+	AverageScorePercent   float64 `json:"averageScorePercent"`
+	AverageDurationSec    float64 `json:"averageDurationSeconds"`
+	AveragePromptTokens   float64 `json:"averagePromptTokens"`
+	AverageOutputTokens   float64 `json:"averageOutputTokens"`
+	AverageTotalTokens    float64 `json:"averageTotalTokens"`
+	AverageReviewerTokens float64 `json:"averageReviewerTokens,omitempty"`
+	AverageEndToEndTokens float64 `json:"averageEndToEndTokens,omitempty"`
+	ClaimDoneRate         float64 `json:"claimDoneRate"`
+	SkillsOfferedTasks    int     `json:"skillsOfferedTasks,omitempty"`
+	SkillsOfferedRate     float64 `json:"skillsOfferedRate,omitempty"`
+	SkillToolInvokedTasks int     `json:"skillToolInvokedTasks,omitempty"`
+	SkillToolInvokedRate  float64 `json:"skillToolInvokedRate,omitempty"`
 }
 
 type modeSummary struct {
@@ -263,8 +306,10 @@ type modeSummary struct {
 	AverageReviewerTokens    float64        `json:"averageReviewerTokens,omitempty"`
 	AverageEndToEndTokens    float64        `json:"averageEndToEndTokens,omitempty"`
 	ClaimDoneRate            float64        `json:"claimDoneRate"`
-	SkillUsageObservedTasks  int            `json:"skillUsageObservedTasks,omitempty"`
-	SkillUsageObservedRate   float64        `json:"skillUsageObservedRate,omitempty"`
+	SkillsOfferedTasks       int            `json:"skillsOfferedTasks,omitempty"`
+	SkillsOfferedRate        float64        `json:"skillsOfferedRate,omitempty"`
+	SkillToolInvokedTasks    int            `json:"skillToolInvokedTasks,omitempty"`
+	SkillToolInvokedRate     float64        `json:"skillToolInvokedRate,omitempty"`
 	ReviewerPromptTokens     int            `json:"reviewerPromptTokens,omitempty"`
 	ReviewerCompletionTokens int            `json:"reviewerCompletionTokens,omitempty"`
 	ReviewerTotalTokens      int            `json:"reviewerTotalTokens,omitempty"`
@@ -284,7 +329,8 @@ type compareResult struct {
 	EndToEndTokenDelta          float64 `json:"endToEndTokenDelta"`
 	ReviewerTokenDelta          float64 `json:"reviewerTokenDelta"`
 	ClaimDoneDelta              float64 `json:"claimDoneDelta"`
-	SkillUsageObservedDelta     float64 `json:"skillUsageObservedDelta"`
+	SkillsOfferedDelta          float64 `json:"skillsOfferedDelta"`
+	SkillToolInvokedDelta       float64 `json:"skillToolInvokedDelta"`
 	WarmStartTaskCount          int     `json:"warmStartTaskCount,omitempty"`
 	WarmStartPassRateDelta      float64 `json:"warmStartPassRateDelta,omitempty"`
 	WarmStartScoreDelta         float64 `json:"warmStartScoreDelta,omitempty"`
@@ -313,7 +359,7 @@ type taskRunResult struct {
 	LoadedSkillNames         []string          `json:"loadedSkillNames,omitempty"`
 	ClaimDoneCalled          bool              `json:"claimDoneCalled"`
 	HadAvailableSkills       bool              `json:"hadAvailableSkills,omitempty"`
-	SkillUsageObserved       bool              `json:"skillUsageObserved,omitempty"`
+	SkillToolInvoked         bool              `json:"skillToolInvoked,omitempty"`
 	FinalResponse            string            `json:"finalResponse,omitempty"`
 	Workspace                string            `json:"workspace,omitempty"`
 	AgentError               string            `json:"agentError,omitempty"`
@@ -350,21 +396,21 @@ type scoreItem struct {
 	Details  string  `json:"details"`
 }
 
+// runStats captures only the agent-side signals collected during run.
+// Reviewer-side token usage and the end-to-end aggregate are recorded
+// directly on taskRunResult after evaluator + reviewer have completed
+// (see runSingleTask), so they do not appear here.
 type runStats struct {
-	PromptTokens             int
-	CompletionTokens         int
-	TotalTokens              int
-	ReviewerPromptTokens     int
-	ReviewerCompletionTokens int
-	ReviewerTotalTokens      int
-	EndToEndTotalTokens      int
-	ToolCalls                []string
-	SkillToolCalls           []string
-	LoadedSkillNames         []string
-	ClaimDoneCalled          bool
-	SkillUsageObserved       bool
-	FinalResponse            string
-	EventErrors              []string
+	PromptTokens     int
+	CompletionTokens int
+	TotalTokens      int
+	ToolCalls        []string
+	SkillToolCalls   []string
+	LoadedSkillNames []string
+	ClaimDoneCalled  bool
+	SkillToolInvoked bool
+	FinalResponse    string
+	EventErrors      []string
 }
 
 type trackedUsage struct {
@@ -485,7 +531,10 @@ func main() {
 		}
 	}
 
-	if cfg.Mode == modeBaseline || cfg.Mode == modeCompare {
+	runBaseline := cfg.Mode == modeBaseline || cfg.Mode == modeCompare
+	runEvolution := cfg.Mode == modeEvolution || cfg.Mode == modeCompare
+
+	if runBaseline {
 		result.Baseline, err = runModeTasks(cfg, modeBaseline, tasks, func() {
 			flushPartial()
 		})
@@ -496,7 +545,7 @@ func main() {
 		flushPartial()
 	}
 
-	if cfg.Mode == modeEvolution || cfg.Mode == modeCompare {
+	if runEvolution {
 		result.Evolution, err = runModeTasks(cfg, modeEvolution, tasks, func() {
 			flushPartial()
 		})
@@ -563,24 +612,40 @@ func buildConfig() (*benchmarkConfig, error) {
 	}
 
 	cfg := &benchmarkConfig{
-		SkillCraftRoot:    skillcraftRoot,
-		TaskRoot:          strings.Trim(strings.TrimSpace(*flagTaskRoot), "/"),
-		BaseTask:          strings.Trim(strings.TrimSpace(*flagBaseTask), "/"),
-		Scales:            parseCSV(*flagScales),
-		ExplicitTasks:     parseCSV(*flagTasks),
-		Mode:              mode,
-		ModelName:         strings.TrimSpace(*flagModel),
-		ReviewerModelName: reviewerModel,
-		Variant:           strings.TrimSpace(*flagVariant),
-		OutputDir:         outputDir,
-		MaxToolIterations: *flagMaxToolIterations,
-		MaxTokens:         *flagMaxTokens,
-		MCPTimeout:        time.Duration(*flagMCPTimeoutSeconds) * time.Second,
-		KeepWorkspaces:    *flagKeepWorkspaces,
-		Verbose:           *flagVerbose,
+		SkillCraftRoot:         skillcraftRoot,
+		TaskRoot:               strings.Trim(strings.TrimSpace(*flagTaskRoot), "/"),
+		BaseTask:               strings.Trim(strings.TrimSpace(*flagBaseTask), "/"),
+		Scales:                 parseCSV(*flagScales),
+		ExplicitTasks:          parseCSV(*flagTasks),
+		Mode:                   mode,
+		ModelName:              strings.TrimSpace(*flagModel),
+		ReviewerModelName:      reviewerModel,
+		Variant:                strings.TrimSpace(*flagVariant),
+		OutputDir:              outputDir,
+		MaxToolIterations:      *flagMaxToolIterations,
+		MaxTokens:              *flagMaxTokens,
+		MCPTimeout:             time.Duration(*flagMCPTimeoutSeconds) * time.Second,
+		KeepWorkspaces:         *flagKeepWorkspaces,
+		Verbose:                *flagVerbose,
+		ReviewerSkillBodyChars: *flagReviewerSkillBodyChars,
+		MaxPromptSkills:        *flagMaxPromptSkills,
 	}
 	if *flagTaskTimeoutSeconds > 0 {
 		cfg.TaskTimeout = time.Duration(*flagTaskTimeoutSeconds) * time.Second
+	}
+	if seed := strings.TrimSpace(*flagLoadSkillsFrom); seed != "" {
+		abs, err := filepath.Abs(seed)
+		if err != nil {
+			return nil, fmt.Errorf("resolve load-skills-from: %w", err)
+		}
+		info, err := os.Stat(abs)
+		if err != nil {
+			return nil, fmt.Errorf("invalid load-skills-from %q: %w", seed, err)
+		}
+		if !info.IsDir() {
+			return nil, fmt.Errorf("load-skills-from must be a directory: %s", abs)
+		}
+		cfg.LoadSkillsFrom = abs
 	}
 	if len(cfg.ExplicitTasks) == 0 && cfg.BaseTask == "" {
 		return nil, errors.New("set either -tasks or -base-task")
@@ -721,13 +786,20 @@ func runModeTasks(
 	log.Printf("=== Running %s ===", mode)
 
 	var skillsDir string
-	if mode == modeEvolution {
+	if modeLearnsSkills(mode) {
 		skillsDir = filepath.Join(cfg.OutputDir, "managed_skills")
 		if err := os.RemoveAll(skillsDir); err != nil {
 			return nil, fmt.Errorf("reset managed skills dir: %w", err)
 		}
 		if err := os.MkdirAll(skillsDir, 0o755); err != nil {
 			return nil, fmt.Errorf("create managed skills dir: %w", err)
+		}
+		if cfg.LoadSkillsFrom != "" {
+			n, err := seedManagedSkills(cfg.LoadSkillsFrom, skillsDir)
+			if err != nil {
+				return nil, fmt.Errorf("seed managed skills from %s: %w", cfg.LoadSkillsFrom, err)
+			}
+			log.Printf("    seeded %d managed skill(s) from %s", n, cfg.LoadSkillsFrom)
 		}
 	}
 
@@ -752,8 +824,63 @@ func runModeTasks(
 	return modeRes, nil
 }
 
+// seedManagedSkills copies every immediate subdirectory of srcDir (each
+// expected to hold one SKILL.md plus optional sibling files) into dstDir.
+// Files at the top level of srcDir are ignored on purpose -- the on-disk
+// repository layout used by skill.FSRepository is one folder per skill.
+//
+// Returns the number of skill folders seeded. Existing folders in dstDir
+// with the same name are overwritten so callers can repeatedly seed from
+// the same source without manual cleanup.
+func seedManagedSkills(srcDir, dstDir string) (int, error) {
+	entries, err := os.ReadDir(srcDir)
+	if err != nil {
+		return 0, fmt.Errorf("read source dir: %w", err)
+	}
+	var seeded int
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		srcPath := filepath.Join(srcDir, entry.Name())
+		dstPath := filepath.Join(dstDir, entry.Name())
+		if err := os.RemoveAll(dstPath); err != nil {
+			return seeded, fmt.Errorf("clear %s: %w", dstPath, err)
+		}
+		if err := copyDirRecursive(srcPath, dstPath); err != nil {
+			return seeded, fmt.Errorf("copy %s -> %s: %w", srcPath, dstPath, err)
+		}
+		seeded++
+	}
+	return seeded, nil
+}
+
+func copyDirRecursive(srcDir, dstDir string) error {
+	if err := os.MkdirAll(dstDir, 0o755); err != nil {
+		return err
+	}
+	return filepath.WalkDir(srcDir, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, err := filepath.Rel(srcDir, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dstDir, rel)
+		if d.IsDir() {
+			return os.MkdirAll(target, 0o755)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(target, data, 0o644)
+	})
+}
+
 func currentSkillNames(mode runMode, skillsDir string) []string {
-	if mode != modeEvolution || skillsDir == "" {
+	if !modeLearnsSkills(mode) || skillsDir == "" {
 		return nil
 	}
 	names, err := skillNamesFromDir(skillsDir)
@@ -802,7 +929,7 @@ func runSingleTask(
 		skillRepo        *skill.FSRepository
 		skillNamesBefore []string
 	)
-	if mode == modeEvolution {
+	if modeLearnsSkills(mode) {
 		if err := os.MkdirAll(skillsDir, 0o755); err != nil {
 			return nil, fmt.Errorf("create skills dir: %w", err)
 		}
@@ -814,21 +941,55 @@ func runSingleTask(
 		}
 	}
 
-	stats, runErr := executeTask(cfg, task, mode, workspace, skillRepo, skillsDir, index)
+	// The evolution service is constructed in the caller (not in
+	// executeTask + runner.WithEvolutionService) so we can call
+	// EnqueueLearningJob ourselves after the evaluator runs and pass
+	// the verdict in via LearningJob.Outcome. The runner-driven hook
+	// is intentionally not used in benchmark mode because it would
+	// fire-and-forget without an outcome, and the reviewer would then
+	// "imagine" the outcome from the transcript alone (see
+	// .vscode/plan-evolution-memory.md P0-3 for the rationale).
+	sessionService := sessioninmemory.NewSessionService()
+	const benchmarkAppName = "skillcraft-benchmark"
+	const benchmarkUserID = "skillcraft-benchmark-user"
+	sessionID := fmt.Sprintf("%s-%s-%d-%d",
+		mode, sanitizeName(task.ID), index, time.Now().UnixNano())
+
+	var (
+		evoSvc          evolution.Service
+		reviewerTracker *usageTracker
+	)
+	if modeLearnsSkills(mode) {
+		reviewerBaseModel := newOpenAIModel(cfg.ReviewerModelName, cfg.Variant)
+		reviewerModel, tracker := newTrackingModel(reviewerBaseModel)
+		reviewerTracker = tracker
+		evoOpts := []evolution.Option{
+			evolution.WithManagedSkillsDir(skillsDir),
+			evolution.WithSkillRepository(skillRepo),
+			evolution.WithReviewerOptions(
+				evolution.WithMessageContentMaxChars(2000),
+			),
+		}
+		if cfg.ReviewerSkillBodyChars != 0 {
+			evoOpts = append(evoOpts,
+				evolution.WithExistingSkillBodyMaxChars(cfg.ReviewerSkillBodyChars),
+			)
+		}
+		evoSvc = evolution.NewService(reviewerModel, evoOpts...)
+	}
+
+	stats, runErr := executeTask(cfg, task, mode, workspace, skillRepo,
+		sessionService, benchmarkAppName, benchmarkUserID, sessionID)
 	result.DurationSeconds = round2(time.Since(start).Seconds())
 	if stats != nil {
 		result.PromptTokens = stats.PromptTokens
 		result.CompletionTokens = stats.CompletionTokens
 		result.TotalTokens = stats.TotalTokens
-		result.ReviewerPromptTokens = stats.ReviewerPromptTokens
-		result.ReviewerCompletionTokens = stats.ReviewerCompletionTokens
-		result.ReviewerTotalTokens = stats.ReviewerTotalTokens
-		result.EndToEndTotalTokens = stats.EndToEndTotalTokens
 		result.ToolCalls = stats.ToolCalls
 		result.SkillToolCalls = stats.SkillToolCalls
 		result.LoadedSkillNames = stats.LoadedSkillNames
 		result.ClaimDoneCalled = stats.ClaimDoneCalled
-		result.SkillUsageObserved = stats.SkillUsageObserved
+		result.SkillToolInvoked = stats.SkillToolInvoked
 		result.FinalResponse = stats.FinalResponse
 		result.EventErrors = stats.EventErrors
 	}
@@ -860,7 +1021,29 @@ func runSingleTask(
 		log.Printf("  evaluation error: %v", evalErr)
 	}
 
-	if mode == modeEvolution {
+	// Hand the session + outcome to the reviewer. We do this AFTER the
+	// evaluator has run so the reviewer prompt always sees the verdict;
+	// then close the service synchronously so the async worker has
+	// drained before we measure learned skills on disk.
+	if evoSvc != nil {
+		enqueueEvolutionWithOutcome(
+			sessionService, evoSvc,
+			benchmarkAppName, benchmarkUserID, sessionID,
+			runErr, eval, evalErr,
+		)
+		if err := evoSvc.Close(); err != nil {
+			log.Printf("  evolution close error: %v", err)
+		}
+		if reviewerTracker != nil {
+			reviewerUsage := reviewerTracker.snapshot()
+			result.ReviewerPromptTokens = reviewerUsage.PromptTokens
+			result.ReviewerCompletionTokens = reviewerUsage.CompletionTokens
+			result.ReviewerTotalTokens = reviewerUsage.TotalTokens
+		}
+	}
+	result.EndToEndTotalTokens = result.TotalTokens + result.ReviewerTotalTokens
+
+	if modeLearnsSkills(mode) {
 		namesAfter, err := skillNamesFromDir(skillsDir)
 		if err != nil {
 			return nil, fmt.Errorf("list learned skills: %w", err)
@@ -882,17 +1065,132 @@ func runSingleTask(
 	return result, nil
 }
 
+// enqueueEvolutionWithOutcome fetches the recorded session and submits a
+// learning job to the reviewer with an explicit Outcome derived from the
+// evaluator. Failures here are logged but never abort the benchmark run --
+// missing the reviewer pass is much less bad than losing the per-task
+// metrics we already collected.
+func enqueueEvolutionWithOutcome(
+	sessionService *sessioninmemory.SessionService,
+	evoSvc evolution.Service,
+	appName, userID, sessionID string,
+	runErr error,
+	eval *officialEval,
+	evalErr error,
+) {
+	ctx := context.Background()
+	sess, err := sessionService.GetSession(ctx, session.Key{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+	})
+	if err != nil {
+		log.Printf("  evolution enqueue skipped: get session: %v", err)
+		return
+	}
+	if sess == nil {
+		log.Printf("  evolution enqueue skipped: session %s not found", sessionID)
+		return
+	}
+	outcome := outcomeFromEval(runErr, eval, evalErr)
+	if err := evoSvc.EnqueueLearningJob(ctx, evolution.LearningJob{
+		Session: sess,
+		Outcome: outcome,
+	}); err != nil {
+		log.Printf("  evolution enqueue error: %v", err)
+	}
+}
+
+// outcomeFromEval translates the benchmark's per-task signals (agent run
+// error, official evaluator verdict, evaluator runtime error) into the
+// generic Outcome the reviewer consumes. Notes are kept short and
+// PII-free because the reviewer renders them verbatim into its prompt.
+func outcomeFromEval(runErr error, eval *officialEval, evalErr error) *evolution.Outcome {
+	out := &evolution.Outcome{Evaluator: "skillcraft"}
+	switch {
+	case runErr != nil:
+		out.Status = evolution.OutcomeAgentError
+		out.Notes = truncateOutcomeNote("agent error: " + runErr.Error())
+	case evalErr != nil:
+		out.Status = evolution.OutcomeAgentError
+		out.Notes = truncateOutcomeNote("evaluator runtime error: " + evalErr.Error())
+	case eval == nil:
+		out.Status = evolution.OutcomeUnknown
+		out.Notes = "evaluator did not return a verdict"
+	case eval.Passed:
+		out.Status = evolution.OutcomeSuccess
+		score := eval.Score.Percent / 100.0
+		out.Score = &score
+		if status := strings.ToLower(strings.TrimSpace(eval.Status)); status == "partial" {
+			out.Status = evolution.OutcomePartial
+			out.Notes = truncateOutcomeNote(joinScoreNotes(eval))
+		}
+	default:
+		out.Status = evolution.OutcomeFail
+		score := eval.Score.Percent / 100.0
+		out.Score = &score
+		out.Notes = truncateOutcomeNote(joinScoreNotes(eval))
+	}
+	return out
+}
+
+// joinScoreNotes builds a short evaluator note from the official eval
+// payload, focusing on signals the reviewer can act on (errors first,
+// then warnings, then per-item failures).
+func joinScoreNotes(eval *officialEval) string {
+	if eval == nil {
+		return ""
+	}
+	var parts []string
+	for _, e := range eval.Errors {
+		if e = strings.TrimSpace(e); e != "" {
+			parts = append(parts, e)
+		}
+	}
+	for _, w := range eval.Warnings {
+		if w = strings.TrimSpace(w); w != "" {
+			parts = append(parts, "warn: "+w)
+		}
+	}
+	for _, item := range eval.Items {
+		status := strings.ToLower(strings.TrimSpace(item.Status))
+		if status == "" || status == "pass" || status == "passed" {
+			continue
+		}
+		details := strings.TrimSpace(item.Details)
+		if details == "" {
+			details = strings.TrimSpace(item.Name)
+		}
+		if details == "" {
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%s: %s", item.Name, details))
+	}
+	return strings.Join(parts, "; ")
+}
+
+// truncateOutcomeNote caps the note string so a noisy evaluator cannot
+// blow up the reviewer prompt. The reviewer reads the verdict status
+// for routing; the notes are advisory.
+func truncateOutcomeNote(s string) string {
+	const maxLen = 480
+	s = strings.TrimSpace(s)
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
+}
+
 func executeTask(
 	cfg *benchmarkConfig,
 	task *taskDefinition,
 	mode runMode,
 	workspace string,
 	repo *skill.FSRepository,
-	skillsDir string,
-	index int,
+	sessionService *sessioninmemory.SessionService,
+	appName, userID, sessionID string,
 ) (*runStats, error) {
 	modelInstance := newOpenAIModel(cfg.ModelName, cfg.Variant)
-	sessionService := sessioninmemory.NewSessionService()
 	stats := &runStats{}
 	var availableSkills []string
 
@@ -937,32 +1235,29 @@ func executeTask(
 	if hasSkills {
 		agentOpts = append(agentOpts,
 			llmagent.WithSkills(repo),
-			llmagent.WithSkillToolProfile(llmagent.SkillToolProfileKnowledgeOnly),
+			llmagent.WithAllowedSkillTools(llmagent.SkillToolLoad),
+			llmagent.WithSkillLoadMode(llmagent.SkillLoadModeOnce),
+			llmagent.WithSkillsLoadedContentInToolResults(true),
+			llmagent.WithMaxLoadedSkills(1),
 		)
+		if cfg.MaxPromptSkills > 0 {
+			agentOpts = append(agentOpts,
+				llmagent.WithMaxOverviewSkills(cfg.MaxPromptSkills),
+			)
+		}
 	}
 
 	agentInstance := llmagent.New("skillcraft-bench-agent", agentOpts...)
 
-	runnerOpts := []runner.Option{
+	// The reviewer/evolution wiring is owned by runSingleTask now: it
+	// constructs evoSvc, calls EnqueueLearningJob with an Outcome
+	// AFTER the evaluator runs, and Closes the service to drain the
+	// async worker before measuring learned skills on disk. Keeping the
+	// runner ignorant of evolution avoids the auto-enqueue path that
+	// would fire here without an outcome.
+	run := runner.NewRunner(appName, agentInstance,
 		runner.WithSessionService(sessionService),
-	}
-	var reviewerTracker *usageTracker
-	if mode == modeEvolution {
-		reviewerBaseModel := newOpenAIModel(cfg.ReviewerModelName, cfg.Variant)
-		reviewerModel, tracker := newTrackingModel(reviewerBaseModel)
-		reviewerTracker = tracker
-		evoSvc := evolution.NewService(
-			reviewerModel,
-			evolution.WithManagedSkillsDir(skillsDir),
-			evolution.WithSkillRepository(repo),
-			evolution.WithReviewerOptions(
-				evolution.WithMessageContentMaxChars(2000),
-			),
-		)
-		runnerOpts = append(runnerOpts, runner.WithEvolutionService(evoSvc))
-	}
-
-	run := runner.NewRunner("skillcraft-benchmark", agentInstance, runnerOpts...)
+	)
 	runClosed := false
 	defer func() {
 		if !runClosed {
@@ -981,8 +1276,6 @@ func executeTask(
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(taskTimeout)*time.Second)
 	defer cancel()
 
-	userID := "skillcraft-benchmark-user"
-	sessionID := fmt.Sprintf("%s-%s-%d-%d", mode, sanitizeName(task.ID), index, time.Now().UnixNano())
 	userPrompt := buildUserPrompt(task, workspace, availableSkills)
 
 	eventCh, err := run.Run(ctx, userID, sessionID, model.NewUserMessage(userPrompt))
@@ -995,13 +1288,6 @@ func executeTask(
 		return stats, err
 	}
 	runClosed = true
-	if reviewerTracker != nil {
-		reviewerUsage := reviewerTracker.snapshot()
-		stats.ReviewerPromptTokens = reviewerUsage.PromptTokens
-		stats.ReviewerCompletionTokens = reviewerUsage.CompletionTokens
-		stats.ReviewerTotalTokens = reviewerUsage.TotalTokens
-	}
-	stats.EndToEndTotalTokens = stats.TotalTokens + stats.ReviewerTotalTokens
 	if ctx.Err() != nil {
 		return stats, ctx.Err()
 	}
@@ -1147,7 +1433,7 @@ func consumeEvents(evtCh <-chan *event.Event) *runStats {
 						stats.ClaimDoneCalled = true
 					}
 					if isSkillToolName(normalizedName) {
-						stats.SkillUsageObserved = true
+						stats.SkillToolInvoked = true
 						stats.SkillToolCalls = appendUniqueString(stats.SkillToolCalls, normalizedName)
 						if normalizedName == "skill_load" {
 							if skillName := extractLoadedSkillName(call.Function.Arguments); skillName != "" {
@@ -1234,14 +1520,16 @@ func buildInstruction(task *taskDefinition, workspace string, availableSkills []
 	if len(availableSkills) > 0 {
 		parts = append(parts,
 			fmt.Sprintf(
-				"Managed skills from earlier tasks are available: %s.",
-				strings.Join(availableSkills, ", "),
+				"Managed skills from earlier tasks may be available through skill_load (%d currently visible in the system skill overview).",
+				len(availableSkills),
 			),
 			"Read the full task specification before deciding whether a managed skill applies.",
-			"If a managed skill is relevant, load it with skill_load and use it as a reusable checklist, not as the source of truth.",
+			"Treat skill names and short summaries as routing hints only. If a managed skill looks relevant, load it with skill_load before relying on it.",
+			"If a managed skill is relevant, use it as a reusable checklist, not as the source of truth.",
 			"Managed skills may come from smaller or earlier tasks and can be incomplete. The current task specification, required output, and tool results always override the skill.",
 			"If the current task needs extra fields, extra steps, or a stricter tool order than the skill mentions, you must still follow the current task.",
 			"Before relying on a managed skill, compare it against the current task's required APIs, ordering constraints, and required output fields. If any required part is missing, treat the skill as incomplete and follow the task specification directly.",
+			"After deciding a managed skill is incomplete or irrelevant, stop reconsidering that skill summary and continue with the task using the task specification and tool results.",
 			"If a managed skill mentions a tool that is not in the tool list available for this task, skip that step entirely and use whatever tool the task specification names instead.",
 			"These managed skills are textual procedures, not prebuilt executable scripts.",
 		)
@@ -1321,11 +1609,10 @@ func buildUserPrompt(task *taskDefinition, workspace string, availableSkills []s
 		b.WriteString("- Long literals in the task doc may be shown as previews ending with `...`; do not assume the dots are literal input characters unless the task explicitly says so.\n")
 	}
 	if len(availableSkills) > 0 {
-		b.WriteString("\n## Managed Skills Available\n")
-		for _, name := range availableSkills {
-			fmt.Fprintf(&b, "- %s\n", name)
-		}
-		b.WriteString("\nUse these skills only as reusable reference after understanding the full task. The current task specification overrides any skill.\n")
+		b.WriteString("\n## Managed Skills\n")
+		fmt.Fprintf(&b, "- %d managed skill(s) may be available through the system skill overview and `skill_load`.\n", len(availableSkills))
+		b.WriteString("- Treat skill names and short summaries as routing hints only; load a skill before relying on it.\n")
+		b.WriteString("- Use these skills only as reusable reference after understanding the full task. The current task specification overrides any skill.\n")
 	}
 	return b.String()
 }
@@ -1541,8 +1828,10 @@ func summarizeMode(results []*taskRunResult, finalSkillNames []string) *modeSumm
 		summary.AverageReviewerTokens = overall.AverageReviewerTokens
 		summary.AverageEndToEndTokens = overall.AverageEndToEndTokens
 		summary.ClaimDoneRate = overall.ClaimDoneRate
-		summary.SkillUsageObservedTasks = overall.SkillUsageObservedTasks
-		summary.SkillUsageObservedRate = overall.SkillUsageObservedRate
+		summary.SkillsOfferedTasks = overall.SkillsOfferedTasks
+		summary.SkillsOfferedRate = overall.SkillsOfferedRate
+		summary.SkillToolInvokedTasks = overall.SkillToolInvokedTasks
+		summary.SkillToolInvokedRate = overall.SkillToolInvokedRate
 	}
 
 	var warmStartResults []*taskRunResult
@@ -1573,14 +1862,15 @@ func buildComparison(
 	}
 
 	comp := &compareResult{
-		PassRateDelta:           round2(evolution.Summary.PassRate - baseline.Summary.PassRate),
-		ScoreDelta:              round2(evolution.Summary.AverageScorePercent - baseline.Summary.AverageScorePercent),
-		DurationDeltaSec:        round2(evolution.Summary.AverageDurationSec - baseline.Summary.AverageDurationSec),
-		TokenDelta:              round2(evolution.Summary.AverageTotalTokens - baseline.Summary.AverageTotalTokens),
-		EndToEndTokenDelta:      round2(evolution.Summary.AverageEndToEndTokens - baseline.Summary.AverageEndToEndTokens),
-		ReviewerTokenDelta:      round2(evolution.Summary.AverageReviewerTokens - baseline.Summary.AverageReviewerTokens),
-		ClaimDoneDelta:          round2(evolution.Summary.ClaimDoneRate - baseline.Summary.ClaimDoneRate),
-		SkillUsageObservedDelta: round2(evolution.Summary.SkillUsageObservedRate - baseline.Summary.SkillUsageObservedRate),
+		PassRateDelta:         round2(evolution.Summary.PassRate - baseline.Summary.PassRate),
+		ScoreDelta:            round2(evolution.Summary.AverageScorePercent - baseline.Summary.AverageScorePercent),
+		DurationDeltaSec:      round2(evolution.Summary.AverageDurationSec - baseline.Summary.AverageDurationSec),
+		TokenDelta:            round2(evolution.Summary.AverageTotalTokens - baseline.Summary.AverageTotalTokens),
+		EndToEndTokenDelta:    round2(evolution.Summary.AverageEndToEndTokens - baseline.Summary.AverageEndToEndTokens),
+		ReviewerTokenDelta:    round2(evolution.Summary.AverageReviewerTokens - baseline.Summary.AverageReviewerTokens),
+		ClaimDoneDelta:        round2(evolution.Summary.ClaimDoneRate - baseline.Summary.ClaimDoneRate),
+		SkillsOfferedDelta:    round2(evolution.Summary.SkillsOfferedRate - baseline.Summary.SkillsOfferedRate),
+		SkillToolInvokedDelta: round2(evolution.Summary.SkillToolInvokedRate - baseline.Summary.SkillToolInvokedRate),
 	}
 	warmIDs := warmStartTaskIDs(evolution.Cases)
 	if len(warmIDs) == 0 {
@@ -1615,15 +1905,16 @@ func summarizeTaskSubset(results []*taskRunResult) *subsetSummary {
 
 	summary := &subsetSummary{Tasks: len(results)}
 	var (
-		totalScore      float64
-		totalDuration   float64
-		totalPrompt     float64
-		totalCompletion float64
-		totalTokens     float64
-		totalReviewer   float64
-		totalEndToEnd   float64
-		claimDone       int
-		skillUsage      int
+		totalScore       float64
+		totalDuration    float64
+		totalPrompt      float64
+		totalCompletion  float64
+		totalTokens      float64
+		totalReviewer    float64
+		totalEndToEnd    float64
+		claimDone        int
+		skillsOffered    int
+		skillToolInvoked int
 	)
 
 	for _, res := range results {
@@ -1636,8 +1927,11 @@ func summarizeTaskSubset(results []*taskRunResult) *subsetSummary {
 		if res.ClaimDoneCalled {
 			claimDone++
 		}
-		if res.SkillUsageObserved {
-			skillUsage++
+		if res.HadAvailableSkills {
+			skillsOffered++
+		}
+		if res.SkillToolInvoked {
+			skillToolInvoked++
 		}
 		if res.Evaluation != nil {
 			totalScore += res.Evaluation.Score.Percent
@@ -1657,8 +1951,10 @@ func summarizeTaskSubset(results []*taskRunResult) *subsetSummary {
 	summary.AverageReviewerTokens = round2(totalReviewer / count)
 	summary.AverageEndToEndTokens = round2(totalEndToEnd / count)
 	summary.ClaimDoneRate = round2(float64(claimDone) / count * 100)
-	summary.SkillUsageObservedTasks = skillUsage
-	summary.SkillUsageObservedRate = round2(float64(skillUsage) / count * 100)
+	summary.SkillsOfferedTasks = skillsOffered
+	summary.SkillsOfferedRate = round2(float64(skillsOffered) / count * 100)
+	summary.SkillToolInvokedTasks = skillToolInvoked
+	summary.SkillToolInvokedRate = round2(float64(skillToolInvoked) / count * 100)
 	return summary
 }
 
@@ -1725,26 +2021,34 @@ func writeReport(outputDir string, result *benchmarkResult) error {
 		appendModeSection(&b, result.Evolution)
 	}
 	if result.Comparison != nil {
-		b.WriteString("\n## Comparison\n\n")
-		fmt.Fprintf(&b, "- Overall pass rate delta: %.2f\n", result.Comparison.PassRateDelta)
-		fmt.Fprintf(&b, "- Overall score delta: %.2f\n", result.Comparison.ScoreDelta)
-		fmt.Fprintf(&b, "- Overall duration delta (s): %.2f\n", result.Comparison.DurationDeltaSec)
-		fmt.Fprintf(&b, "- Agent-token delta: %.2f\n", result.Comparison.TokenDelta)
-		fmt.Fprintf(&b, "- End-to-end token delta: %.2f\n", result.Comparison.EndToEndTokenDelta)
-		fmt.Fprintf(&b, "- Reviewer-token delta: %.2f\n", result.Comparison.ReviewerTokenDelta)
-		fmt.Fprintf(&b, "- Claim-done delta: %.2f\n", result.Comparison.ClaimDoneDelta)
-		fmt.Fprintf(&b, "- Skill-usage-observed delta: %.2f\n", result.Comparison.SkillUsageObservedDelta)
-		if result.Comparison.WarmStartTaskCount > 0 {
-			fmt.Fprintf(&b, "- Warm-start tasks compared: %d\n", result.Comparison.WarmStartTaskCount)
-			fmt.Fprintf(&b, "- Warm-start pass rate delta: %.2f\n", result.Comparison.WarmStartPassRateDelta)
-			fmt.Fprintf(&b, "- Warm-start score delta: %.2f\n", result.Comparison.WarmStartScoreDelta)
-			fmt.Fprintf(&b, "- Warm-start duration delta (s): %.2f\n", result.Comparison.WarmStartDurationDeltaSec)
-			fmt.Fprintf(&b, "- Warm-start agent-token delta: %.2f\n", result.Comparison.WarmStartTokenDelta)
-			fmt.Fprintf(&b, "- Warm-start end-to-end token delta: %.2f\n", result.Comparison.WarmStartEndToEndTokenDelta)
-		}
+		appendComparisonSection(&b, "Comparison (evolution vs. baseline)", result.Comparison)
 	}
 
 	return os.WriteFile(filepath.Join(outputDir, "REPORT.md"), []byte(b.String()), 0o644)
+}
+
+func appendComparisonSection(b *strings.Builder, title string, c *compareResult) {
+	if c == nil {
+		return
+	}
+	fmt.Fprintf(b, "\n## %s\n\n", title)
+	fmt.Fprintf(b, "- Overall pass rate delta: %.2f\n", c.PassRateDelta)
+	fmt.Fprintf(b, "- Overall score delta: %.2f\n", c.ScoreDelta)
+	fmt.Fprintf(b, "- Overall duration delta (s): %.2f\n", c.DurationDeltaSec)
+	fmt.Fprintf(b, "- Agent-token delta: %.2f\n", c.TokenDelta)
+	fmt.Fprintf(b, "- End-to-end token delta: %.2f\n", c.EndToEndTokenDelta)
+	fmt.Fprintf(b, "- Reviewer-token delta: %.2f\n", c.ReviewerTokenDelta)
+	fmt.Fprintf(b, "- Claim-done delta: %.2f\n", c.ClaimDoneDelta)
+	fmt.Fprintf(b, "- Skills-offered delta: %.2f\n", c.SkillsOfferedDelta)
+	fmt.Fprintf(b, "- skill_load-invoked delta: %.2f\n", c.SkillToolInvokedDelta)
+	if c.WarmStartTaskCount > 0 {
+		fmt.Fprintf(b, "- Warm-start tasks compared: %d\n", c.WarmStartTaskCount)
+		fmt.Fprintf(b, "- Warm-start pass rate delta: %.2f\n", c.WarmStartPassRateDelta)
+		fmt.Fprintf(b, "- Warm-start score delta: %.2f\n", c.WarmStartScoreDelta)
+		fmt.Fprintf(b, "- Warm-start duration delta (s): %.2f\n", c.WarmStartDurationDeltaSec)
+		fmt.Fprintf(b, "- Warm-start agent-token delta: %.2f\n", c.WarmStartTokenDelta)
+		fmt.Fprintf(b, "- Warm-start end-to-end token delta: %.2f\n", c.WarmStartEndToEndTokenDelta)
+	}
 }
 
 func appendModeSection(b *strings.Builder, modeRes *modeResult) {
@@ -1762,7 +2066,8 @@ func appendModeSection(b *strings.Builder, modeRes *modeResult) {
 	fmt.Fprintf(b, "- Average reviewer tokens: %.2f\n", s.AverageReviewerTokens)
 	fmt.Fprintf(b, "- Average end-to-end tokens: %.2f\n", s.AverageEndToEndTokens)
 	fmt.Fprintf(b, "- Claim-done rate: %.2f%%\n", s.ClaimDoneRate)
-	fmt.Fprintf(b, "- Skill-usage-observed rate: %.2f%%\n", s.SkillUsageObservedRate)
+	fmt.Fprintf(b, "- Skills-offered rate: %.2f%% (tasks where managed skills were available in the prompt)\n", s.SkillsOfferedRate)
+	fmt.Fprintf(b, "- skill_load-invoked rate: %.2f%% (tasks where the agent actually called a skill_* tool)\n", s.SkillToolInvokedRate)
 	if len(s.FinalSkillNames) > 0 {
 		fmt.Fprintf(b, "- Learned skills: `%s`\n", strings.Join(s.FinalSkillNames, "`, `"))
 	}
@@ -1785,33 +2090,36 @@ func appendModeSection(b *strings.Builder, modeRes *modeResult) {
 		)
 	}
 
-	b.WriteString("\n| Task | Status | Score | Agent Tokens | End-to-end Tokens | Claim Done | Skill Used |\n")
-	b.WriteString("|------|--------|------:|-------------:|------------------:|-----------:|-----------:|\n")
+	b.WriteString("\n| Task | Status | Score | Agent Tokens | End-to-end Tokens | Claim Done | Skills Offered | skill_load Called |\n")
+	b.WriteString("|------|--------|------:|-------------:|------------------:|-----------:|---------------:|------------------:|\n")
 	for _, res := range modeRes.Cases {
 		score := 0.0
 		if res.Evaluation != nil {
 			score = res.Evaluation.Score.Percent
 		}
-		claimDone := "no"
-		if res.ClaimDoneCalled {
-			claimDone = "yes"
-		}
-		skillUsed := "no"
-		if res.SkillUsageObserved {
-			skillUsed = "yes"
-		}
+		claimDone := yesNo(res.ClaimDoneCalled)
+		skillsOffered := yesNo(res.HadAvailableSkills)
+		skillLoadCalled := yesNo(res.SkillToolInvoked)
 		fmt.Fprintf(
 			b,
-			"| `%s` | `%s` | %.1f | %d | %d | %s | %s |\n",
+			"| `%s` | `%s` | %.1f | %d | %d | %s | %s | %s |\n",
 			res.TaskID,
 			res.Status,
 			score,
 			res.TotalTokens,
 			res.EndToEndTotalTokens,
 			claimDone,
-			skillUsed,
+			skillsOffered,
+			skillLoadCalled,
 		)
 	}
+}
+
+func yesNo(b bool) string {
+	if b {
+		return "yes"
+	}
+	return "no"
 }
 
 func prepareWorkspace(task *taskDefinition, workspace string) error {
@@ -1909,7 +2217,10 @@ func summarizeTasks(tasks []*taskDefinition) []*taskSummary {
 }
 
 func newOpenAIModel(name, variant string) model.Model {
-	opts := []openai.Option{}
+	opts := []openai.Option{
+		openai.WithEnableTokenTailoring(true),
+		openai.WithMaxInputTokens(120000),
+	}
 	if strings.TrimSpace(variant) != "" {
 		opts = append(opts, openai.WithVariant(openai.Variant(variant)))
 	}
