@@ -1,183 +1,309 @@
-# Evaluating Agent Self-Evolution on SkillCraft — Three-Run Full Compare Update
+# Evaluating Agent Self-Evolution on the SkillCraft Benchmark
 
-## 1. Scope
+## 1. Introduction
 
-This report replaces the old single-run headline with the latest
-**three-run full compare batch**:
+This report documents the **full SkillCraft evaluation arc** for
+`trpc-agent-go`'s self-evolution mechanism, rather than a single run in
+isolation.
+
+SkillCraft is a good fit for this question because each task family
+ships multiple variants of the same workflow shape at increasing scale
+(`e1` ... `e3`, `m1` ... `m2`, `h1`). If the agent can distill a
+reusable skill on easier variants, later variants should become more
+stable, cheaper, or both.
+
+The central question is unchanged:
+
+> **Does an agent that extracts `SKILL.md` files in the background and
+> reuses them on later tasks actually do better than one that starts
+> from scratch every time?**
+
+What *has* changed is the answer's level of certainty. The earliest
+single-run result looked strongly positive. Later controlled reruns
+showed that the story is more nuanced: some gains are real, but
+variance, reviewer quality, and runtime behavior all matter.
+
+This report therefore treats the experiment as a sequence:
+
+1. an early milestone run that established feasibility;
+2. a later three-run controlled batch that became the main source of
+   truth for the current runtime;
+3. a stronger-reviewer spot check (`gpt-5.2`) that tests whether a
+   better reviewer can clean up the skill library without changing the
+   agent runtime.
+
+## 2. Experimental Setup
+
+### 2.1 Benchmark and task families
+
+| Item | Value |
+| --- | --- |
+| Benchmark | SkillCraft |
+| Task families | `openmeteo-weather`, `recipe-cookbook-builder`, `world-bank-economic-snapshot` |
+| Variants per family | `e1` / `e2` / `e3` / `m1` / `m2` / `h1` |
+| Total tasks per full run | 18 |
+| Scoring | SkillCraft official `evaluation/main.py` |
+| Execution mode | `compare` (`baseline` then `evolution`) |
+
+The three families cover sequential API orchestration, structured
+content generation, and multi-entity economic aggregation, so the
+results are not dominated by a single workload shape.
+
+### 2.2 Configurations
+
+| Configuration | Description |
+| --- | --- |
+| **Baseline** | `evolution` disabled; every task starts from scratch |
+| **Evolution** | `evolution` enabled; learned skills are stored as `SKILL.md` and made visible to later tasks |
+
+Across the controlled runs, baseline and evolution share the same task
+set, agent runtime, tools, prompts, and evaluator. The variable is
+whether `evolution` is on and, in the latest spot check, whether the
+reviewer model is upgraded.
+
+### 2.3 Evolution in `trpc-agent-go`
+
+`evolution` is an **asynchronous learning loop**. The main task path is
+not blocked by learning; review happens after the session completes.
+
+1. the runner enqueues a learning job with transcript and outcome;
+2. a reviewer proposes `skills` / `updates` / `deletions`;
+3. deterministic post-processing (`reconcile.go`) de-duplicates and
+   rewrites obvious near-duplicates;
+4. accepted skills are published to the managed skill directory and
+   become visible to later runs.
+
+The runtime also exposes skill summaries to the agent and allows
+explicit loading through `skill_load`. A recurring theme in the
+controlled experiments is that **skills are offered but explicit skill
+loading still does not happen**.
+
+### 2.4 Evidence sources
+
+This report uses four primary artefacts:
+
+- historical milestone run:
+  [`multi_family_compare`](multi_family_compare)
+- controlled three-run batch:
+  [`full_compare_run1`](full_compare_run1),
+  [`full_compare_run2`](full_compare_run2),
+  [`full_compare_run3`](full_compare_run3)
+- aggregated three-run analysis:
+  [`tools/full_compare_analysis.json`](tools/full_compare_analysis.json)
+- stronger-reviewer spot check:
+  [`full_compare_reviewer_gpt52_run1`](full_compare_reviewer_gpt52_run1)
+
+All numbers quoted below come from `results.json` files or the checked-in
+aggregate analysis generated from them.
+
+---
+
+## 3. Experimental Progression
+
+### 3.1 Phase A: early milestone run
+
+The original milestone run,
+[`multi_family_compare`](multi_family_compare), established that the
+mechanism could work at all:
+
+| Metric | Baseline | Evolution | Δ |
+| --- | ---: | ---: | ---: |
+| Pass rate | 83.33% | 100.00% | +16.67pp |
+| Average score | 80.46 | 97.68 | +17.22 |
+| Avg end-to-end tokens / task | 185,590.44 | 128,913.22 | -56,677.21 |
+| Avg duration | 98.93s | 79.68s | -19.24s |
+| Learned skills | – | 16 | – |
+
+That result was important: it showed that asynchronous skill extraction
+plus `SKILL.md` reuse could materially improve completion behavior on
+SkillCraft.
+
+### 3.2 Phase B: controlled three-run batch
+
+Later, the runtime was tightened: managed-skill prompting was narrowed,
+token tailoring was added, a frozen clean warm-start seed was used, and
+the evaluation was rerun three times with the same full-18 setup:
 
 - [`full_compare_run1`](full_compare_run1)
 - [`full_compare_run2`](full_compare_run2)
 - [`full_compare_run3`](full_compare_run3)
 
-All numbers below were derived from those three `results.json` files by
-[`tools/aggregate_runs.py`](tools/aggregate_runs.py), with the frozen
-output checked in at
-[`tools/full_compare_analysis.json`](tools/full_compare_analysis.json).
+The aggregate result is more cautious:
 
-Configuration:
-
-- Agent model: `gpt-4o-mini`
-- Reviewer model: `gpt-4o-mini`
-- Tasks: `openmeteo-weather`, `recipe-cookbook-builder`,
-  `world-bank-economic-snapshot`
-- Task count per run: `18`
-- Max tool iterations: `24`
-- Warm-start seed:
-  [`tools/clean_skill_seed`](tools/clean_skill_seed)
-- Prompt overview cap: `8`
-
-## 2. Per-Run Results
-
-| Run | Baseline Pass | Evolution Pass | Pass Δ | Baseline E2E Tokens | Evolution E2E Tokens | E2E Δ |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Run 1 | 15 / 18 | 16 / 18 | +1 | 130,308.06 | 138,603.72 | +8,295.66 |
-| Run 2 | 16 / 18 | 16 / 18 | 0 | 116,280.94 | 126,157.50 | +9,876.56 |
-| Run 3 | 18 / 18 | 17 / 18 | -1 | 263,076.83 | 173,179.17 | -89,897.66 |
-
-The important point is not any single row; it is the variance:
-
-- Run 1 says evolution helped slightly on pass rate but cost more
-  end-to-end tokens.
-- Run 2 says evolution was pass-neutral and still cost more
-  end-to-end tokens.
-- Run 3 says evolution lost one pass but saved a huge amount of tokens
-  because baseline hit catastrophic weather loops.
-
-That is exactly why the single-run claim was no longer trustworthy.
-
-## 3. Aggregate Metrics
-
-| Metric | Baseline | Evolution | Δ (Evolution − Baseline) |
+| Metric | Baseline Mean | Evolution Mean | Δ |
 | --- | ---: | ---: | ---: |
-| Mean pass rate | 90.74% | 90.74% | 0.00pp |
-| Pass-rate stddev | 8.49pp | 3.20pp | - |
-| Mean end-to-end tokens/task | 169,888.61 | 145,980.13 | -23,908.48 |
-| End-to-end token stddev | 81,007.55 | 24,363.25 | 57,153.77 |
-| Mean agent tokens/task | 169,888.61 | 131,990.93 | -37,897.68 |
-| Mean duration delta | - | - | +21.14s |
-| Mean claim-done delta | - | - | 0.00pp |
+| Pass rate | 90.74% | 90.74% | 0.00pp |
+| Pass-rate stddev | 8.49pp | 3.20pp | – |
+| Avg end-to-end tokens / task | 169,888.61 | 145,980.13 | -23,908.48 |
+| End-to-end token stddev | 81,007.55 | 24,363.25 | – |
 
-Interpretation:
+This batch changed the interpretation of the experiment:
 
-1. **Pass rate is now a wash.** Across three full runs, evolution and
-   baseline have the same mean pass rate.
-2. **Variance is smaller under evolution.** Baseline swings from `15/18`
-   to `18/18`; evolution stays in the `16/18` to `17/18` band.
-3. **Mean token savings exist, but they are conditional.** The mean
-   end-to-end reduction comes mostly from Run 3, where baseline
-   exploded on weather tasks. In the other two runs, evolution still
-   cost more end-to-end tokens.
+- the old "evolution clearly wins" headline was too strong;
+- the current runtime is better described as **variance-reducing** than
+  as uniformly pass-rate-improving;
+- explicit `skill_load` remained at `0%`;
+- the recurring failure cluster shifted toward
+  `world-bank-economic-snapshot/e2` and local MCP timeouts.
 
-## 4. What Changed In The Latest Runtime
+### 3.3 Phase C: stronger-reviewer spot check (`gpt-5.2`)
 
-Relative to the older single-run discussion, the latest runtime has
-already changed the shape of the problem:
+The latest spot check keeps the agent runtime fixed and upgrades only
+the reviewer model:
 
-- reviewer JSON parsing and secret redaction no longer show up as live
-  blockers;
-- the benchmark now warm-starts from a frozen clean 11-skill seed;
-- the reconciler already contains quantified-sibling ->
-  generic-parent rewrites, and the logs show that path firing;
-- the weather failure mode is no longer a stable evolution-only OOM.
+- [`full_compare_reviewer_gpt52_run1`](full_compare_reviewer_gpt52_run1)
 
-This means the docs and the internal plan should no longer talk as if
-the quantified-sibling rewrite were still hypothetical or as if
-`openmeteo-weather/e1` always explodes under evolution.
+Summary:
 
-## 5. Focus Tasks: `e1`, `e2`, `m1`
+| Metric | Baseline | Evolution | Δ |
+| --- | ---: | ---: | ---: |
+| Pass rate | 100.00% | 100.00% | 0.00pp |
+| Average score | 97.19 | 97.13 | -0.05 |
+| Avg duration | 131.10s | 79.53s | -51.56s |
+| Avg end-to-end tokens / task | 158,005.67 | 152,715.39 | -5,290.27 |
+| Learned skills | – | 11 | – |
+| `skill_load` invoked | 0.00% | 0.00% | 0.00pp |
 
-The current plan explicitly keeps tracing
-`openmeteo-weather/e1,e2,m1`. The aggregate script confirms:
+The important point is not that evolution "won" this run on pass rate.
+Baseline also went 18/18. The more useful signal is that the final
+library stayed much cleaner: the evolution arm produced an 11-skill
+library with no `Weather Monitor - 3/4/5 Cities with APIs` siblings.
 
-| Task | Baseline Passes | Evolution Passes | Baseline Mean E2E | Evolution Mean E2E | Baseline Mean Hourly Calls | Evolution Mean Hourly Calls |
-| --- | --- | --- | ---: | ---: | ---: | ---: |
-| `e1` | `T,T,T` | `T,T,T` | 489,459.00 | 80,643.67 | 21.00 | 4.00 |
-| `e2` | `T,F,T` | `T,T,T` | 514,047.67 | 189,678.00 | 19.00 | 7.00 |
-| `m1` | `T,T,T` | `T,T,T` | 107,458.33 | 215,112.33 | 4.00 | 5.33 |
+---
 
-Two concrete conclusions follow.
+## 4. Main Results
 
-### 5.1 `skill_load` is still not the reason these tasks improved
+### 4.1 What is firmly established
 
-Across all three runs, every one of these focus tasks had:
+Three conclusions are now on solid ground.
 
-- `hadAvailableSkills = true` in the evolution arm;
-- `skillToolInvoked = false`;
-- `loadedSkillNames = []`.
+1. **Agent self-evolution can help on SkillCraft.** The early milestone
+   run was not a fluke in the sense of "nothing useful is happening":
+   learned skills can clearly eliminate some catastrophic loops.
+2. **The current runtime does not yet prove stable pass-rate gains.**
+   The controlled three-run batch averaged out to a pass-rate tie.
+3. **Explicit skill reuse is still absent.** Across the controlled
+   batch and the `gpt-5.2` spot check, skills were offered but
+   `skill_load` was never invoked.
 
-So the current gain is still coming from the **overview itself**,
-not from explicit progressive disclosure.
+### 4.2 Where evolution helps today
 
-### 5.2 The weather loop became stochastic, not solved
+The strongest evidence for practical value is still in catastrophic-loop
+avoidance.
 
-`e1` and `e2` show two different regimes:
+In the three-run controlled batch:
 
-- In Run 1 and Run 2, both arms stayed near the normal tool path.
-- In Run 3, baseline blew up to `1,324,132` and `1,407,941`
-  end-to-end tokens on `e1/e2`, with `62` tool calls and `54/51`
-  hourly calls.
-- Evolution also became more expensive in Run 3, but stayed far below
-  baseline: `103,163` on `e1`, `388,807` on `e2`.
+- `openmeteo-weather/e1` remained `3/3` pass in both arms, but
+  baseline averaged `489,459` end-to-end tokens versus `80,644` for
+  evolution because one baseline run exploded;
+- `openmeteo-weather/e2` was `T,F,T` in baseline and `T,T,T` in
+  evolution;
+- evolution reduced variance materially even when mean pass rate tied.
 
-So the old "evolution causes the weather loop" story is now too coarse.
-The better statement is:
+The `gpt-5.2` spot check showed the same pattern on a single run:
 
-- the loop is **highly stochastic**;
-- evolution can damp it on `e1/e2`;
-- but evolution still adds cost on `m1`, where baseline already behaves.
+- `openmeteo-weather/e1` improved by `-508,453` end-to-end tokens;
+- `world-bank-economic-snapshot/e3` improved by `-159,046`;
+- but some tasks regressed, most notably
+  `recipe-cookbook-builder/h1` (`+348,835` end-to-end tokens).
 
-## 6. Current Failure Cluster
+So the benefit is real, but uneven.
 
-The recurring failure cluster is now concentrated in
-`world-bank-economic-snapshot`, especially `e2`:
+### 4.3 What is still missing
 
-- `evolution` fails `world-bank-economic-snapshot/e2` in **all three**
-  runs;
-- `evolution` fails `world-bank-economic-snapshot/e3` in Run 1 and
-  Run 2 but not Run 3;
-- `baseline` failures drift across weather, recipe, and world-bank and
-  do not pin to a single task.
+The most important missing piece is still **real skill consumption**.
 
-The Run 3 log shows the likely reason: repeated 60-second MCP tool
-timeouts on `worldbank_economic_snapshot`, `worldbank_gdp`, and
-`worldbank_population`. Importantly, the agent can sometimes recover
-from those timeouts (`m1` and `h1` still pass), so the issue is not a
-hard deterministic evaluator bug; it is a runtime stability issue on
-the local World Bank tool path.
+The current controlled evidence says:
 
-## 7. Skill Library Behavior
+- skills are visible in the prompt (`SkillsOffered = 100%`);
+- final skill libraries are being produced;
+- but `skill_load` remains unused.
 
-Final evolution library sizes across the three runs were:
+This means the current gains come mostly from **better catalog exposure
+and better reviewer outputs**, not from a mature progressive-disclosure
+loop where the agent explicitly chooses, loads, and applies a skill.
 
-- Run 1: `14`
-- Run 2: `13`
-- Run 3: `14`
+### 4.4 Reviewer quality matters, but it does not solve everything
 
-The resulting library is much more stable than the old expansion
-pattern, but it is still not fully generic:
+The `gpt-5.2` reviewer spot check is the clearest sign so far that
+reviewer quality is part of the bottleneck:
 
-- count-specific `Weather Monitor - 3/4/5 Cities with APIs` skills
-  still survive when no matching generic API parent exists in the seed;
-- when a generic parent *does* exist, the reconciler logs the
-  quantified-sibling rewrite and collapses the candidate into an
-  update against that parent.
+- final skill count dropped from the recent 13–14 range to **11**;
+- the count-specific weather API siblings disappeared in that run;
+- end-to-end tokens stayed slightly below baseline while pass rate tied.
 
-That means the current reviewer/reconciler stack is already stronger
-than the earlier internal plan claimed, but it still depends on the
-shape of the seed library.
+But even with the stronger reviewer:
 
-## 8. Bottom Line
+- `skill_load` was still never called;
+- pass rate did not improve over a strong baseline;
+- the result is still only a **single run**, so it is evidence for
+  better library cleanliness, not yet proof of a new overall headline.
 
-The latest three-run batch changes the evaluation story substantially:
+---
 
-1. The right headline is no longer "evolution clearly wins" or
-   "evolution clearly loses". On pass rate, it currently averages out
-   to a tie.
-2. Evolution still does **not** demonstrate explicit skill reuse,
-   because `skill_load` was never called.
-3. The old weather loop is no longer the sole or even the main story.
-   The benchmark's dominant recurring failure point has shifted toward
-   `world-bank-economic-snapshot/e2` plus local MCP tool timeouts.
-4. The most promising next runtime questions are therefore:
-   "how do we get real skill loading?" and
-   "how do we make the world-bank tool path less timeout-prone?"
+## 5. Conclusions
+
+The right way to summarize the full experiment today is:
+
+1. **The original positive result was meaningful, but not sufficient as
+   a final claim.** It showed that self-evolution can work.
+2. **The controlled reruns are now the main source of truth for the
+   current runtime.** Under that lens, evolution currently looks more
+   like a stabilizer than a clear pass-rate booster.
+3. **Reviewer quality appears to improve library cleanliness.** The
+   `gpt-5.2` spot check is promising because it preserves a compact,
+   generic 11-skill library.
+4. **The project is not done.** The next decisive questions are still:
+   why `skill_load` remains unused, and how to reduce the remaining
+   timeout / long-loop failure modes.
+
+In other words: the experiment has moved from "can this idea work at
+all?" to "under what reviewer/runtime conditions does it become stable
+enough to trust by default?"
+
+---
+
+## Appendix
+
+### A. Current key artefacts
+
+| Artefact | Role |
+| --- | --- |
+| [`multi_family_compare`](multi_family_compare) | Historical milestone run |
+| [`full_compare_run1`](full_compare_run1) | Controlled batch, run 1 |
+| [`full_compare_run2`](full_compare_run2) | Controlled batch, run 2 |
+| [`full_compare_run3`](full_compare_run3) | Controlled batch, run 3 |
+| [`tools/full_compare_analysis.json`](tools/full_compare_analysis.json) | Frozen three-run aggregate |
+| [`full_compare_reviewer_gpt52_run1`](full_compare_reviewer_gpt52_run1) | Stronger-reviewer spot check |
+
+### B. Reproducing the latest reviewer spot check
+
+```bash
+cd skillcraft/trpc-agent-go-impl
+
+go run . \
+  -skillcraft-root "$SKILLCRAFT_ROOT" \
+  -tasks "openmeteo-weather/e1,openmeteo-weather/e2,openmeteo-weather/e3,openmeteo-weather/m1,openmeteo-weather/m2,openmeteo-weather/h1,recipe-cookbook-builder/e1,recipe-cookbook-builder/e2,recipe-cookbook-builder/e3,recipe-cookbook-builder/m1,recipe-cookbook-builder/m2,recipe-cookbook-builder/h1,world-bank-economic-snapshot/e1,world-bank-economic-snapshot/e2,world-bank-economic-snapshot/e3,world-bank-economic-snapshot/m1,world-bank-economic-snapshot/m2,world-bank-economic-snapshot/h1" \
+  -mode compare \
+  -model gpt-4o-mini \
+  -reviewer-model gpt-5.2 \
+  -max-tool-iterations 24 \
+  -load-skills-from ../results/tools/clean_skill_seed \
+  -max-prompt-skills 8 \
+  -output ../results/full_compare_reviewer_gpt52_run1
+```
+
+### C. Current interpretation rule
+
+If a new reader wants a single sentence to orient themselves:
+
+- use [`multi_family_compare`](multi_family_compare) to understand why
+  the idea was worth pursuing;
+- use [`full_compare_run1`](full_compare_run1),
+  [`full_compare_run2`](full_compare_run2),
+  [`full_compare_run3`](full_compare_run3), and
+  [`tools/full_compare_analysis.json`](tools/full_compare_analysis.json)
+  to understand the current runtime truth;
+- use [`full_compare_reviewer_gpt52_run1`](full_compare_reviewer_gpt52_run1)
+  as a promising reviewer-quality spot check, not yet as a new final
+  headline.
