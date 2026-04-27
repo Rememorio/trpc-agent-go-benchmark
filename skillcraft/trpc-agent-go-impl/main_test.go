@@ -116,12 +116,12 @@ func TestBuildInstructionPrioritizesTaskSpecOverSkills(t *testing.T) {
 
 	prompt := buildInstruction(task, "/tmp/workspace", []string{"DNA Sequence Analysis Workflow"})
 
-	require.Contains(t, prompt, "Read the full task specification before deciding whether a managed skill applies.")
-	require.Contains(t, prompt, "Managed skills from earlier tasks may be available through skill_load")
-	require.Contains(t, prompt, "routing hints only")
-	require.Contains(t, prompt, "Managed skills may come from smaller or earlier tasks and can be incomplete.")
-	require.Contains(t, prompt, "compare it against the current task's required APIs")
-	require.Contains(t, prompt, "stop reconsidering that skill summary")
+	require.Contains(t, prompt, "Mandatory skill-first protocol")
+	require.Contains(t, prompt, "Managed skills from earlier tasks are available through skill_load")
+	require.Contains(t, prompt, "skill_load tool on that skill name as your FIRST tool call")
+	require.Contains(t, prompt, "Managed skills may come from smaller or earlier tasks and can be incomplete")
+	require.Contains(t, prompt, "still follow the current task")
+	require.Contains(t, prompt, "stop reconsidering it")
 	require.Contains(t, prompt, "trailing `...`")
 	require.Contains(t, prompt, "do not call the same tool with the same arguments again")
 	require.Contains(t, prompt, "prefer one complete write with write_file")
@@ -214,8 +214,8 @@ func TestBuildUserPromptPutsTaskSpecBeforeManagedSkills(t *testing.T) {
 		strings.Index(prompt, "## Task Specification"),
 		strings.Index(prompt, "## Managed Skills"),
 	)
-	require.Contains(t, prompt, "routing hints only")
-	require.Contains(t, prompt, "task specification overrides any skill")
+	require.Contains(t, prompt, "Skill-first protocol")
+	require.Contains(t, prompt, "task specification always overrides the skill")
 }
 
 func TestBuildUserPromptIncludesExactTaskEntities(t *testing.T) {
@@ -327,7 +327,7 @@ func TestOutcomeFromEval(t *testing.T) {
 		}, nil)
 		require.Equal(t, evolution.OutcomeSuccess, o.Status)
 		require.NotNil(t, o.Score)
-		require.InDelta(t, 1.0, *o.Score, 1e-9)
+		require.InDelta(t, 100.0, *o.Score, 1e-9)
 	})
 
 	t.Run("passed=true status=partial becomes partial with notes", func(t *testing.T) {

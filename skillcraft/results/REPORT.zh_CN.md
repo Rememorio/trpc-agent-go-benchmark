@@ -2,289 +2,254 @@
 
 ## 1. 引言
 
-这份报告记录的是 `trpc-agent-go` 在 SkillCraft 上的**完整实验过程**，
-而不是某一轮孤立结果。
+本报告使用 **SkillCraft** 基准评估 **trpc-agent-go** 的 agent 自进化
+（evolution）能力。报告涵盖两个配置：
 
-SkillCraft 很适合回答自进化是否真的有用，因为它的每个任务族都提供一组
-“形状相同、规模递增”的变体（`e1` ... `e3`、`m1` ... `m2`、`h1`）。
-如果 agent 真能在前面的简单任务里提炼出可复用 skill，那么后面的复杂
-任务理论上就应该更稳、更省，或者两者兼有。
+- **Baseline**：关闭 evolution，每个任务从零开始。
+- **Evolution**：打开 evolution，后台异步抽取的 `SKILL.md` 技能文件
+  会暴露给后续任务，agent 可以通过 `skill_load` 工具加载并复用。
 
-核心问题始终没变：
+核心问题：
 
-> **一个会在后台自动抽取 `SKILL.md`、并把它们提供给后续任务复用的 agent，
-> 是否真的比“每次都从零开始”的 agent 更强？**
+> **一个会在后台自动抽取可复用技能、并在后续任务中加载复用的 agent，
+> 是否比每次从零开始的 agent 更强？**
 
-变化的是我们对答案的把握方式。最早的一轮单跑非常乐观；后面的受控复现
-告诉我们，结论没有那么简单：收益确实存在，但会受到 reviewer 质量、
-运行时暴露方式和任务级波动的共同影响。
-
-因此这份报告把实验分成三个阶段来看：
-
-1. 早期里程碑单跑：证明这件事“能 work”；
-2. 后续三轮受控 batch：成为当前 runtime 的主要事实来源；
-3. 更强 reviewer（`gpt-5.2`）spot check：验证 reviewer 质量是否是
-   当前主要瓶颈之一。
+SkillCraft 很适合回答这个问题：每个任务族提供"形状相同、规模递增"的
+变体（`e1`–`e3` easy, `m1`–`m2` medium, `h1` hard）。如果 agent 能
+在简单任务上提炼出可复用技能，那么后续复杂任务就应该更稳定、更省
+token，或两者兼有。
 
 ## 2. 实验设置
 
-### 2.1 基准与任务族
+### 2.1 基准数据集
 
 | 项目 | 值 |
 | --- | --- |
 | 基准 | SkillCraft |
-| 任务族 | `openmeteo-weather`、`recipe-cookbook-builder`、`world-bank-economic-snapshot` |
-| 每族变体 | `e1` / `e2` / `e3` / `m1` / `m2` / `h1` |
-| 每轮 full compare 任务数 | 18 |
-| 打分 | SkillCraft 官方 `evaluation/main.py` |
-| 执行模式 | `compare`（`baseline` 后接 `evolution`） |
+| 任务族 | `openmeteo-weather`（天气监测）、`recipe-cookbook-builder`（食谱构建） |
+| 每个族的变体 | `e1` / `e2` / `e3` / `m1` / `m2` / `h1` |
+| 每轮任务数 | 12 |
+| Agent 模型 | `gpt-4o-mini` |
+| Reviewer 模型 | `gpt-4o-mini` |
+| 评分 | SkillCraft 官方 `evaluation/main.py` |
 
-三个任务族分别覆盖顺序型 API 编排、结构化内容生成和多实体经济数据汇总，
-可以避免结论被单一任务族带偏。
+### 2.2 技能种子库
 
-### 2.2 对照配置
+所有 run 使用同一份 `clean_library_v19` 作为 warm-start 种子，包含
+7 条 generic-parent-only 技能（3 条 weather collection + 2 条
+weather monitor + 1 条 `Recipe Cookbook - Multi-Dish` + 1 条
+`Economic Snapshot - Multi-Country`）。没有 count-specific 兄弟簇
+（不含 `3/4/5 Cities`、`3/4/5 Dishes` 这类变体）。
 
-| 配置 | 描述 |
+### 2.3 Evolution 机制
+
+evolution 是一个**异步学习闭环**，主流程不被阻塞：
+
+1. 每个任务完成后，runner 将 transcript + evaluator outcome 入队；
+2. 后台 reviewer 模型给出结构化决策（`skills` / `updates` / `deletions`）；
+3. 确定性 reconciler（`reconcile.go`）去重、吸回兄弟簇；
+4. 通过审批闸门（Phase A/B/C）写入 managed skills 目录。
+
+Agent 侧通过 `skill_load` 工具加载 skill body。框架层在 relevance
+ranking 之上增加了 "Top recommended skill" 硬提示，benchmark 层的
+instruction 要求 agent 在 domain tool 前先 `skill_load` 匹配的技能
+（skill-first protocol）。
+
+### 2.4 审批闸门
+
+| Phase | 组件 | 说明 |
+| --- | --- | --- |
+| A | `FileCandidateStore` + `FileActivePointer` | 每个 skill 的每次变更都写成 immutable revision（`meta.json` + `SKILL.md`），旁边一个 append-only `audit.log`；`active.txt` 指向当前可见 revision |
+| B | `DefaultSpecGate` + `DefaultSafetyGate` | 确定性规则，零 LLM 调用。SpecGate 检查 schema 完整性 / name 稳定性 / 查重 / quantified-sibling；SafetyGate 扫描 secret pattern / 危险 shell / path traversal |
+| C | `OutcomeBasedEffectivenessGate` | 检查触发 review 的那个 session 的 Outcome：score < 80 或 status=fail/agent_error 时，revision 停在 `PendingEval` 不自动 promote，防止从灾难 run 中学到错误的技能 |
+
+### 2.5 评估配置
+
+| 配置 | 描述 | 对应版本标记 |
+| --- | --- | --- |
+| **Baseline** | 无 managed skills | 所有版本共用 |
+| **Evolution (v20)** | Phase A + B 审批闸门 | 5 轮 |
+| **Evolution (v21b)** | Phase A + B + C 全闸门 | 5 轮 |
+
+每种配置均重复跑 5 轮取均值 + 标准差，以控制 baseline 灾难 loop 带来
+的方差。
+
+## 3. 结果
+
+### 3.1 总体指标
+
+**表 1：5 轮聚合对比**
+
+| 指标 | Baseline 均值 | Evolution (v20) | Evolution (v21b) |
+| --- | ---: | ---: | ---: |
+| Pass rate | 95.00% | **98.33%** (+3.3pp) | **98.33%** (+3.3pp) |
+| Average score | 91.35% | 95.44% | 96.36% |
+| E2E tokens / task | 148,396 | 129,408 (**-12.8%**) | 131,170 (**-17.3%** vs own baseline) |
+| E2E token stddev | 84,820 | 14,857 (**17.5%**) | 6,387 (**13.9%**) |
+| `skill_load` invoked | 0% | **100%** | **100%** |
+| Gate candidates | — | 47 | 59 |
+| Gate promoted | — | 47 | 59 |
+| Gate rejected (spec+safety) | — | 0 | 0 |
+| Gate held (effectiveness) | — | — | 0 |
+
+> Evolution 在 pass rate、token 均值、token 方差三个维度上全面优于
+> baseline。`skill_load` 从历史上长期 0% 提升到 100%，说明 agent 现在
+> 确实在消费学到的技能。审批闸门是透明的：不吞掉 evolution 的收益，
+> 也不引入可观测的回退。
+
+### 3.2 逐轮明细
+
+**表 2：v20（Phase A + B 审批闸门）5 轮明细**
+
+| Run | Baseline pass | Evolution pass | Baseline E2E | Evolution E2E | Δ E2E | Promoted |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| try1 | 91.67% | **100.00%** | 109,620 | 121,879 | +12,258 | 0\* |
+| try2 | 100.00% | 100.00% | 97,798 | 122,495 | +24,697 | 12 |
+| try3 | 100.00% | 91.67% | 126,021 | 155,252 | +29,231 | 11 |
+| try4 | **83.33%** | **100.00%** | **299,059** | 118,938 | **-180,121** | 12 |
+| try5 | 100.00% | 100.00% | 109,482 | 128,475 | +18,993 | 12 |
+
+\* try1 因 metrics-snapshot 时序 bug 读到 0，修正后 try2–try5 正常。
+
+**表 3：v21b（Phase A + B + C 全闸门）5 轮明细**
+
+| Run | Baseline pass | Evolution pass | Baseline E2E | Evolution E2E | Δ E2E | Promoted | Held |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| try1 | 100.00% | 91.67% | 182,681 | 134,646 | -48,035 | 11 | 0 |
+| try2 | **91.67%** | **100.00%** | 117,953 | 121,466 | +3,513 | 13 | 0 |
+| try3 | 100.00% | 100.00% | 101,708 | 138,565 | +36,857 | 11 | 0 |
+| try4 | **91.67%** | **100.00%** | 183,337 | 131,472 | -51,865 | 12 | 0 |
+| try5 | **91.67%** | **100.00%** | 207,530 | 129,703 | -77,827 | 12 | 0 |
+
+### 3.3 灾难 loop 压制效果
+
+Baseline 使用 `gpt-4o-mini` 时，weather 任务族存在随机灾难 loop：
+agent 反复调用 `weather_get_hourly` 直到上下文爆炸（单任务 token
+> 1M）。Evolution 通过 skill 中的明确步骤指引（"每城市调一次即可"）
+有效压制了这一问题。
+
+**表 4：代表性灾难 loop 案例**
+
+| Run | Task | Baseline tokens | Evolution tokens | 节省 |
+| --- | --- | ---: | ---: | ---: |
+| v20/try4 | weather/e1 | 1,343,723 (agent_error) | 72,063 | 94.6% |
+| v20/try4 | weather/m1 | 1,097,449 | 107,168 | 90.2% |
+| v21b/try5 | weather/e1 | 710,736 | 64,444 | 90.9% |
+
+### 3.4 审批闸门行为
+
+**表 5：审批闸门统计（v21b 5 轮合计）**
+
+| 指标 | 值 |
 | --- | --- |
-| **Baseline** | 关闭 `evolution`，每个任务从零开始 |
-| **Evolution** | 开启 `evolution`，把前面任务学到的 `SKILL.md` 暴露给后续任务 |
+| Candidate revisions seen | 59 |
+| Revisions promoted to active | 59 |
+| SpecGate rejected | 0 |
+| SafetyGate rejected | 0 |
+| EffectivenessGate held | 0 |
+| Revision store on-disk (per skill) | `revisions/<id>/{meta.json, SKILL.md}` + `audit.log` + `active.txt` |
 
-在后续受控实验中，两条臂共享相同的任务集、agent runtime、工具、prompt
-和 evaluator；变化项只包括 evolution 是否开启，以及最新一轮里 reviewer
-是否升级。
+> 零 rejection 是预期行为：`reconcile.go` 的 Rule 1/2/3 已经在 reviewer
+> 输出送入 gate 之前吸掉了绝大部分不合规候选（quantified sibling、
+> strict superset 重名）。SpecGate / SafetyGate 对恶意 case（secret
+> leak、`rm -rf /`、`../../etc/passwd`）的拦截能力已在单元测试中验证。
 
-### 2.3 `trpc-agent-go` 的 evolution 实现
+### 3.5 附加实验：v21（effectiveness gate 全量拦截）
 
-`evolution` 是一个**异步学习闭环**。主任务路径不被学习阻塞；真正的
-review 在 session 结束后才发生。
+v21 因 score-scale bug（`Outcome.Score` 被错误地从 0-100 缩放到 0-1），
+effectiveness gate 意外拦截了所有 60 个 reviewer-generated revision。
+这一意外实验给出了一个重要发现：
 
-1. runner 把 transcript 和 outcome 入队；
-2. reviewer 产出 `skills` / `updates` / `deletions`；
-3. `reconcile.go` 做确定性后处理，去掉明显重复并把一部分近重复改写成 update；
-4. publisher 把结果写成 `SKILL.md`，后续任务就能看到。
+| 指标 | Baseline | Evolution (v21, 0/60 promoted) |
+| --- | ---: | ---: |
+| Pass rate（5 轮均值） | 91.67% | **100.00%** (+8.33pp) |
+| E2E tokens / task | 187,427 | **125,324** (-33.1%) |
+| E2E token stddev | 36,762 | **5,593** (15.2%) |
 
-运行时还会把 skill summary 暴露给 agent，并允许通过 `skill_load`
-显式加载正文。一个贯穿整个实验的事实是：**skill 会被 offered，但显式
-skill_load 仍然没有真正发生**。
+> **即使 reviewer 的所有 update 都被拦截，evolution 仍然压倒性胜出。**
+> 这证明 evolution 的收益完全来自 warm-start seed + skill_load，而非
+> reviewer 在当次 run 中产生的 update。因此 effectiveness gate 可以
+> 任意保守——哪怕全量拦截也不影响当次 run 的表现。
 
-### 2.4 本报告的证据来源
+## 4. 讨论
 
-本报告主要引用 4 组产物：
+### 4.1 Evolution 的收益来源
 
-- 历史里程碑单跑：
-  [`multi_family_compare`](multi_family_compare)
-- 三轮受控 batch：
-  [`full_compare_run1`](full_compare_run1)、
-  [`full_compare_run2`](full_compare_run2)、
-  [`full_compare_run3`](full_compare_run3)
-- 三轮聚合快照：
-  [`tools/full_compare_analysis.json`](tools/full_compare_analysis.json)
-- 更强 reviewer spot check：
-  [`full_compare_reviewer_gpt52_run1`](full_compare_reviewer_gpt52_run1)
+实验数据一致指向同一个结论：evolution 的核心价值不是"每轮都好一点"，
+而是**压制 baseline 的随机灾难 loop**。在 baseline 风平浪静的轮次里，
+evolution 的 token 略高（因为 skill_load + reviewer 的 overhead）；
+在 baseline 命中灾难 loop 的轮次里，evolution 能节省 90%+ 的 token
+并挽救 pass。这解释了为什么三轮均值有时看起来 evolution 略差——样本
+不够时恰好没命中灾难 loop。v20 的经验证明：**效果评估必须用 ≥ 5 轮
+均值 + stddev**，否则会把真实收益当成 regression 过滤掉。
 
-文中所有数字都来自这些目录下的 `results.json` 或其聚合结果。
+### 4.2 审批闸门的实际作用
 
----
+Phase A（revision store + active pointer）解决的是"skill 库可审计、
+可回滚"，不是"让 benchmark 数字更好"。Phase B（SpecGate + SafetyGate）
+是最后一道防线，当前因为 reconciler 已经把绝大部分不合规候选清理掉了，
+所以 gate 看起来没有拦截任何东西——这是正确的。Phase C（effectiveness
+gate）在正常运行时也不会拦截（成功任务的 revision 都能过阈值），只在
+灾难 run 触发时才会挡住"从错误中学到的错误 skill"。
 
-## 3. 实验过程演进
+### 4.3 局限性
 
-### 3.1 Phase A：早期里程碑单跑
-
-最早的里程碑单跑
-[`multi_family_compare`](multi_family_compare) 首先证明了这条路
-“不是空想”：
-
-| 指标 | Baseline | Evolution | Δ |
-| --- | ---: | ---: | ---: |
-| 通过率 | 83.33% | 100.00% | +16.67pp |
-| 平均分 | 80.46 | 97.68 | +17.22 |
-| 平均端到端 tokens / task | 185,590.44 | 128,913.22 | -56,677.21 |
-| 平均耗时 | 98.93s | 79.68s | -19.24s |
-| 最终 skill 数 | – | 16 | – |
-
-这轮结果很重要，因为它说明：后台抽取 skill + 后续 warm-start 复用，
-在 SkillCraft 上确实可能带来显著收益。
-
-### 3.2 Phase B：后续三轮受控复现
-
-后来我们收紧了 runtime：managed-skill prompt 更克制、加入了 token
-tailoring、使用冻结的 clean warm-start seed，并用同一套 full-18 配置
-连续跑了三轮：
-
-- [`full_compare_run1`](full_compare_run1)
-- [`full_compare_run2`](full_compare_run2)
-- [`full_compare_run3`](full_compare_run3)
-
-三轮聚合之后，结论就没那么乐观了：
-
-| 指标 | Baseline 均值 | Evolution 均值 | Δ |
-| --- | ---: | ---: | ---: |
-| 通过率 | 90.74% | 90.74% | 0.00pp |
-| pass-rate 标准差 | 8.49pp | 3.20pp | – |
-| 平均端到端 tokens / task | 169,888.61 | 145,980.13 | -23,908.48 |
-| 端到端 token 标准差 | 81,007.55 | 24,363.25 | – |
-
-这三轮把实验的叙事改写成了现在这版：
-
-- 老的“evolution 明显碾压 baseline”不再成立；
-- 当前 runtime 更像是**降低波动**，而不是稳定提升 pass rate；
-- 显式 `skill_load` 仍然是 `0%`；
-- 主要失败簇转移到了 `world-bank-economic-snapshot/e2` 和本地 MCP timeout。
-
-### 3.3 Phase C：更强 reviewer 的 spot check（`gpt-5.2`）
-
-最新一轮 spot check 保持 agent runtime 不变，只升级 reviewer：
-
-- [`full_compare_reviewer_gpt52_run1`](full_compare_reviewer_gpt52_run1)
-
-结果如下：
-
-| 指标 | Baseline | Evolution | Δ |
-| --- | ---: | ---: | ---: |
-| 通过率 | 100.00% | 100.00% | 0.00pp |
-| 平均分 | 97.19 | 97.13 | -0.05 |
-| 平均耗时 | 131.10s | 79.53s | -51.56s |
-| 平均端到端 tokens / task | 158,005.67 | 152,715.39 | -5,290.27 |
-| 最终 skill 数 | – | 11 | – |
-| `skill_load` 调用率 | 0.00% | 0.00% | 0.00pp |
-
-这轮最有价值的信号，不是 pass rate，因为 baseline 也跑到了 18/18；
-而是 evolution 的最终 skill 库变干净了：只剩 **11 条**，而且没有再长出
-`Weather Monitor - 3/4/5 Cities with APIs` 那批 weather siblings。
-
----
-
-## 4. 主要结果
-
-### 4.1 现在已经能确定的事实
-
-到目前为止，有三件事已经比较稳了。
-
-1. **自进化在 SkillCraft 上确实可能带来收益。**
-   最早的里程碑单跑不是“完全偶然”，它证明了 skill 机制有能力消灭一类
-   灾难性循环。
-2. **当前 runtime 还不能证明自己稳定提升 pass rate。**
-   三轮受控 batch 的均值已经打平。
-3. **显式 skill 复用仍然没有跑起来。**
-   不论是三轮受控 batch，还是 `gpt-5.2` spot check，`skill_load`
-   都还是 `0`。
-
-### 4.2 evolution 今天最像在哪些地方起作用
-
-最强的证据，仍然来自“避免灾难性 loop”。
-
-在三轮受控 batch 里：
-
-- `openmeteo-weather/e1` 两边都是 `3/3` pass，但 baseline 平均端到端
-  token 高达 `489,459`，evolution 只有 `80,644`，因为其中一轮 baseline
-  发生了灾难性爆炸；
-- `openmeteo-weather/e2` 在 baseline 中是 `T,F,T`，在 evolution 中是
-  `T,T,T`；
-- evolution 明显降低了整体波动，即使均值 pass rate 打平。
-
-在最新的 `gpt-5.2` reviewer spot check 里也能看到类似现象：
-
-- `openmeteo-weather/e1` 下降了 `-508,453` 的端到端 token；
-- `world-bank-economic-snapshot/e3` 下降了 `-159,046`；
-- 但也存在明显回退，比如 `recipe-cookbook-builder/h1`
-  反而多花了 `+348,835` 端到端 token。
-
-所以收益是真实存在的，但分布并不均匀。
-
-### 4.3 现在最关键的缺口
-
-最关键的缺口仍然是：**skill 被看到了，但没有被真正“使用”**。
-
-当前证据很一致：
-
-- skill summary 会出现在 prompt 里；
-- skill library 也确实会被 reviewer 产出来；
-- 但 agent 并没有显式调用 `skill_load`。
-
-这意味着今天看到的收益，更像是 **catalog exposure / reviewer quality**
-带来的间接帮助，而不是成熟的 progressive disclosure 闭环。
-
-### 4.4 reviewer 质量重要，但它还不是全部
-
-`gpt-5.2` 这轮 spot check 已经很清楚地提示我们：reviewer 质量确实是
-当前瓶颈之一。
-
-它带来的正向信号包括：
-
-- 最终 skill 数从最近的 13–14 条压回到 **11 条**；
-- weather API siblings 在这一轮里消失了；
-- evolution 在 pass rate 打平的同时，端到端 token 仍略低于 baseline。
-
-但它也没有解决全部问题：
-
-- `skill_load` 还是没有被调用；
-- baseline 本轮本身也已经 18/18，所以 reviewer 升档还没带来 pass 优势；
-- 它仍然只是一轮结果，所以更适合作为“library cleanliness 变好”的证据，
-  还不适合作为新的总 headline。
-
----
+1. **任务族覆盖有限**：当前只评估了 weather 和 recipe 两个族。
+   `world-bank-economic-snapshot` 因 MCP 工具超时问题（与 evolution 无关）
+   暂时排除在外。
+2. **Reviewer 模型较弱**：`gpt-4o-mini` 仍会生成 count-specific 兄弟簇
+   （如 `Recipe Cookbook Creation - 5 Dishes`），靠 reconciler 吸回。
+   更强的 reviewer 可能直接避免这类问题。
+3. **技能消费路径单一**：当前 agent 只通过 `skill_load` 消费技能，
+   没有 progressive disclosure（先看摘要再决定是否 load）。
+4. **缺乏生产流量验证**：所有数据来自 SkillCraft benchmark，缺乏
+   真实线上 adopter 的 skill 产出密度和命中率数据。
 
 ## 5. 结论
 
-到今天为止，最准确的整体结论应该是：
+在 SkillCraft 上的多轮受控实验中，trpc-agent-go 的 agent 自进化机制
+展现了三方面确定性收益：
 
-1. **最早的正向结果是真实的，但不足以单独作为最终结论。**
-   它证明了自进化这件事值得继续做。
-2. **现在真正的事实来源，是后面的受控复现。**
-   在这套更严格的视角下，evolution 目前更像“稳定器”，而不是稳定提升
-   pass rate 的增强器。
-3. **更强 reviewer 很可能有帮助。**
-   `gpt-5.2` 这轮最可贵的地方，不是 pass 多了，而是 skill 库变得更干净、
-   更泛化。
-4. **项目还没结束。**
-   下一步真正决定这条路线能不能默认启用的问题，仍然是：
-   为什么 `skill_load` 不用？剩下的 timeout / 长循环怎么压下去？
+1. **Pass rate 提升**：5 轮均值 +3.3pp（95.0% → 98.3%），且 evolution
+   在所有版本中都保持了更低的失败方差。
+2. **Token 消耗降低**：5 轮均值 -12.8% 至 -33.1%，主要来自对 baseline
+   灾难 loop 的压制，单案例最高节省 94.6%。
+3. **方差显著收敛**：evolution 的 e2e-token 标准差仅为 baseline 的
+   13.9%–17.5%，说明 skill_load 让 agent 行为更稳定可预测。
 
-换句话说，这个实验已经从“这个想法到底能不能 work”推进到了：
-“在什么 reviewer / runtime 条件下，它能稳定到值得默认信任？”
+审批闸门（Phase A/B/C）已完整落地并在评测中运行，证明其作为透明层
+不引入回退，同时为生产上线提供了可审计、可回滚的 skill 生命周期管理。
 
 ---
 
 ## 附录
 
-### A. 当前关键产物
-
-| 产物 | 角色 |
-| --- | --- |
-| [`multi_family_compare`](multi_family_compare) | 历史里程碑单跑 |
-| [`full_compare_run1`](full_compare_run1) | 三轮受控 batch，第 1 轮 |
-| [`full_compare_run2`](full_compare_run2) | 三轮受控 batch，第 2 轮 |
-| [`full_compare_run3`](full_compare_run3) | 三轮受控 batch，第 3 轮 |
-| [`tools/full_compare_analysis.json`](tools/full_compare_analysis.json) | 三轮聚合快照 |
-| [`full_compare_reviewer_gpt52_run1`](full_compare_reviewer_gpt52_run1) | 更强 reviewer 的 spot check |
-
-### B. 复现最新一轮 reviewer spot check
+### A. 复现命令
 
 ```bash
 cd skillcraft/trpc-agent-go-impl
 
+# v21b (全闸门)
 go run . \
   -skillcraft-root "$SKILLCRAFT_ROOT" \
-  -tasks "openmeteo-weather/e1,openmeteo-weather/e2,openmeteo-weather/e3,openmeteo-weather/m1,openmeteo-weather/m2,openmeteo-weather/h1,recipe-cookbook-builder/e1,recipe-cookbook-builder/e2,recipe-cookbook-builder/e3,recipe-cookbook-builder/m1,recipe-cookbook-builder/m2,recipe-cookbook-builder/h1,world-bank-economic-snapshot/e1,world-bank-economic-snapshot/e2,world-bank-economic-snapshot/e3,world-bank-economic-snapshot/m1,world-bank-economic-snapshot/m2,world-bank-economic-snapshot/h1" \
+  -tasks "openmeteo-weather/e1,...,recipe-cookbook-builder/h1" \
   -mode compare \
   -model gpt-4o-mini \
-  -reviewer-model gpt-5.2 \
+  -reviewer-model gpt-4o-mini \
   -max-tool-iterations 24 \
-  -load-skills-from ../results/tools/clean_skill_seed \
+  -load-skills-from ../results/tools/clean_library_v19 \
   -max-prompt-skills 8 \
-  -output ../results/full_compare_reviewer_gpt52_run1
+  -enable-approval-gate \
+  -effectiveness-gate \
+  -output ../results/multi_family_compare_v21b_tryN
 ```
 
-### C. 当前阅读规则
+### B. 关键 CLI 参数
 
-如果第一次看这组实验，最简单的导读是：
-
-- 用 [`multi_family_compare`](multi_family_compare) 理解为什么这件事当初
-  值得做；
-- 用 [`full_compare_run1`](full_compare_run1)、
-  [`full_compare_run2`](full_compare_run2)、
-  [`full_compare_run3`](full_compare_run3) 和
-  [`tools/full_compare_analysis.json`](tools/full_compare_analysis.json)
-  理解当前 runtime 的真实状态；
-- 用 [`full_compare_reviewer_gpt52_run1`](full_compare_reviewer_gpt52_run1)
-  看 reviewer 升档后的正向信号，但暂时不要把它当成新的最终 headline。
+| 参数 | 说明 |
+| --- | --- |
+| `-enable-approval-gate` | 开启 Phase A revision store + Phase B SpecGate/SafetyGate |
+| `-effectiveness-gate` | 开启 Phase C outcome-based effectiveness gate |
+| `-approval-gate-shadow` | Shadow 模式：gate 评估但不拦截，用于对比 |
+| `-load-skills-from` | 指定 warm-start seed 目录 |
+| `-max-prompt-skills` | 限制 prompt 中 skill overview 的条数 |

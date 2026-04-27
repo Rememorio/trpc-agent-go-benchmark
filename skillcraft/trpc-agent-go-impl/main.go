@@ -176,6 +176,34 @@ var (
 			"them. Use this to keep large warm-start libraries from pushing the "+
 			"prompt close to the model's context window.",
 	)
+	flagEnableApprovalGate = flag.Bool(
+		"enable-approval-gate",
+		false,
+		"Route reviewer output through the Phase A approval gate "+
+			"(immutable revision store + deterministic SpecGate / SafetyGate). "+
+			"Rejected revisions are logged to the candidate store audit log but "+
+			"never become active. Off by default so legacy runs still use the "+
+			"direct publish path.",
+	)
+	flagApprovalGateShadow = flag.Bool(
+		"approval-gate-shadow",
+		false,
+		"Run the approval gate in shadow mode: gates are evaluated and "+
+			"revisions are written to the candidate store, but the live "+
+			"Publisher is still updated even when gates reject. Useful for "+
+			"comparing gate verdicts against the pre-gate behavior without "+
+			"blocking any reviewer output. Only meaningful when "+
+			"-enable-approval-gate is set.",
+	)
+	flagEffectivenessGate = flag.Bool(
+		"effectiveness-gate",
+		false,
+		"Enable the Phase C outcome-based effectiveness gate. When set "+
+			"(together with -enable-approval-gate), revisions extracted from "+
+			"sessions that failed or scored below 80%% are held in "+
+			"pending_eval status instead of being auto-promoted. This "+
+			"prevents learning from catastrophic runs.",
+	)
 )
 
 type benchmarkConfig struct {
@@ -198,6 +226,9 @@ type benchmarkConfig struct {
 	LoadSkillsFrom         string
 	ReviewerSkillBodyChars int
 	MaxPromptSkills        int
+	EnableApprovalGate     bool
+	ApprovalGateShadow     bool
+	EffectivenessGate      bool
 }
 
 type rawTaskConfig struct {
@@ -369,7 +400,8 @@ type taskRunResult struct {
 	SkillCountBefore         int               `json:"skillCountBefore,omitempty"`
 	SkillCountAfter          int               `json:"skillCountAfter,omitempty"`
 	LearnedSkillNames        []string          `json:"learnedSkillNames,omitempty"`
-	Metadata                 map[string]string `json:"metadata,omitempty"`
+	Metadata                 map[string]string                    `json:"metadata,omitempty"`
+	ApprovalGate             *evolution.ApprovalGateMetricsSnapshot `json:"approvalGate,omitempty"`
 }
 
 type officialEval struct {
@@ -629,6 +661,9 @@ func buildConfig() (*benchmarkConfig, error) {
 		Verbose:                *flagVerbose,
 		ReviewerSkillBodyChars: *flagReviewerSkillBodyChars,
 		MaxPromptSkills:        *flagMaxPromptSkills,
+		EnableApprovalGate:     *flagEnableApprovalGate,
+		ApprovalGateShadow:     *flagApprovalGateShadow,
+		EffectivenessGate:      *flagEffectivenessGate,
 	}
 	if *flagTaskTimeoutSeconds > 0 {
 		cfg.TaskTimeout = time.Duration(*flagTaskTimeoutSeconds) * time.Second
@@ -975,6 +1010,25 @@ func runSingleTask(
 				evolution.WithExistingSkillBodyMaxChars(cfg.ReviewerSkillBodyChars),
 			)
 		}
+		if cfg.EnableApprovalGate {
+			// Keep the revision store next to the live managed skills
+			// dir so operators can inspect both trees side by side.
+			revRoot := filepath.Join(cfg.OutputDir, "managed_skills_revisions")
+			evoOpts = append(evoOpts,
+				evolution.WithCandidateStore(evolution.NewFileCandidateStore(revRoot)),
+				evolution.WithActivePointer(evolution.NewFileActivePointer(revRoot)),
+				evolution.WithSpecGate(evolution.NewDefaultSpecGate()),
+				evolution.WithSafetyGate(evolution.NewDefaultSafetyGate()),
+			)
+			if cfg.EffectivenessGate {
+				evoOpts = append(evoOpts,
+					evolution.WithEffectivenessGate(evolution.NewOutcomeBasedEffectivenessGate()),
+				)
+			}
+			if cfg.ApprovalGateShadow {
+				evoOpts = append(evoOpts, evolution.WithApprovalGateShadow(true))
+			}
+		}
 		evoSvc = evolution.NewService(reviewerModel, evoOpts...)
 	}
 
@@ -1031,8 +1085,22 @@ func runSingleTask(
 			benchmarkAppName, benchmarkUserID, sessionID,
 			runErr, eval, evalErr,
 		)
+		// Grab a handle to the underlying worker BEFORE Close so we
+		// can read its metrics after Close has drained the async
+		// queue. The handle itself remains valid after Stop; only the
+		// job channels go away.
+		var workerHandle *evolution.Worker
+		if withW, ok := evoSvc.(interface {
+			Worker() *evolution.Worker
+		}); ok && cfg.EnableApprovalGate {
+			workerHandle = withW.Worker()
+		}
 		if err := evoSvc.Close(); err != nil {
 			log.Printf("  evolution close error: %v", err)
+		}
+		if workerHandle != nil {
+			snap := workerHandle.ApprovalGateMetricsJSON()
+			result.ApprovalGate = &snap
 		}
 		if reviewerTracker != nil {
 			reviewerUsage := reviewerTracker.snapshot()
@@ -1119,7 +1187,7 @@ func outcomeFromEval(runErr error, eval *officialEval, evalErr error) *evolution
 		out.Notes = "evaluator did not return a verdict"
 	case eval.Passed:
 		out.Status = evolution.OutcomeSuccess
-		score := eval.Score.Percent / 100.0
+		score := eval.Score.Percent
 		out.Score = &score
 		if status := strings.ToLower(strings.TrimSpace(eval.Status)); status == "partial" {
 			out.Status = evolution.OutcomePartial
@@ -1127,7 +1195,7 @@ func outcomeFromEval(runErr error, eval *officialEval, evalErr error) *evolution
 		}
 	default:
 		out.Status = evolution.OutcomeFail
-		score := eval.Score.Percent / 100.0
+		score := eval.Score.Percent
 		out.Score = &score
 		out.Notes = truncateOutcomeNote(joinScoreNotes(eval))
 	}
@@ -1520,17 +1588,15 @@ func buildInstruction(task *taskDefinition, workspace string, availableSkills []
 	if len(availableSkills) > 0 {
 		parts = append(parts,
 			fmt.Sprintf(
-				"Managed skills from earlier tasks may be available through skill_load (%d currently visible in the system skill overview).",
+				"Managed skills from earlier tasks are available through skill_load (%d currently visible in the system skill overview).",
 				len(availableSkills),
 			),
-			"Read the full task specification before deciding whether a managed skill applies.",
-			"Treat skill names and short summaries as routing hints only. If a managed skill looks relevant, load it with skill_load before relying on it.",
-			"If a managed skill is relevant, use it as a reusable checklist, not as the source of truth.",
-			"Managed skills may come from smaller or earlier tasks and can be incomplete. The current task specification, required output, and tool results always override the skill.",
-			"If the current task needs extra fields, extra steps, or a stricter tool order than the skill mentions, you must still follow the current task.",
-			"Before relying on a managed skill, compare it against the current task's required APIs, ordering constraints, and required output fields. If any required part is missing, treat the skill as incomplete and follow the task specification directly.",
-			"After deciding a managed skill is incomplete or irrelevant, stop reconsidering that skill summary and continue with the task using the task specification and tool results.",
+			"Mandatory skill-first protocol: BEFORE any domain tool call (weather_*, mealdb_*, worldbank_*, etc.), scan the 'Available skills:' block at the top of the system prompt. If any listed skill name obviously matches the task family (for example a 'Weather' skill for a weather task, a 'Recipe' skill for a cookbook task, an 'Economic' skill for a World Bank task), call the skill_load tool on that skill name as your FIRST tool call. Do this even if you already have a plan. Loading is cheap and the skill body may save many redundant tool calls downstream.",
+			"If multiple skills look relevant, pick the most generic one (e.g. 'Multi-City' or 'Multi-Country' variants) and load that one first. Do not load sibling count-specific variants.",
+			"After skill_load returns, read the loaded steps and pitfalls and then execute the task. Treat the skill as a reusable checklist, not as the source of truth: the current task specification, required output file, and tool results always override the skill.",
+			"Managed skills may come from smaller or earlier tasks and can be incomplete. If the current task needs extra fields, extra steps, or a stricter tool order than the loaded skill mentions, still follow the current task.",
 			"If a managed skill mentions a tool that is not in the tool list available for this task, skip that step entirely and use whatever tool the task specification names instead.",
+			"After deciding a loaded skill is incomplete or irrelevant, stop reconsidering it and continue with the task using the task specification and tool results.",
 			"These managed skills are textual procedures, not prebuilt executable scripts.",
 		)
 	}
@@ -1610,9 +1676,10 @@ func buildUserPrompt(task *taskDefinition, workspace string, availableSkills []s
 	}
 	if len(availableSkills) > 0 {
 		b.WriteString("\n## Managed Skills\n")
-		fmt.Fprintf(&b, "- %d managed skill(s) may be available through the system skill overview and `skill_load`.\n", len(availableSkills))
-		b.WriteString("- Treat skill names and short summaries as routing hints only; load a skill before relying on it.\n")
-		b.WriteString("- Use these skills only as reusable reference after understanding the full task. The current task specification overrides any skill.\n")
+		fmt.Fprintf(&b, "- %d managed skill(s) are available through the system skill overview and `skill_load`.\n", len(availableSkills))
+		b.WriteString("- Skill-first protocol: if any skill name obviously matches this task family (weather / recipe / cookbook / economic / world bank), call `skill_load` on it BEFORE any domain tool call. This is mandatory when such a skill exists.\n")
+		b.WriteString("- If multiple skills look relevant, prefer the most generic one (for example a `Multi-City` or `Multi-Country` variant) over count-specific siblings.\n")
+		b.WriteString("- After loading, treat the skill as a reusable checklist. The task specification always overrides the skill when they disagree.\n")
 	}
 	return b.String()
 }
@@ -2051,6 +2118,42 @@ func appendComparisonSection(b *strings.Builder, title string, c *compareResult)
 	}
 }
 
+// approvalGateAggregate sums per-task approval-gate counters so the
+// per-mode section in REPORT.md can present a single totals block.
+type approvalGateAggregate struct {
+	tasks   int
+	metrics evolution.ApprovalGateMetricsSnapshot
+}
+
+// aggregateApprovalGate returns a non-nil aggregate only when at least
+// one case in the mode observed the approval gate. Returns nil when
+// the gate was not enabled for this run so callers can skip the
+// section entirely.
+func aggregateApprovalGate(cases []*taskRunResult) *approvalGateAggregate {
+	var agg approvalGateAggregate
+	for _, c := range cases {
+		if c == nil || c.ApprovalGate == nil {
+			continue
+		}
+		agg.tasks++
+		agg.metrics.CandidatesSeen += c.ApprovalGate.CandidatesSeen
+		agg.metrics.RevisionsWritten += c.ApprovalGate.RevisionsWritten
+		agg.metrics.SpecGateRejected += c.ApprovalGate.SpecGateRejected
+		agg.metrics.SafetyGateRejected += c.ApprovalGate.SafetyGateRejected
+		agg.metrics.EffectivenessGateRejected += c.ApprovalGate.EffectivenessGateRejected
+		agg.metrics.RevisionsPromoted += c.ApprovalGate.RevisionsPromoted
+		agg.metrics.Rollbacks += c.ApprovalGate.Rollbacks
+		agg.metrics.DeletionsApplied += c.ApprovalGate.DeletionsApplied
+		agg.metrics.UpdatesApplied += c.ApprovalGate.UpdatesApplied
+		agg.metrics.CreatesApplied += c.ApprovalGate.CreatesApplied
+		agg.metrics.ShadowModeBypassed += c.ApprovalGate.ShadowModeBypassed
+	}
+	if agg.tasks == 0 {
+		return nil
+	}
+	return &agg
+}
+
 func appendModeSection(b *strings.Builder, modeRes *modeResult) {
 	if modeRes == nil || modeRes.Summary == nil {
 		return
@@ -2070,6 +2173,15 @@ func appendModeSection(b *strings.Builder, modeRes *modeResult) {
 	fmt.Fprintf(b, "- skill_load-invoked rate: %.2f%% (tasks where the agent actually called a skill_* tool)\n", s.SkillToolInvokedRate)
 	if len(s.FinalSkillNames) > 0 {
 		fmt.Fprintf(b, "- Learned skills: `%s`\n", strings.Join(s.FinalSkillNames, "`, `"))
+	}
+	if agg := aggregateApprovalGate(modeRes.Cases); agg != nil {
+		fmt.Fprintf(b, "- Approval gate (totals across %d task(s)):\n", agg.tasks)
+		fmt.Fprintf(b, "  - candidates seen: %d, revisions written: %d, revisions promoted: %d\n",
+			agg.metrics.CandidatesSeen, agg.metrics.RevisionsWritten, agg.metrics.RevisionsPromoted)
+		fmt.Fprintf(b, "  - spec-gate rejected: %d, safety-gate rejected: %d, effectiveness-gate held: %d, shadow bypassed: %d\n",
+			agg.metrics.SpecGateRejected, agg.metrics.SafetyGateRejected, agg.metrics.EffectivenessGateRejected, agg.metrics.ShadowModeBypassed)
+		fmt.Fprintf(b, "  - creates applied: %d, updates applied: %d, deletions applied: %d\n",
+			agg.metrics.CreatesApplied, agg.metrics.UpdatesApplied, agg.metrics.DeletionsApplied)
 	}
 	if s.WarmStart != nil {
 		fmt.Fprintf(
