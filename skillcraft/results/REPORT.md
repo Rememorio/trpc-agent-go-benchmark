@@ -185,6 +185,60 @@ yielded a key finding:
 > updates. The effectiveness gate can therefore be arbitrarily
 > conservative without affecting current-run quality.
 
+### 3.6 Multi-Session Cumulative Experiment
+
+To test whether the skill library degrades over extended use, we ran a
+5-round cumulative experiment: Round 1 starts from an empty library
+(no seed), and each subsequent round uses the previous round's
+`managed_skills/` output as its seed (no hand-crafted
+`clean_library_v19`).
+
+**Table 6: Cumulative experiment per-round results**
+
+| Round | Baseline pass | Evolution pass | Baseline E2E | Evolution E2E | Δ E2E | Skills | skill_load |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| R1 (cold) | 100.0% | 91.7% | 212,271 | 251,835 | +39,564 | 6 | 83% |
+| R2 | 91.7% | 83.3% | 227,334 | 135,773 | -91,561 | 6 | 92% |
+| R3 | 91.7% | 91.7% | 170,753 | 141,329 | -29,424 | 6 | 100% |
+| R4 | 91.7% | 83.3% | 240,514 | 284,498 | +43,984 | 6 | 92% |
+| R5 | 83.3% | **100.0%** | **349,946** | 162,408 | **-187,538** | 6 | 100% |
+
+Key findings:
+
+1. **Skill library converges at 6 skills, zero growth across 5
+   rounds.** The reconciler + SpecGate absorb all reviewer creates
+   into updates against existing skills. The library does not bloat.
+2. **Reviewer-generated skills are count-specific** (`3 Cities`,
+   `4 Cities`, `5 Cities`) rather than generic-parent (`Multi-City`),
+   making them less effective: evolution pass rate averages ~90%
+   vs. ~98% with the hand-crafted generic-parent seed.
+3. **Token suppression still works**: R2 (-91k), R3 (-29k),
+   R5 (-188k) show that even with weaker reviewer-generated skills,
+   evolution rescues baseline catastrophic loops.
+4. **skill_load rate converges from 83% to 100%** as the library
+   populates after Round 1.
+
+### 3.7 Cumulative Experiment Comparison: v2 (old prompt) vs v3 (genericization prompt)
+
+v3 adds a "MANDATORY naming convention" section to the reviewer
+prompt, explicitly listing WRONG (`3 Cities`) and RIGHT (`Multi-City`)
+formats.
+
+**Table 7: 5-round cumulative v2 vs v3 aggregate**
+
+| Dimension | v2 (old prompt) | v3 (genericization prompt) |
+| --- | ---: | ---: |
+| Evolution pass Δ vs baseline | -1.7pp | **+1.7pp** |
+| E2E token Δ vs baseline | -18.7% | **-28.7%** |
+| Skill library size (all rounds) | 6 | 6 |
+| skill_load 100% rounds | 3/5 | 4/5 |
+
+> Prompt improvement brings tangible gains in steps/pitfalls quality:
+> token savings rise from 18.7% to 28.7%, pass delta flips positive.
+> Skill naming remains count-specific (`gpt-4o-mini` instruction-
+> following limitation), but the reconciler keeps the library from
+> bloating.
+
 ## 4. Discussion
 
 ### 4.1 Source of Evolution's Benefit

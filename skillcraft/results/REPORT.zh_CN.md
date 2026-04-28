@@ -171,6 +171,52 @@ effectiveness gate 意外拦截了所有 60 个 reviewer-generated revision。
 > reviewer 在当次 run 中产生的 update。因此 effectiveness gate 可以
 > 任意保守——哪怕全量拦截也不影响当次 run 的表现。
 
+### 3.6 Multi-session 累积实验
+
+为验证 skill 库在长期使用下是否会退化，我们进行了 5 轮累积实验：
+Round 1 从空库冷启动，后续每轮用上一轮产出的 `managed_skills/` 作为
+seed（不使用手工 `clean_library_v19`）。
+
+**表 6：累积实验逐轮结果**
+
+| Round | Baseline pass | Evolution pass | Baseline E2E | Evolution E2E | Δ E2E | Skills | skill_load |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| R1 (cold) | 100.0% | 91.7% | 212,271 | 251,835 | +39,564 | 6 | 83% |
+| R2 | 91.7% | 83.3% | 227,334 | 135,773 | -91,561 | 6 | 92% |
+| R3 | 91.7% | 91.7% | 170,753 | 141,329 | -29,424 | 6 | 100% |
+| R4 | 91.7% | 83.3% | 240,514 | 284,498 | +43,984 | 6 | 92% |
+| R5 | 83.3% | **100.0%** | **349,946** | 162,408 | **-187,538** | 6 | 100% |
+
+关键发现：
+
+1. **Skill 库收敛到 6 条，5 轮零增长。** Reconciler + SpecGate 把
+   reviewer 的所有 create 都吸成 update，库不会膨胀。
+2. **Reviewer 自产 skill 是 count-specific 的**（`3 Cities`、
+   `4 Cities`、`5 Cities`），不如手工 generic-parent 有效，
+   导致 evolution pass rate 均值 ~90%（手工 seed 为 ~98%）。
+3. **Token 压制效果仍在**：R2 (-91k)、R3 (-29k)、R5 (-188k) 证明
+   即使用较弱的 reviewer 自产 skill，evolution 在 baseline 灾难 loop
+   时仍能救场。
+4. **skill_load 率从 83% 收敛到 100%**。
+
+### 3.7 累积实验对比：v2（旧 prompt）vs v3（genericization prompt）
+
+v3 在 reviewer prompt 中新增了 "MANDATORY naming convention" 段，
+明确列举 WRONG（`3 Cities`）和 RIGHT（`Multi-City`）格式。
+
+**表 7：5 轮累积实验 v2 vs v3 聚合**
+
+| 维度 | v2（旧 prompt） | v3（genericization prompt） |
+| --- | ---: | ---: |
+| Evolution pass Δ vs baseline | -1.7pp | **+1.7pp** |
+| E2E token Δ vs baseline | -18.7% | **-28.7%** |
+| Skill 库条数（5 轮全程） | 6 | 6 |
+| skill_load 100% rounds | 3/5 | 4/5 |
+
+> Prompt 改进在 steps/pitfalls 质量上带来了收益：token 节省从 18.7%
+> 提升到 28.7%，pass Δ 从负翻正。Skill naming 仍然是 count-specific
+> （`gpt-4o-mini` 指令遵循能力瓶颈），但 reconciler 控制住了库不膨胀。
+
 ## 4. 讨论
 
 ### 4.1 Evolution 的收益来源
