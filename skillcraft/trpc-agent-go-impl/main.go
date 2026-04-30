@@ -2175,7 +2175,7 @@ func appendModeSection(b *strings.Builder, modeRes *modeResult) {
 		fmt.Fprintf(b, "- Learned skills: `%s`\n", strings.Join(s.FinalSkillNames, "`, `"))
 	}
 	if agg := aggregateApprovalGate(modeRes.Cases); agg != nil {
-		fmt.Fprintf(b, "- Approval gate (totals across %d task(s)):\n", agg.tasks)
+		fmt.Fprintf(b, "- Quality gate (totals across %d task(s)):\n", agg.tasks)
 		fmt.Fprintf(b, "  - candidates seen: %d, revisions written: %d, revisions promoted: %d\n",
 			agg.metrics.CandidatesSeen, agg.metrics.RevisionsWritten, agg.metrics.RevisionsPromoted)
 		fmt.Fprintf(b, "  - spec-gate rejected: %d, safety-gate rejected: %d, effectiveness-gate held: %d, shadow bypassed: %d\n",
