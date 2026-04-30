@@ -38,17 +38,55 @@ stable, cheaper, or both.
 
 ### 2.2 Skill Seed Library
 
-All evolution runs start from a warm-start seed (`clean_library_v19`)
-containing 7 generic-parent-only skills covering 3 of the 5 task
-families: weather (3 collection + 2 monitor), recipe (1 Multi-Dish),
-and economic-snapshot (1 Multi-Country). The remaining 2 families
-(cat-facts, pokeapi) have no pre-built skills and rely entirely on
-within-run skill creation.
+All evolution runs start from a curated warm-start seed directory
+(`seed_skills/`) containing 7 generic-parent-only skills covering
+3 of the 5 task families. Each skill provides a reusable step-by-step
+workflow template without hard-coded parameters.
+
+**Table 0: Seed skill inventory**
+
+| Family | Skill Name | Coverage |
+| --- | --- | --- |
+| openmeteo-weather | Weather Data Collection | Single-city collection |
+| openmeteo-weather | Weather Data Collection — Multi-City | Multi-city collection |
+| openmeteo-weather | Weather Data Collection — Multi-City — Detailed | Extended forecasts |
+| openmeteo-weather | Weather Monitor — Multi-City | Alert monitoring |
+| openmeteo-weather | Weather Monitor — Multi-City with Historical Data | Historical comparison |
+| recipe-cookbook-builder | Recipe Cookbook — Multi-Dish | Multi-recipe workflows |
+| world-bank-economic-snapshot | Economic Snapshot — Multi-Country | Multi-country indicators |
+
+The remaining 2 families (cat-facts-collector, pokeapi-pokedex) have
+no pre-built skills and rely entirely on within-run skill creation by
+the reviewer.
 
 ### 2.3 Evolution Mechanism
 
 Evolution is an **asynchronous learning loop** that does not block the
 main task path:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        Main Task Path                            │
+│  Request ──▶ [skill_load] ──▶ Agent ──▶ Tool Calls ──▶ Result   │
+└────────────────────────────────────┬────────────────────────────┘
+                                     │ enqueue (transcript + outcome)
+                                     ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    Background Learning Loop                      │
+│                                                                  │
+│  ┌──────────┐    ┌────────────┐    ┌───────────┐    ┌────────┐ │
+│  │ Reviewer  │──▶│ Reconciler │──▶│   Gates   │──▶│Publish │ │
+│  │ (LLM)    │    │(dedup/abs) │    │(A → B → C)│    │        │ │
+│  └──────────┘    └────────────┘    └───────────┘    └───┬────┘ │
+└─────────────────────────────────────────────────────────┼───────┘
+                                                          │
+                              ┌────────────────────────────┘
+                              ▼
+                    ┌───────────────────┐
+                    │  Managed Skills   │ ◀── next task reads
+                    │  (SKILL.md files) │
+                    └───────────────────┘
+```
 
 1. After each task, the runner enqueues a learning job with the
    transcript and evaluator outcome.
@@ -57,7 +95,7 @@ main task path:
 3. A deterministic reconciler deduplicates and rewrites near-duplicate
    siblings (strict-superset rewrite / intra-batch dedup /
    quantified-sibling absorption).
-4. The decision passes through the approval gate before being
+4. The decision passes through the quality gate before being
    materialized to the managed skills directory.
 
 On the agent side, the framework injects a "Top recommended skill"
@@ -66,7 +104,7 @@ request. The benchmark instruction requires the agent to `skill_load`
 a matching skill **before any domain tool call** (skill-first
 protocol).
 
-### 2.4 Approval Gate
+### 2.4 Quality Gate
 
 | Phase | Component | Description |
 | --- | --- | --- |
@@ -176,9 +214,9 @@ loops through explicit step guidance in the loaded skill.
 > failing task or prevents a successful-but-extremely-expensive run.
 > Single-case savings reach 94.6%.
 
-### 3.6 Approval Gate Behavior
+### 3.6 Quality Gate Behavior
 
-**Table 6: Approval gate statistics (5-family, 3 tries combined)**
+**Table 6: Quality gate statistics (5-family, 3 tries combined)**
 
 | Metric | Value |
 | --- | --- |
@@ -239,7 +277,7 @@ by token savings (-32.7%) rather than pass rate (+3.3pp) -- the pass
 rate lift comes primarily from cat-facts rescue cases while the token
 savings come from preventing expensive loops across all families.
 
-### 4.2 Approval Gate's Role
+### 4.2 Quality Gate's Role
 
 Phase A (revision store + active pointer) provides auditability and
 rollback, not benchmark improvement. Phase B (SpecGate + SafetyGate)
@@ -276,7 +314,7 @@ trpc-agent-go's agent self-evolution mechanism demonstrates:
    library converges at 6 skills with zero growth across 5 rounds,
    while maintaining -28.7% token savings.
 
-The approval gate (Phase A/B/C) runs transparently with zero
+The quality gate (Phase A/B/C) runs transparently with zero
 false-positive rejections, providing the auditable, rollback-capable
 skill lifecycle management required for production deployment.
 
@@ -289,7 +327,7 @@ skill lifecycle management required for production deployment.
 ```bash
 cd skillcraft/trpc-agent-go-impl
 
-# 5-family evaluation (30 tasks, full approval gate)
+# 5-family evaluation (30 tasks, full quality gate)
 go run . \
   -skillcraft-root "$SKILLCRAFT_ROOT" \
   -tasks "openmeteo-weather/e1,...,pokeapi-pokedex/h1" \
@@ -298,7 +336,7 @@ go run . \
   -reviewer-model gpt-4o-mini \
   -max-tool-iterations 24 \
   -mcp-timeout-seconds 120 \
-  -load-skills-from ../results/tools/clean_library_v19 \
+  -load-skills-from ../results/tools/seed_skills \
   -max-prompt-skills 8 \
   -enable-approval-gate \
   -effectiveness-gate \
@@ -311,7 +349,7 @@ go run . \
 | --- | --- |
 | `-enable-approval-gate` | Enable Phase A revision store + Phase B SpecGate/SafetyGate |
 | `-effectiveness-gate` | Enable Phase C outcome-based effectiveness gate |
-| `-approval-gate-shadow` | Shadow mode: gate evaluates but does not block |
+| `-approval-gate-shadow` | Shadow mode: gate evaluates but does not block promotion |
 | `-load-skills-from` | Warm-start seed directory path |
 | `-max-prompt-skills` | Cap on skill summaries rendered into the agent prompt |
 | `-mcp-timeout-seconds` | MCP tool timeout (increase for slow APIs like World Bank) |

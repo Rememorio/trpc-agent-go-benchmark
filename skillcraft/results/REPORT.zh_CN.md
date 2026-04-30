@@ -35,28 +35,65 @@ token，或两者兼有。
 
 ### 2.2 技能种子库
 
-所有 evolution run 从同一份 warm-start 种子（`clean_library_v19`）起步，
-包含 7 条 generic-parent-only 技能，覆盖 5 族中的 3 个：weather（3 条
-collection + 2 条 monitor）、recipe（1 条 Multi-Dish）、economic-snapshot
-（1 条 Multi-Country）。剩余 2 个族（cat-facts、pokeapi）没有预制技能，
-完全依赖 evolution 在运行中自动创建。
+所有 evolution run 从同一份预置种子目录（`seed_skills/`）起步，
+包含 7 条泛化工作流技能，覆盖 5 族中的 3 个。每条技能提供可复用的
+分步模板，不含硬编码参数。
+
+**表 0：种子技能清单**
+
+| 任务族 | 技能名称 | 覆盖范围 |
+| --- | --- | --- |
+| openmeteo-weather | Weather Data Collection | 单城市采集 |
+| openmeteo-weather | Weather Data Collection — Multi-City | 多城市采集 |
+| openmeteo-weather | Weather Data Collection — Multi-City — Detailed | 扩展预报 |
+| openmeteo-weather | Weather Monitor — Multi-City | 告警监控 |
+| openmeteo-weather | Weather Monitor — Multi-City with Historical Data | 历史对比 |
+| recipe-cookbook-builder | Recipe Cookbook — Multi-Dish | 多菜谱工作流 |
+| world-bank-economic-snapshot | Economic Snapshot — Multi-Country | 多国指标 |
+
+剩余 2 个族（cat-facts-collector、pokeapi-pokedex）没有预制技能，
+完全依赖 reviewer 在运行中自动创建。
 
 ### 2.3 Evolution 机制
 
 Evolution 是一个**异步学习闭环**，主流程不被阻塞：
 
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                          主任务路径                                │
+│  Request ──▶ [skill_load] ──▶ Agent ──▶ Tool Calls ──▶ Result   │
+└────────────────────────────────────┬────────────────────────────┘
+                                     │ 入队 (transcript + outcome)
+                                     ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                        后台学习闭环                                │
+│                                                                  │
+│  ┌──────────┐    ┌────────────┐    ┌───────────┐    ┌────────┐ │
+│  │ Reviewer  │──▶│ Reconciler │──▶│   Gates   │──▶│Publish │ │
+│  │ (LLM)    │    │(去重/吸收) │    │(A → B → C)│    │        │ │
+│  └──────────┘    └────────────┘    └───────────┘    └───┬────┘ │
+└─────────────────────────────────────────────────────────┼───────┘
+                                                          │
+                              ┌────────────────────────────┘
+                              ▼
+                    ┌───────────────────┐
+                    │  Managed Skills   │ ◀── 下一个任务读取
+                    │  (SKILL.md files) │
+                    └───────────────────┘
+```
+
 1. 每个任务完成后，runner 将 transcript + evaluator outcome 入队；
 2. 后台 reviewer 模型给出结构化决策（`skills` / `updates` / `deletions`）；
 3. 确定性 reconciler 去重、吸回兄弟簇（strict-superset rewrite /
    intra-batch dedup / quantified-sibling absorption）；
-4. 通过审批闸门写入 managed skills 目录。
+4. 通过质量门禁写入 managed skills 目录。
 
 Agent 侧通过 `skill_load` 工具加载 skill body。框架层在 relevance
 ranking 之上增加了 "Top recommended skill" 硬提示，benchmark 层的
 instruction 要求 agent 在 domain tool 前先 `skill_load` 匹配的技能
 （skill-first protocol）。
 
-### 2.4 审批闸门
+### 2.4 质量门禁
 
 | Phase | 组件 | 说明 |
 | --- | --- | --- |
@@ -159,9 +196,9 @@ instruction 要求 agent 在 domain tool 前先 `skill_load` 匹配的技能
 > 在每一个观察到的灾难 loop 中，evolution 要么挽救了失败任务，
 > 要么避免了虽然成功但极其昂贵的运行。单案例节省最高达 94.6%。
 
-### 3.6 审批闸门行为
+### 3.6 质量门禁行为
 
-**表 6：审批闸门统计（5 族，3 轮合计）**
+**表 6：质量门禁统计（5 族，3 轮合计）**
 
 | 指标 | 值 |
 | --- | --- |
@@ -215,7 +252,7 @@ evolution 的 token 消耗与之相当或略高（因为 skill_load + reviewer
 来自 cat-facts 的挽救案例，而 token 节省来自所有族中灾难 loop
 的压制。
 
-### 4.2 审批闸门的作用
+### 4.2 质量门禁的作用
 
 Phase A（revision store + active pointer）解决的是可审计和可回滚，
 不是 benchmark 提分。Phase B（SpecGate + SafetyGate）是最后一道
@@ -248,7 +285,7 @@ trpc-agent-go 的 agent 自进化机制展现了三方面确定性收益：
 3. **库稳定性**：累积实验证明 skill 库收敛到 6 条、5 轮零增长，
    同时保持 -28.7% 的 token 节省。
 
-审批闸门（Phase A/B/C）以零误拦截透明运行，为生产上线提供了
+质量门禁（Phase A/B/C）以零误拦截透明运行，为生产上线提供了
 可审计、可回滚的 skill 生命周期管理。
 
 ---
@@ -260,7 +297,7 @@ trpc-agent-go 的 agent 自进化机制展现了三方面确定性收益：
 ```bash
 cd skillcraft/trpc-agent-go-impl
 
-# 5 族评测（30 任务，全审批闸门）
+# 5 族评测（30 任务，全质量门禁）
 go run . \
   -skillcraft-root "$SKILLCRAFT_ROOT" \
   -tasks "openmeteo-weather/e1,...,pokeapi-pokedex/h1" \
@@ -269,7 +306,7 @@ go run . \
   -reviewer-model gpt-4o-mini \
   -max-tool-iterations 24 \
   -mcp-timeout-seconds 120 \
-  -load-skills-from ../results/tools/clean_library_v19 \
+  -load-skills-from ../results/tools/seed_skills \
   -max-prompt-skills 8 \
   -enable-approval-gate \
   -effectiveness-gate \

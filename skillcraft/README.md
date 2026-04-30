@@ -17,12 +17,12 @@ tool usage.
 
 The current sources of truth are the **v19 three-run batch** (answers
 "does evolution help at all?") and the **v20 three-run batch**
-(answers "can we trust it under an approval gate?"). See
+(answers "can we trust it under a quality gate?"). See
 [`results/REPORT.md`](results/REPORT.md) (English) and
 [`results/REPORT.zh_CN.md`](results/REPORT.zh_CN.md) (中文) for the
 full write-up.
 
-### v19 headline (runtime changes, no approval gate)
+### v19 headline (runtime changes, no quality gate)
 
 - [`results/multi_family_compare_v19_try1`](results/multi_family_compare_v19_try1)
 - [`results/multi_family_compare_v19_try2`](results/multi_family_compare_v19_try2)
@@ -41,7 +41,7 @@ Across these three runs:
 - One evolution "win" rescues a 1.2M-token catastrophic baseline loop
   on `weather/e1` in try2.
 
-### v20 headline (approval gate Phase A + B live)
+### v20 headline (quality gate Phase A + B live)
 
 - [`results/multi_family_compare_v20_try1`](results/multi_family_compare_v20_try1)
 - [`results/multi_family_compare_v20_try2`](results/multi_family_compare_v20_try2)
@@ -90,7 +90,7 @@ tied; kept here as historical baseline only.
 
 From `skillcraft/trpc-agent-go-impl`:
 
-### v19 (approval gate off)
+### v19 (quality gate off)
 
 ```bash
 go run . \
@@ -100,12 +100,12 @@ go run . \
   -model gpt-4o-mini \
   -reviewer-model gpt-4o-mini \
   -max-tool-iterations 24 \
-  -load-skills-from ../results/tools/clean_library_v19 \
+  -load-skills-from ../results/tools/seed_skills \
   -max-prompt-skills 8 \
   -output ../results/multi_family_compare_v19_tryN
 ```
 
-### v20 (approval gate on)
+### v20 (quality gate on)
 
 ```bash
 go run . \
@@ -115,16 +115,15 @@ go run . \
   -model gpt-4o-mini \
   -reviewer-model gpt-4o-mini \
   -max-tool-iterations 24 \
-  -load-skills-from ../results/tools/clean_library_v19 \
+  -load-skills-from ../results/tools/seed_skills \
   -max-prompt-skills 8 \
   -enable-approval-gate \
   -output ../results/multi_family_compare_v20_tryN
 ```
 
 Run each command three times with distinct output directories to
-reproduce the three-run batch. The warm-start seed used by all v19 /
-v20 runs lives at
-[`results/tools/clean_library_v19`](results/tools/clean_library_v19)
+reproduce the three-run batch. The warm-start seed used by all runs
+lives at [`results/tools/seed_skills`](results/tools/seed_skills)
 (7 generic-parent-only skills; no count-specific siblings).
 
 The benchmark impl's `go.mod` uses
@@ -166,7 +165,7 @@ for the final deliverable.
 | `-load-skills-from` | Warm-start the evolution arm from an existing managed-skill directory |
 | `-max-prompt-skills` | Cap the number of full skill summaries rendered into the prompt |
 | `-enable-approval-gate` | Route reviewer output through the Phase A revision store + Phase B deterministic SpecGate / SafetyGate; writes immutable revisions and an audit log under `<output>/managed_skills_revisions/` |
-| `-approval-gate-shadow` | Run the approval gate in shadow mode: still publish even when gates reject, for comparison only |
+| `-approval-gate-shadow` | Run the quality gate in shadow mode: still publish even when gates reject, for comparison only |
 
 ## Output Layout
 
