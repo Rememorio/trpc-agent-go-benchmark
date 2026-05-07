@@ -38,10 +38,10 @@ stable, cheaper, or both.
 
 ### 2.2 Skill Seed Library
 
-All evolution runs start from a curated warm-start seed directory
-(`seed_skills/`) containing 7 generic-parent-only skills covering
-3 of the 5 task families. Each skill provides a reusable step-by-step
-workflow template without hard-coded parameters.
+All evolution runs in this report start from a curated warm-start seed
+directory (`seed_skills/`) containing 9 generic-parent-only skills
+covering all 5 task families. Each skill provides a reusable
+step-by-step workflow template without hard-coded parameters.
 
 **Table 0: Seed skill inventory**
 
@@ -54,10 +54,13 @@ workflow template without hard-coded parameters.
 | openmeteo-weather | Weather Monitor — Multi-City with Historical Data | Historical comparison |
 | recipe-cookbook-builder | Recipe Cookbook — Multi-Dish | Multi-recipe workflows |
 | world-bank-economic-snapshot | Economic Snapshot — Multi-Country | Multi-country indicators |
+| cat-facts-collector | Cat Facts Collector — Multi-Breed | Multi-breed encyclopedia |
+| pokeapi-pokedex | PokeAPI Pokedex — Multi-Pokemon | Multi-pokemon Pokedex |
 
-The remaining 2 families (cat-facts-collector, pokeapi-pokedex) have
-no pre-built skills and rely entirely on within-run skill creation by
-the reviewer.
+Note: The primary 5-family evaluation (Tables 1–5) was conducted with
+the initial 7-skill seed covering 3 of 5 families. The cat-facts and
+pokeapi seeds were added afterward and validated separately (skill_load
+rises from 74.4% to 100% with full seed coverage).
 
 ### 2.3 Evolution Mechanism
 
@@ -149,8 +152,10 @@ Key observations:
 
 - **cat-facts-collector** is the hardest family (baseline 44.4%),
   and evolution provides the largest pass rate lift (+16.7pp) despite
-  having no seed skill (skill_load = 0%). The improvement comes
-  entirely from within-run skill creation by the reviewer.
+  having no seed skill at the time of this evaluation (skill_load =
+  0%). The improvement comes entirely from within-run skill creation
+  by the reviewer. A subsequent seed addition and prompt fix raised
+  cat-facts skill_load to 100% (see §2.2 note).
 - **Families with seed skills** (weather, recipe, world-bank) achieve
   100% skill_load and consistent token savings, but pass rate is
   already high so the delta is near zero.
@@ -293,11 +298,10 @@ from learning incorrect skills from bad sessions.
    adopter skill production density and hit-rate data is needed.
 2. **Weak reviewer model**: `gpt-4o-mini` generates count-specific
    skill names (`3 Cities` instead of `Multi-City`); the reconciler
-   absorbs them but a stronger reviewer could avoid this entirely.
-3. **Incomplete seed coverage**: the seed library covers 3 of 5
-   families. Families without seeds (cat-facts, pokeapi) have
-   skill_load = 0% and show less consistent improvements.
-4. **Single skill consumption path**: only `skill_load`; no
+   absorbs them. A gpt-4o comparison (3 runs) confirmed the
+   reconciler already closes this gap — stronger reviewers show no
+   significant benchmark improvement.
+3. **Single skill consumption path**: only `skill_load`; no
    progressive disclosure (browse summary, then decide).
 
 ## 5. Conclusions

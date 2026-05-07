@@ -36,7 +36,7 @@ token，或两者兼有。
 ### 2.2 技能种子库
 
 所有 evolution run 从同一份预置种子目录（`seed_skills/`）起步，
-包含 7 条泛化工作流技能，覆盖 5 族中的 3 个。每条技能提供可复用的
+包含 9 条泛化工作流技能，覆盖全部 5 个任务族。每条技能提供可复用的
 分步模板，不含硬编码参数。
 
 **表 0：种子技能清单**
@@ -50,9 +50,12 @@ token，或两者兼有。
 | openmeteo-weather | Weather Monitor — Multi-City with Historical Data | 历史对比 |
 | recipe-cookbook-builder | Recipe Cookbook — Multi-Dish | 多菜谱工作流 |
 | world-bank-economic-snapshot | Economic Snapshot — Multi-Country | 多国指标 |
+| cat-facts-collector | Cat Facts Collector — Multi-Breed | 多品种猫咪百科 |
+| pokeapi-pokedex | PokeAPI Pokedex — Multi-Pokemon | 多宝可梦图鉴 |
 
-剩余 2 个族（cat-facts-collector、pokeapi-pokedex）没有预制技能，
-完全依赖 reviewer 在运行中自动创建。
+注：本报告主要结果（表 1–5）使用初始 7 条种子（覆盖 3/5 族）完成。
+cat-facts 和 pokeapi 种子在主实验后补充并单独验证（skill_load 从
+74.4% 提升至 100%）。
 
 ### 2.3 Evolution 机制
 
@@ -136,8 +139,10 @@ instruction 要求 agent 在 domain tool 前先 `skill_load` 匹配的技能
 主要观察：
 
 - **cat-facts-collector** 是最难的族（baseline 仅 44.4%），evolution
-  在此提供了最大的 pass rate 提升（+16.7pp），但 skill_load = 0%
-  （种子库中无匹配技能），改善完全来自 reviewer 在运行中创建的技能。
+  在此提供了最大的 pass rate 提升（+16.7pp），但本次评测时 skill_load
+  = 0%（当时种子库中无匹配技能），改善完全来自 reviewer 在运行中创建
+  的技能。后续补充种子 + 修复 skill-first prompt 后，cat-facts 的
+  skill_load 已提升至 100%（见 §2.2 注释）。
 - **有种子技能的族**（weather、recipe、world-bank）skill_load
   达到 100%，token 节省一致，但 pass rate 已经较高所以 delta 接近零。
 - **recipe-cookbook-builder** 出现 +7.3% 的 token 开销 -- skill_load
@@ -267,10 +272,9 @@ gate）在正常运行时不会拦截，只在灾难 run 触发时才会挡住"�
    adopter 的 skill 产出密度和命中率数据。
 2. **Reviewer 模型较弱**：`gpt-4o-mini` 会生成 count-specific 的
    技能名（`3 Cities` 而非 `Multi-City`），靠 reconciler 吸回。
-   更强的 reviewer 模型有望避免此问题。
-3. **种子库覆盖不完整**：种子库覆盖 5 族中的 3 个，无种子的族
-   skill_load = 0%，改善不够稳定。
-4. **技能消费路径单一**：当前只有 `skill_load`，没有 progressive
+   gpt-4o 对比实验（3 轮）确认 reconciler 已兜住此差距——更强 reviewer
+   不产生显著 benchmark 提升。
+3. **技能消费路径单一**：当前只有 `skill_load`，没有 progressive
    disclosure（先看摘要再决定是否 load）。
 
 ## 5. 结论

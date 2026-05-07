@@ -124,7 +124,7 @@ go run . \
 Run each command three times with distinct output directories to
 reproduce the three-run batch. The warm-start seed used by all runs
 lives at [`results/tools/seed_skills`](results/tools/seed_skills)
-(7 generic-parent-only skills; no count-specific siblings).
+(9 generic-parent-only skills covering all 5 task families).
 
 The benchmark impl's `go.mod` uses
 `replace trpc.group/trpc-go/trpc-agent-go => /workspace/github/my-trpc-agent-go`
