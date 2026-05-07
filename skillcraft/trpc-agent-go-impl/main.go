@@ -1266,11 +1266,13 @@ func executeTask(
 	if err != nil {
 		return nil, fmt.Errorf("init local bridge: %w", err)
 	}
+	defer localTools.Close()
 
 	filesystemTools, err := newFilesystemToolSet(cfg, workspace)
 	if err != nil {
 		return nil, fmt.Errorf("init filesystem mcp: %w", err)
 	}
+	defer filesystemTools.Close()
 
 	hasSkills := repo != nil && len(repo.Summaries()) > 0
 	if hasSkills {
@@ -1591,7 +1593,7 @@ func buildInstruction(task *taskDefinition, workspace string, availableSkills []
 				"Managed skills from earlier tasks are available through skill_load (%d currently visible in the system skill overview).",
 				len(availableSkills),
 			),
-			"Mandatory skill-first protocol: BEFORE any domain tool call (weather_*, mealdb_*, worldbank_*, etc.), scan the 'Available skills:' block at the top of the system prompt. If any listed skill name obviously matches the task family (for example a 'Weather' skill for a weather task, a 'Recipe' skill for a cookbook task, an 'Economic' skill for a World Bank task), call the skill_load tool on that skill name as your FIRST tool call. Do this even if you already have a plan. Loading is cheap and the skill body may save many redundant tool calls downstream.",
+			"Mandatory skill-first protocol: BEFORE any domain tool call (weather_*, mealdb_*, worldbank_*, catfacts_*, pokemon_*, etc.), scan the 'Available skills:' block at the top of the system prompt. If any listed skill name obviously matches the task family (for example a 'Weather' skill for a weather task, a 'Recipe' skill for a cookbook task, an 'Economic' skill for a World Bank task, a 'Cat Facts' skill for a cat breeds task, a 'PokeAPI' or 'Pokedex' skill for a Pokemon task), call the skill_load tool on that skill name as your FIRST tool call. Do this even if you already have a plan. Loading is cheap and the skill body may save many redundant tool calls downstream.",
 			"If multiple skills look relevant, pick the most generic one (e.g. 'Multi-City' or 'Multi-Country' variants) and load that one first. Do not load sibling count-specific variants.",
 			"After skill_load returns, read the loaded steps and pitfalls and then execute the task. Treat the skill as a reusable checklist, not as the source of truth: the current task specification, required output file, and tool results always override the skill.",
 			"Managed skills may come from smaller or earlier tasks and can be incomplete. If the current task needs extra fields, extra steps, or a stricter tool order than the loaded skill mentions, still follow the current task.",
@@ -1677,7 +1679,7 @@ func buildUserPrompt(task *taskDefinition, workspace string, availableSkills []s
 	if len(availableSkills) > 0 {
 		b.WriteString("\n## Managed Skills\n")
 		fmt.Fprintf(&b, "- %d managed skill(s) are available through the system skill overview and `skill_load`.\n", len(availableSkills))
-		b.WriteString("- Skill-first protocol: if any skill name obviously matches this task family (weather / recipe / cookbook / economic / world bank), call `skill_load` on it BEFORE any domain tool call. This is mandatory when such a skill exists.\n")
+		b.WriteString("- Skill-first protocol: if any skill name obviously matches this task family (weather / recipe / cookbook / economic / world bank / cat facts / cat breeds / pokemon / pokedex), call `skill_load` on it BEFORE any domain tool call. This is mandatory when such a skill exists.\n")
 		b.WriteString("- If multiple skills look relevant, prefer the most generic one (for example a `Multi-City` or `Multi-Country` variant) over count-specific siblings.\n")
 		b.WriteString("- After loading, treat the skill as a reusable checklist. The task specification always overrides the skill when they disagree.\n")
 	}
