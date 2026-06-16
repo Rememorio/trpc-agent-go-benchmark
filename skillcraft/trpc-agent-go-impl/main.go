@@ -371,37 +371,37 @@ type compareResult struct {
 }
 
 type taskRunResult struct {
-	TaskID                   string            `json:"taskId"`
-	TaskName                 string            `json:"taskName"`
-	BaseTask                 string            `json:"baseTask"`
-	Scale                    string            `json:"scale"`
-	Mode                     runMode           `json:"mode"`
-	Status                   string            `json:"status"`
-	DurationSeconds          float64           `json:"durationSeconds"`
-	PromptTokens             int               `json:"promptTokens"`
-	CompletionTokens         int               `json:"completionTokens"`
-	TotalTokens              int               `json:"totalTokens"`
-	ReviewerPromptTokens     int               `json:"reviewerPromptTokens,omitempty"`
-	ReviewerCompletionTokens int               `json:"reviewerCompletionTokens,omitempty"`
-	ReviewerTotalTokens      int               `json:"reviewerTotalTokens,omitempty"`
-	EndToEndTotalTokens      int               `json:"endToEndTotalTokens,omitempty"`
-	ToolCalls                []string          `json:"toolCalls,omitempty"`
-	SkillToolCalls           []string          `json:"skillToolCalls,omitempty"`
-	LoadedSkillNames         []string          `json:"loadedSkillNames,omitempty"`
-	ClaimDoneCalled          bool              `json:"claimDoneCalled"`
-	HadAvailableSkills       bool              `json:"hadAvailableSkills,omitempty"`
-	SkillToolInvoked         bool              `json:"skillToolInvoked,omitempty"`
-	FinalResponse            string            `json:"finalResponse,omitempty"`
-	Workspace                string            `json:"workspace,omitempty"`
-	AgentError               string            `json:"agentError,omitempty"`
-	EventErrors              []string          `json:"eventErrors,omitempty"`
-	Evaluation               *officialEval     `json:"evaluation,omitempty"`
-	EvaluationError          string            `json:"evaluationError,omitempty"`
-	SkillCountBefore         int               `json:"skillCountBefore,omitempty"`
-	SkillCountAfter          int               `json:"skillCountAfter,omitempty"`
-	LearnedSkillNames        []string          `json:"learnedSkillNames,omitempty"`
-	Metadata                 map[string]string                    `json:"metadata,omitempty"`
-	ApprovalGate             *evolution.ApprovalGateMetricsSnapshot `json:"approvalGate,omitempty"`
+	TaskID                   string                         `json:"taskId"`
+	TaskName                 string                         `json:"taskName"`
+	BaseTask                 string                         `json:"baseTask"`
+	Scale                    string                         `json:"scale"`
+	Mode                     runMode                        `json:"mode"`
+	Status                   string                         `json:"status"`
+	DurationSeconds          float64                        `json:"durationSeconds"`
+	PromptTokens             int                            `json:"promptTokens"`
+	CompletionTokens         int                            `json:"completionTokens"`
+	TotalTokens              int                            `json:"totalTokens"`
+	ReviewerPromptTokens     int                            `json:"reviewerPromptTokens,omitempty"`
+	ReviewerCompletionTokens int                            `json:"reviewerCompletionTokens,omitempty"`
+	ReviewerTotalTokens      int                            `json:"reviewerTotalTokens,omitempty"`
+	EndToEndTotalTokens      int                            `json:"endToEndTotalTokens,omitempty"`
+	ToolCalls                []string                       `json:"toolCalls,omitempty"`
+	SkillToolCalls           []string                       `json:"skillToolCalls,omitempty"`
+	LoadedSkillNames         []string                       `json:"loadedSkillNames,omitempty"`
+	ClaimDoneCalled          bool                           `json:"claimDoneCalled"`
+	HadAvailableSkills       bool                           `json:"hadAvailableSkills,omitempty"`
+	SkillToolInvoked         bool                           `json:"skillToolInvoked,omitempty"`
+	FinalResponse            string                         `json:"finalResponse,omitempty"`
+	Workspace                string                         `json:"workspace,omitempty"`
+	AgentError               string                         `json:"agentError,omitempty"`
+	EventErrors              []string                       `json:"eventErrors,omitempty"`
+	Evaluation               *officialEval                  `json:"evaluation,omitempty"`
+	EvaluationError          string                         `json:"evaluationError,omitempty"`
+	SkillCountBefore         int                            `json:"skillCountBefore,omitempty"`
+	SkillCountAfter          int                            `json:"skillCountAfter,omitempty"`
+	LearnedSkillNames        []string                       `json:"learnedSkillNames,omitempty"`
+	Metadata                 map[string]string              `json:"metadata,omitempty"`
+	ApprovalGate             *evolution.ApprovalGateMetrics `json:"approvalGate,omitempty"`
 }
 
 type officialEval struct {
@@ -1085,21 +1085,17 @@ func runSingleTask(
 			benchmarkAppName, benchmarkUserID, sessionID,
 			runErr, eval, evalErr,
 		)
-		// Grab a handle to the underlying worker BEFORE Close so we
-		// can read its metrics after Close has drained the async
-		// queue. The handle itself remains valid after Stop; only the
-		// job channels go away.
-		var workerHandle *evolution.Worker
-		if withW, ok := evoSvc.(interface {
-			Worker() *evolution.Worker
-		}); ok && cfg.EnableApprovalGate {
-			workerHandle = withW.Worker()
+		// Capture the optional metrics provider before Close, then read
+		// it after Close has drained the async queue.
+		var approvalMetrics evolution.ApprovalGateMetricsProvider
+		if provider, ok := evoSvc.(evolution.ApprovalGateMetricsProvider); ok && cfg.EnableApprovalGate {
+			approvalMetrics = provider
 		}
 		if err := evoSvc.Close(); err != nil {
 			log.Printf("  evolution close error: %v", err)
 		}
-		if workerHandle != nil {
-			snap := workerHandle.ApprovalGateMetricsJSON()
+		if approvalMetrics != nil {
+			snap := approvalMetrics.ApprovalGateMetrics()
 			result.ApprovalGate = &snap
 		}
 		if reviewerTracker != nil {
@@ -2124,7 +2120,7 @@ func appendComparisonSection(b *strings.Builder, title string, c *compareResult)
 // per-mode section in REPORT.md can present a single totals block.
 type approvalGateAggregate struct {
 	tasks   int
-	metrics evolution.ApprovalGateMetricsSnapshot
+	metrics evolution.ApprovalGateMetrics
 }
 
 // aggregateApprovalGate returns a non-nil aggregate only when at least
@@ -2143,6 +2139,7 @@ func aggregateApprovalGate(cases []*taskRunResult) *approvalGateAggregate {
 		agg.metrics.SpecGateRejected += c.ApprovalGate.SpecGateRejected
 		agg.metrics.SafetyGateRejected += c.ApprovalGate.SafetyGateRejected
 		agg.metrics.EffectivenessGateRejected += c.ApprovalGate.EffectivenessGateRejected
+		agg.metrics.HumanGateHeld += c.ApprovalGate.HumanGateHeld
 		agg.metrics.RevisionsPromoted += c.ApprovalGate.RevisionsPromoted
 		agg.metrics.Rollbacks += c.ApprovalGate.Rollbacks
 		agg.metrics.DeletionsApplied += c.ApprovalGate.DeletionsApplied
@@ -2180,8 +2177,8 @@ func appendModeSection(b *strings.Builder, modeRes *modeResult) {
 		fmt.Fprintf(b, "- Quality gate (totals across %d task(s)):\n", agg.tasks)
 		fmt.Fprintf(b, "  - candidates seen: %d, revisions written: %d, revisions promoted: %d\n",
 			agg.metrics.CandidatesSeen, agg.metrics.RevisionsWritten, agg.metrics.RevisionsPromoted)
-		fmt.Fprintf(b, "  - spec-gate rejected: %d, safety-gate rejected: %d, effectiveness-gate held: %d, shadow bypassed: %d\n",
-			agg.metrics.SpecGateRejected, agg.metrics.SafetyGateRejected, agg.metrics.EffectivenessGateRejected, agg.metrics.ShadowModeBypassed)
+		fmt.Fprintf(b, "  - spec-gate rejected: %d, safety-gate rejected: %d, effectiveness-gate held: %d, human-gate held: %d, shadow bypassed: %d\n",
+			agg.metrics.SpecGateRejected, agg.metrics.SafetyGateRejected, agg.metrics.EffectivenessGateRejected, agg.metrics.HumanGateHeld, agg.metrics.ShadowModeBypassed)
 		fmt.Fprintf(b, "  - creates applied: %d, updates applied: %d, deletions applied: %d\n",
 			agg.metrics.CreatesApplied, agg.metrics.UpdatesApplied, agg.metrics.DeletionsApplied)
 	}

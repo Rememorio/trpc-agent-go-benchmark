@@ -4,7 +4,7 @@ go 1.21
 
 require (
 	github.com/stretchr/testify v1.10.0
-	trpc.group/trpc-go/trpc-agent-go v0.0.0-20260417095959-7e982e308202
+	trpc.group/trpc-go/trpc-agent-go v1.10.1-0.20260616104537-c6c3bb29ab60
 )
 
 require (
@@ -54,5 +54,3 @@ require (
 	trpc.group/trpc-go/trpc-a2a-go v0.2.5 // indirect
 	trpc.group/trpc-go/trpc-mcp-go v0.0.10 // indirect
 )
-
-replace trpc.group/trpc-go/trpc-agent-go => github.com/Rememorio/trpc-agent-go v0.0.0-20260429115354-9263d543aa7d
