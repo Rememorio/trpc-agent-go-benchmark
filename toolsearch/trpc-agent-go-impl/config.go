@@ -16,25 +16,41 @@ import (
 	"strings"
 )
 
+// Mode selects how the toolsearch plugin is wired for a benchmark run.
+//
+// The refactored plugin no longer has an "LLM picks top-K" mode: the model
+// itself calls the tool_search function against a namespace catalog. What varies
+// is the query-resolution backend and how loaded tools are exposed:
+//
+//   - none      — no plugin; every tool is handed to the agent directly (baseline).
+//   - keyword   — NewPlugin + WithToolboxes; tool_search resolves "queries" with the
+//     built-in keyword matcher (the new default).
+//   - knowledge — as keyword, plus WithToolKnowledge so "queries" are ranked by
+//     embedding (vector) similarity instead of keyword overlap.
+//   - calltool  — as keyword, plus WithEnableCallTool so the model sees exactly two
+//     tools (tool_search + call_tool) regardless of how many are loaded.
 type Mode string
 
 const (
 	ModeNone            Mode = "none"
-	ModeLLMSearch       Mode = "llm"
+	ModeKeywordSearch   Mode = "keyword"
 	ModeKnowledgeSearch Mode = "knowledge"
+	ModeCallTool        Mode = "calltool"
 )
 
 func ParseMode(s string) (Mode, error) {
 	s = strings.ToLower(strings.TrimSpace(s))
 	switch s {
-	case "", string(ModeLLMSearch):
-		return ModeLLMSearch, nil
+	case "", string(ModeKeywordSearch):
+		return ModeKeywordSearch, nil
 	case string(ModeNone):
 		return ModeNone, nil
 	case string(ModeKnowledgeSearch):
 		return ModeKnowledgeSearch, nil
+	case string(ModeCallTool):
+		return ModeCallTool, nil
 	default:
-		return "", fmt.Errorf("invalid mode: %q (valid: none|llm|knowledge)", s)
+		return "", fmt.Errorf("invalid mode: %q (valid: none|keyword|knowledge|calltool)", s)
 	}
 }
 

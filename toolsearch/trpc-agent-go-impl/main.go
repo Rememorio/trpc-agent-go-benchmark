@@ -27,17 +27,18 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/registry"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 	metriclocal "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/local"
+	metricregistry "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/registry"
 )
 
 const (
 	defaultAppName   = "toolsearch-benchmark"
-	defaultEvalSetID = "toolsearch-mathtools-multiturn"
+	defaultEvalSetID = "toolsearch-catalog-multiturn"
 )
 
 func main() {
 	var (
 		flagModel      = flag.String("model", defaultModelName(), "chat model name (e.g. deepseek-chat, gpt-4o-mini)")
-		flagMode       = flag.String("mode", string(ModeLLMSearch), "toolsearch mode: none | llm | knowledge")
+		flagMode       = flag.String("mode", string(ModeKeywordSearch), "toolsearch mode: none | keyword | knowledge | calltool")
 		flagMaxTools   = flag.Int("max-tools", 3, "max tools selected by toolsearch")
 		flagEmbedModel = flag.String("embed-model", "text-embedding-3-small", "embedding model name (knowledge mode)")
 		flagDataDir    = flag.String("data-dir", "../data", "base dir for evalset/metrics")
@@ -95,6 +96,15 @@ func main() {
 	evalResultManager := evalresultlocal.New(evalresult.WithBaseDir(cfg.OutputDir))
 	reg := registry.New()
 
+	// Metric registry: register the call_tool-unwrapping tool-trajectory compare
+	// referenced by the metrics file (compareName). It normalizes call_tool-mode
+	// trajectories and is a no-op for the other modes.
+	metricReg := metricregistry.New()
+	must(
+		metricReg.RegisterToolTrajectoryCompare(compareNameUnwrapCallTool, unwrapCallToolCompare()),
+		"register tool trajectory compare",
+	)
+
 	agentEvaluator, err := evaluation.New(
 		cfg.AppName,
 		baseRunner,
@@ -102,6 +112,7 @@ func main() {
 		evaluation.WithMetricManager(metricManager),
 		evaluation.WithEvalResultManager(evalResultManager),
 		evaluation.WithRegistry(reg),
+		evaluation.WithMetricRegistry(metricReg),
 		evaluation.WithNumRuns(cfg.NumRuns),
 	)
 	must(err, "create evaluation")
