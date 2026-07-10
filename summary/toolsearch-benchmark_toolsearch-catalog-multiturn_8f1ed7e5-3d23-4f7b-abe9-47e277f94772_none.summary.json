@@ -1,0 +1,956 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-07-09T20:43:02.091036+08:00",
+  "config": {
+    "appName": "toolsearch-benchmark",
+    "evalSetId": "toolsearch-catalog-multiturn",
+    "mode": "none",
+    "modelName": "deepseek-v4-flash",
+    "embedModel": "text-embedding-3-small",
+    "maxTools": 5,
+    "numRuns": 1,
+    "dataDir": "toolsearch/data",
+    "outputDir": "toolsearch/output"
+  },
+  "result": {
+    "overallStatus": "failed",
+    "executionTimeMs": 1228282,
+    "wallTimeMs": 1228282,
+    "evalSetResultId": "toolsearch-benchmark_toolsearch-catalog-multiturn_8f1ed7e5-3d23-4f7b-abe9-47e277f94772"
+  },
+  "tokens": {
+    "chat": {
+      "prompt": 5552765,
+      "completion": 50670,
+      "total": 5603435
+    },
+    "toolsearch": {
+      "prompt": 0,
+      "completion": 0,
+      "total": 0
+    },
+    "total": {
+      "prompt": 5552765,
+      "completion": 50670,
+      "total": 5603435
+    }
+  },
+  "cases": [
+    {
+      "evalCaseId": "filesystem",
+      "overallStatus": "passed",
+      "runs": [
+        {
+          "runId": 1,
+          "finalEvalStatus": "passed",
+          "sessionId": "d9ddb781-6e10-462c-998a-dc86c74d399f",
+          "turns": [
+            {
+              "turnId": "fs-01",
+              "metricScore": 1,
+              "expectedTool": "write_file",
+              "actualTools": [
+                "write_file"
+              ],
+              "durationMs": 4073,
+              "chatTokens": 18168,
+              "toolsearchTokens": 0
+            },
+            {
+              "turnId": "fs-02",
+              "metricScore": 1,
+              "expectedTool": "read_file",
+              "actualTools": [
+                "read_file",
+                "get_file_info",
+                "read_file",
+                "list_directory",
+                "run_command",
+                "run_command",
+                "run_command",
+                "find_files"
+              ],
+              "durationMs": 22733,
+              "chatTokens": 87625,
+              "toolsearchTokens": 0
+            },
+            {
+              "turnId": "fs-03",
+              "metricScore": 1,
+              "expectedTool": "list_directory",
+              "actualTools": [
+                "list_directory",
+                "find_files",
+                "get_file_info",
+                "list_directory",
+                "run_command",
+                "run_command",
+                "run_command",
+                "find_files",
+                "run_command",
+                "run_command",
+                "read_file",
+                "run_command",
+                "run_command",
+                "write_file",
+                "list_directory",
+                "run_command",
+                "read_file",
+                "get_file_info",
+                "get_file_info",
+                "calculator",
+                "delete_file",
+                "get_env_var",
+                "generate_uuid",
+                "find_files",
+                "run_command",
+                "run_command",
+                "read_file",
+                "run_command",
+                "read_file",
+                "run_command",
+                "http_get",
+                "run_command",
+                "run_command",
+                "read_file",
+                "base64_encode",
+                "run_command",
+                "run_command",
+                "read_file",
+                "base64_decode",
+                "find_files",
+                "parse_json",
+                "check_url_status",
+                "run_command",
+                "run_command",
+                "read_file",
+                "run_command",
+                "list_directory"
+              ],
+              "durationMs": 137473,
+              "chatTokens": 655043,
+              "toolsearchTokens": 0
+            },
+            {
+              "turnId": "fs-04",
+              "metricScore": 1,
+              "expectedTool": "search_file_content|find_files",
+              "actualTools": [
+                "search_file_content",
+                "run_command",
+                "read_file",
+                "run_command",
+                "run_command",
+                "run_command",
+                "read_file",
+                "base64_encode",
+                "find_files",
+                "find_files",
+                "run_command",
+                "run_command",
+                "calculator",
+                "run_command",
+                "run_command",
+                "run_command",
+                "get_file_info",
+                "read_file",
+                "run_command",
+                "search_file_content",
+                "run_command",
+                "run_command",
+                "read_file",
+                "run_command",
+                "run_command",
+                "run_command",
+                "run_command",
+                "format_date",
+                "run_command",
+                "get_current_time",
+                "run_command",
+                "run_command",
+                "read_file",
+                "run_command"
+              ],
+              "durationMs": 109485,
+              "chatTokens": 685672,
+              "toolsearchTokens": 0
+            },
+            {
+              "turnId": "fs-05",
+              "metricScore": 1,
+              "expectedTool": "move_file",
+              "actualTools": [
+                "move_file"
+              ],
+              "durationMs": 4514,
+              "chatTokens": 45000,
+              "toolsearchTokens": 0
+            },
+            {
+              "turnId": "fs-06",
+              "metricScore": 1,
+              "expectedTool": "delete_file",
+              "actualTools": [
+                "delete_file"
+              ],
+              "durationMs": 4214,
+              "chatTokens": 45254,
+              "toolsearchTokens": 0
+            },
+            {
+              "turnId": "fs-07",
+              "metricScore": 1,
+              "expectedTool": "create_directory",
+              "actualTools": [
+                "create_directory"
+              ],
+              "durationMs": 3961,
+              "chatTokens": 45498,
+              "toolsearchTokens": 0
+            },
+            {
+              "turnId": "fs-08",
+              "metricScore": 1,
+              "expectedTool": "get_file_info",
+              "actualTools": [
+                "get_file_info",
+                "run_command",
+                "run_command",
+                "read_file",
+                "run_command",
+                "run_command",
+                "run_command",
+                "read_file"
+              ],
+              "durationMs": 22479,
+              "chatTokens": 209020,
+              "toolsearchTokens": 0
+            },
+            {
+              "turnId": "fs-09",
+              "metricScore": 1,
+              "expectedTool": "append_file",
+              "actualTools": [
+                "append_file"
+              ],
+              "durationMs": 5331,
+              "chatTokens": 48070,
+              "toolsearchTokens": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "evalCaseId": "git",
+      "overallStatus": "passed",
+      "runs": [
+        {
+          "runId": 1,
+          "finalEvalStatus": "passed",
+          "sessionId": "7e3f8ce6-f44a-400a-a094-53ced4328b47",
+          "turns": [
+            {
+              "turnId": "git-01",
+              "metricScore": 1,
+              "expectedTool": "git_status",
+              "actualTools": [
+                "git_status",
+                "git_diff",
+                "git_log",
+                "list_directory",
+                "find_files",
+                "run_command",
+                "run_command",
+                "run_command",
+                "get_file_info",
+                "run_command",
+                "run_command",
+                "run_command",
+                "run_command",
+                "run_command",
+                "get_env_var"
+              ],
+              "durationMs": 45630,
+              "chatTokens": 158242,
+              "toolsearchTokens": 0
+            },
+            {
+              "turnId": "git-02",
+              "metricScore": 1,
+              "expectedTool": "git_diff",
+              "actualTools": [
+                "git_diff",
+                "git_diff"
+              ],
+              "durationMs": 7514,
+              "chatTokens": 33860,
+              "toolsearchTokens": 0
+            },
+            {
+              "turnId": "git-03",
+              "metricScore": 1,
+              "expectedTool": "git_add",
+              "actualTools": [
+                "find_files",
+                "run_command",
+                "run_command",
+                "get_file_info",
+                "read_file",
+                "list_directory",
+                "write_file",
+                "git_add"
+              ],
+              "durationMs": 24979,
+              "chatTokens": 107932,
+              "toolsearchTokens": 0
+            },
+            {
+              "turnId": "git-04",
+              "metricScore": 1,
+              "expectedTool": "git_commit",
+              "actualTools": [
+                "git_commit",
+                "git_log",
+                "git_status"
+              ],
+              "durationMs": 7962,
+              "chatTokens": 50296,
+              "toolsearchTokens": 0
+            },
+            {
+              "turnId": "git-05",
+              "metricScore": 1,
+              "expectedTool": "git_log",
+              "actualTools": [
+                "git_log",
+                "run_command",
+                "run_command",
+                "read_file",
+                "get_file_info",
+                "run_command",
+                "run_command",
+                "base64_encode",
+                "run_command",
+                "run_command",
+                "run_command",
+                "run_command",
+                "read_file",
+                "run_command",
+                "run_command",
+                "run_command",
+                "run_command",
+                "get_file_info"
+              ],
+              "durationMs": 62535,
+              "chatTokens": 270717,
+              "toolsearchTokens": 0
+            },
+            {
+              "turnId": "git-06",
+              "metricScore": 1,
+              "expectedTool": "git_checkout",
+              "actualTools": [
+                "git_branch",
+                "run_command",
+                "git_branch",
+                "git_checkout"
+              ],
+              "durationMs": 10530,
+              "chatTokens": 80057,
+              "toolsearchTokens": 0
+            },
+            {
+              "turnId": "git-07",
+              "metricScore": 1,
+              "expectedTool": "git_push",
+              "actualTools": [
+                "run_command",
+                "git_push"
+              ],
+              "durationMs": 7288,
+              "chatTokens": 49457,
+              "toolsearchTokens": 0
+            },
+            {
+              "turnId": "git-08",
+              "metricScore": 1,
+              "expectedTool": "git_pull",
+              "actualTools": [
+                "git_pull"
+              ],
+              "durationMs": 4160,
+              "chatTokens": 33343,
+              "toolsearchTokens": 0
+            },
+            {
+              "turnId": "git-09",
+              "metricScore": 1,
+              "expectedTool": "git_blame",
+              "actualTools": [
+                "git_blame",
+                "run_command",
+                "read_file",
+                "run_command",
+                "run_command",
+                "get_file_info",
+                "run_command",
+                "run_command",
+                "read_file",
+                "run_command",
+                "run_command"
+              ],
+              "durationMs": 31780,
+              "chatTokens": 208731,
+              "toolsearchTokens": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "evalCaseId": "document",
+      "overallStatus": "failed",
+      "runs": [
+        {
+          "runId": 1,
+          "finalEvalStatus": "failed",
+          "sessionId": "39b09ed1-8981-4b4f-b371-ef81f9e4fc84",
+          "turns": [
+            {
+              "turnId": "doc-01",
+              "metricScore": 1,
+              "expectedTool": "create_document",
+              "actualTools": [
+                "create_document"
+              ],
+              "durationMs": 6415,
+              "chatTokens": 18414,
+              "toolsearchTokens": 0
+            },
+            {
+              "turnId": "doc-02",
+              "metricScore": 1,
+              "expectedTool": "export_pdf",
+              "actualTools": [
+                "find_files",
+                "list_directory",
+                "search_file_content",
+                "run_command",
+                "run_command",
+                "run_command",
+                "run_command",
+                "write_file",
+                "export_pdf"
+              ],
+              "durationMs": 25996,
+              "chatTokens": 99119,
+              "toolsearchTokens": 0
+            },
+            {
+              "turnId": "doc-03",
+              "metricScore": 1,
+              "expectedTool": "convert_markdown_to_html",
+              "actualTools": [
+                "convert_markdown_to_html",
+                "run_command",
+                "find_files",
+                "run_command",
+                "run_command",
+                "read_file",
+                "write_file",
+                "convert_markdown_to_html",
+                "run_command",
+                "run_command",
+                "run_command",
+                "list_directory",
+                "run_command",
+                "get_file_info",
+                "get_file_info",
+                "get_file_info"
+              ],
+              "durationMs": 40299,
+              "chatTokens": 194751,
+              "toolsearchTokens": 0
+            },
+            {
+              "turnId": "doc-04",
+              "metricScore": 0,
+              "expectedTool": "summarize_document",
+              "actualTools": [
+                "find_files",
+                "run_command"
+              ],
+              "durationMs": 9194,
+              "chatTokens": 37847,
+              "toolsearchTokens": 0
+            },
+            {
+              "turnId": "doc-05",
+              "metricScore": 0,
+              "expectedTool": "translate_document",
+              "actualTools": [
+                "run_command"
+              ],
+              "durationMs": 4725,
+              "chatTokens": 25787,
+              "toolsearchTokens": 0
+            },
+            {
+              "turnId": "doc-06",
+              "metricScore": 0,
+              "expectedTool": "extract_document_text",
+              "actualTools": [
+                "run_command"
+              ],
+              "durationMs": 5473,
+              "chatTokens": 26152,
+              "toolsearchTokens": 0
+            },
+            {
+              "turnId": "doc-07",
+              "metricScore": 0,
+              "expectedTool": "merge_documents",
+              "actualTools": [
+                "run_command"
+              ],
+              "durationMs": 4378,
+              "chatTokens": 26503,
+              "toolsearchTokens": 0
+            },
+            {
+              "turnId": "doc-08",
+              "metricScore": 0,
+              "expectedTool": "get_document_outline",
+              "actualTools": [
+                "run_command"
+              ],
+              "durationMs": 5339,
+              "chatTokens": 26914,
+              "toolsearchTokens": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "evalCaseId": "process-network",
+      "overallStatus": "passed",
+      "runs": [
+        {
+          "runId": 1,
+          "finalEvalStatus": "passed",
+          "sessionId": "28e029a4-aae4-4323-92a5-ad03625c1e70",
+          "turns": [
+            {
+              "turnId": "pn-01",
+              "metricScore": 1,
+              "expectedTool": "run_command",
+              "actualTools": [
+                "run_command",
+                "run_command"
+              ],
+              "durationMs": 6919,
+              "chatTokens": 27351,
+              "toolsearchTokens": 0
+            },
+            {
+              "turnId": "pn-02",
+              "metricScore": 1,
+              "expectedTool": "list_processes",
+              "actualTools": [
+                "list_processes",
+                "list_processes",
+                "run_command",
+                "run_command"
+              ],
+              "durationMs": 15702,
+              "chatTokens": 47567,
+              "toolsearchTokens": 0
+            },
+            {
+              "turnId": "pn-03",
+              "metricScore": 1,
+              "expectedTool": "kill_process",
+              "actualTools": [
+                "kill_process"
+              ],
+              "durationMs": 3841,
+              "chatTokens": 20062,
+              "toolsearchTokens": 0
+            },
+            {
+              "turnId": "pn-04",
+              "metricScore": 1,
+              "expectedTool": "get_env_var",
+              "actualTools": [
+                "get_env_var",
+                "run_command",
+                "run_command",
+                "get_env_var",
+                "run_command",
+                "run_command",
+                "read_file",
+                "get_env_var"
+              ],
+              "durationMs": 20518,
+              "chatTokens": 94795,
+              "toolsearchTokens": 0
+            },
+            {
+              "turnId": "pn-05",
+              "metricScore": 1,
+              "expectedTool": "http_get",
+              "actualTools": [
+                "http_get",
+                "run_command",
+                "read_file",
+                "get_file_info",
+                "http_get",
+                "check_url_status",
+                "run_command",
+                "read_file",
+                "get_file_info",
+                "run_command",
+                "run_command",
+                "run_command",
+                "run_command",
+                "run_command",
+                "run_command",
+                "run_command"
+              ],
+              "durationMs": 47996,
+              "chatTokens": 202884,
+              "toolsearchTokens": 0
+            },
+            {
+              "turnId": "pn-06",
+              "metricScore": 1,
+              "expectedTool": "http_post",
+              "actualTools": [
+                "http_post"
+              ],
+              "durationMs": 4974,
+              "chatTokens": 26311,
+              "toolsearchTokens": 0
+            },
+            {
+              "turnId": "pn-07",
+              "metricScore": 1,
+              "expectedTool": "download_file",
+              "actualTools": [
+                "download_file",
+                "get_file_info"
+              ],
+              "durationMs": 7260,
+              "chatTokens": 40172,
+              "toolsearchTokens": 0
+            },
+            {
+              "turnId": "pn-08",
+              "metricScore": 1,
+              "expectedTool": "upload_file",
+              "actualTools": [
+                "upload_file"
+              ],
+              "durationMs": 4248,
+              "chatTokens": 27210,
+              "toolsearchTokens": 0
+            },
+            {
+              "turnId": "pn-09",
+              "metricScore": 1,
+              "expectedTool": "check_url_status",
+              "actualTools": [
+                "check_url_status"
+              ],
+              "durationMs": 4091,
+              "chatTokens": 27499,
+              "toolsearchTokens": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "evalCaseId": "iam-crm",
+      "overallStatus": "passed",
+      "runs": [
+        {
+          "runId": 1,
+          "finalEvalStatus": "passed",
+          "sessionId": "ecb2262f-dc8d-45b6-ab60-59e025624206",
+          "turns": [
+            {
+              "turnId": "ic-01",
+              "metricScore": 1,
+              "expectedTool": "delete_user",
+              "actualTools": [
+                "list_users",
+                "list_users",
+                "list_users",
+                "run_command",
+                "create_user",
+                "list_users",
+                "run_command",
+                "run_command",
+                "list_users",
+                "run_command",
+                "search_file_content",
+                "run_command",
+                "read_file",
+                "run_command",
+                "create_user",
+                "list_users",
+                "parse_json",
+                "run_command",
+                "run_command",
+                "read_file",
+                "list_users",
+                "run_command",
+                "run_command",
+                "read_file",
+                "find_files",
+                "parse_json",
+                "list_users",
+                "list_directory",
+                "get_env_var",
+                "calculator",
+                "get_current_time",
+                "list_users",
+                "get_file_info",
+                "run_command",
+                "read_file",
+                "parse_json",
+                "base64_encode",
+                "list_users",
+                "list_users",
+                "http_get",
+                "get_user",
+                "generate_uuid",
+                "list_users",
+                "list_directory",
+                "get_user",
+                "get_user",
+                "run_command",
+                "delete_user"
+              ],
+              "durationMs": 334655,
+              "chatTokens": 756977,
+              "toolsearchTokens": 0
+            },
+            {
+              "turnId": "ic-02",
+              "metricScore": 1,
+              "expectedTool": "create_user",
+              "actualTools": [
+                "create_user"
+              ],
+              "durationMs": 5023,
+              "chatTokens": 59146,
+              "toolsearchTokens": 0
+            },
+            {
+              "turnId": "ic-03",
+              "metricScore": 1,
+              "expectedTool": "grant_role",
+              "actualTools": [
+                "list_users",
+                "grant_role"
+              ],
+              "durationMs": 8107,
+              "chatTokens": 89447,
+              "toolsearchTokens": 0
+            },
+            {
+              "turnId": "ic-04",
+              "metricScore": 1,
+              "expectedTool": "revoke_role",
+              "actualTools": [
+                "revoke_role"
+              ],
+              "durationMs": 5275,
+              "chatTokens": 60125,
+              "toolsearchTokens": 0
+            },
+            {
+              "turnId": "ic-05",
+              "metricScore": 1,
+              "expectedTool": "delete_customer",
+              "actualTools": [
+                "list_customers",
+                "list_customers",
+                "list_customers",
+                "delete_customer"
+              ],
+              "durationMs": 14056,
+              "chatTokens": 152499,
+              "toolsearchTokens": 0
+            },
+            {
+              "turnId": "ic-06",
+              "metricScore": 1,
+              "expectedTool": "create_customer",
+              "actualTools": [
+                "create_customer"
+              ],
+              "durationMs": 4425,
+              "chatTokens": 61681,
+              "toolsearchTokens": 0
+            },
+            {
+              "turnId": "ic-07",
+              "metricScore": 1,
+              "expectedTool": "add_contact",
+              "actualTools": [
+                "list_customers",
+                "add_contact"
+              ],
+              "durationMs": 6830,
+              "chatTokens": 93256,
+              "toolsearchTokens": 0
+            },
+            {
+              "turnId": "ic-08",
+              "metricScore": 1,
+              "expectedTool": "list_customers",
+              "actualTools": [
+                "list_customers",
+                "list_customers"
+              ],
+              "durationMs": 7298,
+              "chatTokens": 93774,
+              "toolsearchTokens": 0
+            },
+            {
+              "turnId": "ic-09",
+              "metricScore": 1,
+              "expectedTool": "update_customer",
+              "actualTools": [
+                "list_customers",
+                "update_customer",
+                "update_customer"
+              ],
+              "durationMs": 13090,
+              "chatTokens": 127501,
+              "toolsearchTokens": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "evalCaseId": "default-tools",
+      "overallStatus": "passed",
+      "runs": [
+        {
+          "runId": 1,
+          "finalEvalStatus": "passed",
+          "sessionId": "3b7ef5b2-8aff-4763-8eff-cc02b07f96ef",
+          "turns": [
+            {
+              "turnId": "def-01",
+              "metricScore": 1,
+              "expectedTool": "calculator",
+              "actualTools": [
+                "calculator",
+                "calculator",
+                "calculator",
+                "calculator"
+              ],
+              "durationMs": 16067,
+              "chatTokens": 47009,
+              "toolsearchTokens": 0
+            },
+            {
+              "turnId": "def-02",
+              "metricScore": 1,
+              "expectedTool": "get_current_time",
+              "actualTools": [
+                "get_current_time",
+                "get_current_time",
+                "get_current_time",
+                "get_current_time",
+                "run_command",
+                "run_command",
+                "web_search",
+                "http_get"
+              ],
+              "durationMs": 24500,
+              "chatTokens": 92765,
+              "toolsearchTokens": 0
+            },
+            {
+              "turnId": "def-03",
+              "metricScore": 1,
+              "expectedTool": "generate_qrcode",
+              "actualTools": [
+                "generate_qrcode",
+                "generate_qrcode",
+                "generate_qrcode"
+              ],
+              "durationMs": 13534,
+              "chatTokens": 45091,
+              "toolsearchTokens": 0
+            },
+            {
+              "turnId": "def-04",
+              "metricScore": 1,
+              "expectedTool": "base64_encode",
+              "actualTools": [
+                "base64_encode"
+              ],
+              "durationMs": 6114,
+              "chatTokens": 23140,
+              "toolsearchTokens": 0
+            },
+            {
+              "turnId": "def-05",
+              "metricScore": 1,
+              "expectedTool": "base64_decode",
+              "actualTools": [
+                "base64_decode"
+              ],
+              "durationMs": 4943,
+              "chatTokens": 24267,
+              "toolsearchTokens": 0
+            },
+            {
+              "turnId": "def-06",
+              "metricScore": 1,
+              "expectedTool": "parse_json",
+              "actualTools": [
+                "parse_json"
+              ],
+              "durationMs": 4678,
+              "chatTokens": 24682,
+              "toolsearchTokens": 0
+            },
+            {
+              "turnId": "def-07",
+              "metricScore": 1,
+              "expectedTool": "format_date",
+              "actualTools": [
+                "format_date"
+              ],
+              "durationMs": 6164,
+              "chatTokens": 25210,
+              "toolsearchTokens": 0
+            },
+            {
+              "turnId": "def-08",
+              "metricScore": 1,
+              "expectedTool": "generate_uuid",
+              "actualTools": [
+                "generate_uuid"
+              ],
+              "durationMs": 4474,
+              "chatTokens": 25542,
+              "toolsearchTokens": 0
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

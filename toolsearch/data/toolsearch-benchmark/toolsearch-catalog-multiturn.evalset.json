@@ -1,0 +1,303 @@
+{
+  "evalSetId": "toolsearch-catalog-multiturn",
+  "name": "toolsearch-catalog-multiturn",
+  "description": "Natural multi-turn chats for the refactored tool_search plugin over a 7-namespace deferred-tool catalog (filesystem, git, document, process, network, iam, crm) plus no-namespace default tools. Each case is one session; each turn's expected tool(s) drive the tool-trajectory metric (regex, subset-matching, so 'tool_a|tool_b' accepts either).",
+  "evalCases": [
+    {
+      "evalId": "filesystem",
+      "conversation": [
+        {
+          "invocationId": "fs-01",
+          "userContent": { "role": "user", "content": "Save the text 'hello world' to notes.txt for me." },
+          "tools": [{ "id": "tool_use_1", "name": "write_file" }]
+        },
+        {
+          "invocationId": "fs-02",
+          "userContent": { "role": "user", "content": "Now read the contents of config.yaml back to me." },
+          "tools": [{ "id": "tool_use_2", "name": "read_file" }]
+        },
+        {
+          "invocationId": "fs-03",
+          "userContent": { "role": "user", "content": "List all the files in the src directory." },
+          "tools": [{ "id": "tool_use_3", "name": "list_directory" }]
+        },
+        {
+          "invocationId": "fs-04",
+          "userContent": { "role": "user", "content": "Search for TODO comments across the code." },
+          "tools": [{ "id": "tool_use_4", "name": "search_file_content|find_files" }]
+        },
+        {
+          "invocationId": "fs-05",
+          "userContent": { "role": "user", "content": "Rename a.txt to b.txt." },
+          "tools": [{ "id": "tool_use_5", "name": "move_file" }]
+        },
+        {
+          "invocationId": "fs-06",
+          "userContent": { "role": "user", "content": "Delete the temporary file tmp.log." },
+          "tools": [{ "id": "tool_use_6", "name": "delete_file" }]
+        },
+        {
+          "invocationId": "fs-07",
+          "userContent": { "role": "user", "content": "Create a new build directory." },
+          "tools": [{ "id": "tool_use_7", "name": "create_directory" }]
+        },
+        {
+          "invocationId": "fs-08",
+          "userContent": { "role": "user", "content": "Check the size and last-modified time of notes.txt." },
+          "tools": [{ "id": "tool_use_8", "name": "get_file_info" }]
+        },
+        {
+          "invocationId": "fs-09",
+          "userContent": { "role": "user", "content": "Append a log line to the end of notes.txt." },
+          "tools": [{ "id": "tool_use_9", "name": "append_file" }]
+        }
+      ],
+      "sessionInput": { "appName": "toolsearch-benchmark", "userId": "user" }
+    },
+    {
+      "evalId": "git",
+      "conversation": [
+        {
+          "invocationId": "git-01",
+          "userContent": { "role": "user", "content": "Check what changes have been made in the current repository." },
+          "tools": [{ "id": "tool_use_1", "name": "git_status" }]
+        },
+        {
+          "invocationId": "git-02",
+          "userContent": { "role": "user", "content": "Show me the uncommitted diff." },
+          "tools": [{ "id": "tool_use_2", "name": "git_diff" }]
+        },
+        {
+          "invocationId": "git-03",
+          "userContent": { "role": "user", "content": "Stage the file main.go for the next commit." },
+          "tools": [{ "id": "tool_use_3", "name": "git_add" }]
+        },
+        {
+          "invocationId": "git-04",
+          "userContent": { "role": "user", "content": "Create a commit with the message 'fix bug'." },
+          "tools": [{ "id": "tool_use_4", "name": "git_commit" }]
+        },
+        {
+          "invocationId": "git-05",
+          "userContent": { "role": "user", "content": "View the recent commit history." },
+          "tools": [{ "id": "tool_use_5", "name": "git_log" }]
+        },
+        {
+          "invocationId": "git-06",
+          "userContent": { "role": "user", "content": "Switch to the develop branch." },
+          "tools": [{ "id": "tool_use_6", "name": "git_checkout" }]
+        },
+        {
+          "invocationId": "git-07",
+          "userContent": { "role": "user", "content": "Push my local commits to remote." },
+          "tools": [{ "id": "tool_use_7", "name": "git_push" }]
+        },
+        {
+          "invocationId": "git-08",
+          "userContent": { "role": "user", "content": "Pull the latest code from remote." },
+          "tools": [{ "id": "tool_use_8", "name": "git_pull" }]
+        },
+        {
+          "invocationId": "git-09",
+          "userContent": { "role": "user", "content": "Show me who last modified each line of main.go." },
+          "tools": [{ "id": "tool_use_9", "name": "git_blame" }]
+        }
+      ],
+      "sessionInput": { "appName": "toolsearch-benchmark", "userId": "user" }
+    },
+    {
+      "evalId": "document",
+      "conversation": [
+        {
+          "invocationId": "doc-01",
+          "userContent": { "role": "user", "content": "Create a new markdown document." },
+          "tools": [{ "id": "tool_use_1", "name": "create_document" }]
+        },
+        {
+          "invocationId": "doc-02",
+          "userContent": { "role": "user", "content": "Export this report as a PDF." },
+          "tools": [{ "id": "tool_use_2", "name": "export_pdf" }]
+        },
+        {
+          "invocationId": "doc-03",
+          "userContent": { "role": "user", "content": "Convert this markdown into a webpage." },
+          "tools": [{ "id": "tool_use_3", "name": "convert_markdown_to_html" }]
+        },
+        {
+          "invocationId": "doc-04",
+          "userContent": { "role": "user", "content": "Summarize this long document and extract the key points." },
+          "tools": [{ "id": "tool_use_4", "name": "summarize_document" }]
+        },
+        {
+          "invocationId": "doc-05",
+          "userContent": { "role": "user", "content": "Translate this document into English." },
+          "tools": [{ "id": "tool_use_5", "name": "translate_document" }]
+        },
+        {
+          "invocationId": "doc-06",
+          "userContent": { "role": "user", "content": "Extract the plain text from this PDF." },
+          "tools": [{ "id": "tool_use_6", "name": "extract_document_text" }]
+        },
+        {
+          "invocationId": "doc-07",
+          "userContent": { "role": "user", "content": "Merge several documents into one file." },
+          "tools": [{ "id": "tool_use_7", "name": "merge_documents" }]
+        },
+        {
+          "invocationId": "doc-08",
+          "userContent": { "role": "user", "content": "List the section outline of this document." },
+          "tools": [{ "id": "tool_use_8", "name": "get_document_outline" }]
+        }
+      ],
+      "sessionInput": { "appName": "toolsearch-benchmark", "userId": "user" }
+    },
+    {
+      "evalId": "process-network",
+      "conversation": [
+        {
+          "invocationId": "pn-01",
+          "userContent": { "role": "user", "content": "Run the shell command 'npm install' for me." },
+          "tools": [{ "id": "tool_use_1", "name": "run_command" }]
+        },
+        {
+          "invocationId": "pn-02",
+          "userContent": { "role": "user", "content": "List the currently running processes." },
+          "tools": [{ "id": "tool_use_2", "name": "list_processes" }]
+        },
+        {
+          "invocationId": "pn-03",
+          "userContent": { "role": "user", "content": "Kill the process with PID 1234." },
+          "tools": [{ "id": "tool_use_3", "name": "kill_process" }]
+        },
+        {
+          "invocationId": "pn-04",
+          "userContent": { "role": "user", "content": "Read the value of the PATH environment variable." },
+          "tools": [{ "id": "tool_use_4", "name": "get_env_var" }]
+        },
+        {
+          "invocationId": "pn-05",
+          "userContent": { "role": "user", "content": "Send an HTTP GET request to https://api.example.com/status and show me the response." },
+          "tools": [{ "id": "tool_use_5", "name": "http_get" }]
+        },
+        {
+          "invocationId": "pn-06",
+          "userContent": { "role": "user", "content": "Send a POST request to www.tencent.com with the JSON body [\"hello\"]." },
+          "tools": [{ "id": "tool_use_6", "name": "http_post" }]
+        },
+        {
+          "invocationId": "pn-07",
+          "userContent": { "role": "user", "content": "Download the file from www.demo.com/1.txt to disk." },
+          "tools": [{ "id": "tool_use_7", "name": "download_file" }]
+        },
+        {
+          "invocationId": "pn-08",
+          "userContent": { "role": "user", "content": "Upload the local file report.pdf to the server at https://demo.com/upload." },
+          "tools": [{ "id": "tool_use_8", "name": "upload_file" }]
+        },
+        {
+          "invocationId": "pn-09",
+          "userContent": { "role": "user", "content": "Check whether www.demo.com is reachable." },
+          "tools": [{ "id": "tool_use_9", "name": "check_url_status" }]
+        }
+      ],
+      "sessionInput": { "appName": "toolsearch-benchmark", "userId": "user" }
+    },
+    {
+      "evalId": "iam-crm",
+      "conversation": [
+        {
+          "invocationId": "ic-01",
+          "userContent": { "role": "user", "content": "Delete the user account zhangsan from the identity system." },
+          "tools": [{ "id": "tool_use_1", "name": "delete_user" }]
+        },
+        {
+          "invocationId": "ic-02",
+          "userContent": { "role": "user", "content": "Create a new login user named lisi." },
+          "tools": [{ "id": "tool_use_2", "name": "create_user" }]
+        },
+        {
+          "invocationId": "ic-03",
+          "userContent": { "role": "user", "content": "Grant the admin role to user admin." },
+          "tools": [{ "id": "tool_use_3", "name": "grant_role" }]
+        },
+        {
+          "invocationId": "ic-04",
+          "userContent": { "role": "user", "content": "Revoke the editor role from user zhaoliu." },
+          "tools": [{ "id": "tool_use_4", "name": "revoke_role" }]
+        },
+        {
+          "invocationId": "ic-05",
+          "userContent": { "role": "user", "content": "Now switch to the CRM: delete the customer named Zhang San." },
+          "tools": [{ "id": "tool_use_5", "name": "delete_customer" }]
+        },
+        {
+          "invocationId": "ic-06",
+          "userContent": { "role": "user", "content": "Create a new customer record: Tencent Technology." },
+          "tools": [{ "id": "tool_use_6", "name": "create_customer" }]
+        },
+        {
+          "invocationId": "ic-07",
+          "userContent": { "role": "user", "content": "Add the contact Wang Wu to the customer Tencent." },
+          "tools": [{ "id": "tool_use_7", "name": "add_contact" }]
+        },
+        {
+          "invocationId": "ic-08",
+          "userContent": { "role": "user", "content": "List all customers in the CRM." },
+          "tools": [{ "id": "tool_use_8", "name": "list_customers" }]
+        },
+        {
+          "invocationId": "ic-09",
+          "userContent": { "role": "user", "content": "Update customer Li Si's contact information." },
+          "tools": [{ "id": "tool_use_9", "name": "update_customer" }]
+        }
+      ],
+      "sessionInput": { "appName": "toolsearch-benchmark", "userId": "user" }
+    },
+    {
+      "evalId": "default-tools",
+      "conversation": [
+        {
+          "invocationId": "def-01",
+          "userContent": { "role": "user", "content": "Calculate 3.14 times 256 for me." },
+          "tools": [{ "id": "tool_use_1", "name": "calculator" }]
+        },
+        {
+          "invocationId": "def-02",
+          "userContent": { "role": "user", "content": "What time is it now in UTC?" },
+          "tools": [{ "id": "tool_use_2", "name": "get_current_time" }]
+        },
+        {
+          "invocationId": "def-03",
+          "userContent": { "role": "user", "content": "Generate a QR code for https://github.com." },
+          "tools": [{ "id": "tool_use_3", "name": "generate_qrcode" }]
+        },
+        {
+          "invocationId": "def-04",
+          "userContent": { "role": "user", "content": "Encode the text 'hello world' to base64." },
+          "tools": [{ "id": "tool_use_4", "name": "base64_encode" }]
+        },
+        {
+          "invocationId": "def-05",
+          "userContent": { "role": "user", "content": "Decode the base64 string aGVsbG8gd29ybGQ=." },
+          "tools": [{ "id": "tool_use_5", "name": "base64_decode" }]
+        },
+        {
+          "invocationId": "def-06",
+          "userContent": { "role": "user", "content": "Parse this JSON and pull out the name: {\"name\":\"Zhang San\",\"age\":30}." },
+          "tools": [{ "id": "tool_use_6", "name": "parse_json" }]
+        },
+        {
+          "invocationId": "def-07",
+          "userContent": { "role": "user", "content": "Format the date 2025-01-15 as January 15, 2025." },
+          "tools": [{ "id": "tool_use_7", "name": "format_date" }]
+        },
+        {
+          "invocationId": "def-08",
+          "userContent": { "role": "user", "content": "Generate a random UUID for me." },
+          "tools": [{ "id": "tool_use_8", "name": "generate_uuid" }]
+        }
+      ],
+      "sessionInput": { "appName": "toolsearch-benchmark", "userId": "user" }
+    }
+  ]
+}
