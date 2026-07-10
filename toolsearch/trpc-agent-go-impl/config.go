@@ -27,15 +27,15 @@ import (
 //     built-in keyword matcher (the new default).
 //   - knowledge — as keyword, plus WithToolKnowledge so "queries" are ranked by
 //     embedding (vector) similarity instead of keyword overlap.
-//   - calltool  — as keyword, plus WithEnableCallTool so the model sees exactly two
-//     tools (tool_search + call_tool) regardless of how many are loaded.
+//   - dispatch — as keyword, plus WithInvocationMode(DispatchToolCalls) so the
+//     model sees exactly two tools (tool_search + call_tool) regardless of how many are loaded.
 type Mode string
 
 const (
 	ModeNone            Mode = "none"
 	ModeKeywordSearch   Mode = "keyword"
 	ModeKnowledgeSearch Mode = "knowledge"
-	ModeCallTool        Mode = "calltool"
+	ModeDispatch        Mode = "dispatch"
 )
 
 func ParseMode(s string) (Mode, error) {
@@ -47,10 +47,10 @@ func ParseMode(s string) (Mode, error) {
 		return ModeNone, nil
 	case string(ModeKnowledgeSearch):
 		return ModeKnowledgeSearch, nil
-	case string(ModeCallTool):
-		return ModeCallTool, nil
+	case string(ModeDispatch):
+		return ModeDispatch, nil
 	default:
-		return "", fmt.Errorf("invalid mode: %q (valid: none|keyword|knowledge|calltool)", s)
+		return "", fmt.Errorf("invalid mode: %q (valid: none|keyword|knowledge|dispatch)", s)
 	}
 }
 

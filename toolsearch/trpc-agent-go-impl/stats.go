@@ -162,7 +162,13 @@ func (r *CountingRunner) Run(
 		}()
 		for evt := range ch {
 			if evt != nil && evt.Response != nil && evt.Response.Usage != nil && !evt.Response.IsPartial {
-				r.collector.AddChatUsage(sessionID, turnIndex, evt.Response.Usage)
+				// Attribute the round's usage to the tool-search bucket when this
+				// LLM round's job was to invoke tool_search; otherwise it's chat.
+				if responseInvokesToolSearch(evt.Response) {
+					r.collector.AddToolSearchUsage(sessionID, turnIndex, evt.Response.Usage)
+				} else {
+					r.collector.AddChatUsage(sessionID, turnIndex, evt.Response.Usage)
+				}
 			}
 			out <- evt
 		}
@@ -172,6 +178,32 @@ func (r *CountingRunner) Run(
 }
 
 func (r *CountingRunner) Close() error { return r.base.Close() }
+
+// toolSearchToolName is the name of the meta tool the toolsearch plugin exposes
+// for loading deferred tools (mirrors toolsearch.PluginName / its tool name).
+// A round whose assistant message invokes it is a tool-search round, so its
+// token usage is attributed to the tool-search bucket rather than chat.
+const toolSearchToolName = "tool_search"
+
+// responseInvokesToolSearch reports whether this (final, non-partial) LLM round
+// produced a tool_search call. In keyword/dispatch modes tool_search is a normal
+// function call the model emits; counting those rounds separately splits the
+// retrieval cost out of the chat total. Note: a round that mixes tool_search
+// with other calls is attributed wholly to tool-search — the plugin's policy is
+// one tool_search per round, so this is exact in practice.
+func responseInvokesToolSearch(rsp *model.Response) bool {
+	if rsp == nil {
+		return false
+	}
+	for _, choice := range rsp.Choices {
+		for _, tc := range choice.Message.ToolCalls {
+			if tc.Function.Name == toolSearchToolName {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 func sessionTurnFromContext(ctx context.Context) (sessionID string, turnIndex int, ok bool) {
 	s, okS := ctx.Value(ctxKeySessionID{}).(string)

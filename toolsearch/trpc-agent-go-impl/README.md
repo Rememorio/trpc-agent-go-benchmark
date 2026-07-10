@@ -21,11 +21,11 @@
 - `go run . -model deepseek-chat -mode keyword -evalset toolsearch-catalog-multiturn -max-tools 5`
 
 ### 重要参数
-- `-mode`: `none | keyword | knowledge | calltool`
+- `-mode`: `none | keyword | knowledge | dispatch`
   - `none`：不启用插件，所有工具直接提供给主模型（baseline）
   - `keyword`：`NewPlugin` + `WithToolboxes`，`tool_search` 用内置关键词匹配解析 `queries`（新默认）
   - `knowledge`：在 keyword 基础上加 `WithToolKnowledge`，`queries` 用 embedding（向量）相似度排序
-  - `calltool`：在 keyword 基础上加 `WithEnableCallTool`，模型只看到 `tool_search` + `call_tool` 两个工具
+  - `dispatch`：在 keyword 基础上加 `WithInvocationMode(DispatchToolCalls)`，模型只看到 `tool_search` + `call_tool` 两个工具
 - `-data-dir`: 默认 `../data`（读取 `<data-dir>/<app>/<evalset>.{evalset,metrics}.json`）
 - `-output-dir`: 默认 `../output`（evaluation result 落盘目录）
 - `-embed-model`: 默认 `text-embedding-3-small`（仅 `knowledge` 模式使用）
@@ -34,13 +34,13 @@
 重构后的插件**没有了「LLM 选 top-K」模式**。旧版由一次独立的 LLM 调用从工具列表里挑选 Top-K；
 新版是**模型自己**在主对话里调用 `tool_search` 函数，针对命名空间目录检索并加载工具。因此：
 
-- `keyword` / `calltool` 模式**不产生独立的 out-of-band LLM 调用**——其开销（携带目录的更大 prompt、
+- `keyword` / `dispatch` 模式**不产生独立的 out-of-band LLM 调用**——其开销（携带目录的更大 prompt、
   `tool_search` 结果、以及工具调用的 completion）已经计入 chat 桶。
 - `knowledge` 模式唯一的 out-of-band 开销是 **embedding 调用**，通过 `countingEmbedder` 包装 embedder，
   在源头把 token 记入 toolsearch 桶（不依赖插件内部已内联化、每轮重置的 usage accumulator）。
 
 ### call_tool 模式与指标
-`calltool` 模式下模型不按名字调用工具，而是调用包装工具 `call_tool`（真实工具名在 `arguments.tool_name`）。
+`dispatch` 模式下模型不按名字调用工具，而是调用包装工具 `call_tool`（真实工具名在 `arguments.tool_name`）。
 tool-trajectory 指标按**工具名**匹配，因此 benchmark 注册了一个自定义比较器 `unwrap_call_tool`
 （见 `metric.go` + metrics 文件的 `compareName`）：先把 actual 轨迹里的 `call_tool` 改写成
 `arguments.tool_name`，再套用标准的 subset + regex + 无序匹配。对其他模式没有 `call_tool`，此归一化为空操作。

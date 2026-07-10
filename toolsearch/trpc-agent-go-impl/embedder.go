@@ -21,7 +21,7 @@ import (
 // from the context.
 //
 // In the refactored plugin the tool_search function is called inline by the main
-// model as an ordinary tool, so the keyword and calltool modes add NO separate
+// model as an ordinary tool, so the keyword and dispatch modes add NO separate
 // out-of-band LLM call — their overhead is already captured in the chat bucket
 // (a larger prompt carrying the catalog + the tool_search result, plus the extra
 // completion for the tool call). Embedding is the ONLY out-of-band cost, and it

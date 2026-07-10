@@ -38,7 +38,7 @@ const (
 func main() {
 	var (
 		flagModel      = flag.String("model", defaultModelName(), "chat model name (e.g. deepseek-chat, gpt-4o-mini)")
-		flagMode       = flag.String("mode", string(ModeKeywordSearch), "toolsearch mode: none | keyword | knowledge | calltool")
+		flagMode       = flag.String("mode", string(ModeKeywordSearch), "toolsearch mode: none | keyword | knowledge | dispatch")
 		flagMaxTools   = flag.Int("max-tools", 3, "max tools selected by toolsearch")
 		flagEmbedModel = flag.String("embed-model", "text-embedding-3-small", "embedding model name (knowledge mode)")
 		flagDataDir    = flag.String("data-dir", "../data", "base dir for evalset/metrics")
@@ -187,7 +187,7 @@ func PrintCaseReport(result *evaluation.EvaluationResult, report *Report) {
 				expected = FirstToolName(invRes.ExpectedInvocation)
 			}
 			if invRes.ActualInvocation != nil {
-				actualTools = strings.Join(ToolNames(invRes.ActualInvocation), ",")
+				actualTools = strings.Join(ToolNames(normalizeCallTool(invRes.ActualInvocation)), ",")
 			}
 
 			turnStats := report.LookupTurn(r.SessionID, turnID)

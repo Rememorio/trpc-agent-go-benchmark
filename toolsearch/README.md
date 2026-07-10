@@ -17,7 +17,7 @@
 - `none`：不启用插件，所有工具直接给主模型（baseline）
 - `keyword`：`tool_search` 用内置关键词匹配（新默认）
 - `knowledge`：`tool_search` 用 embedding 语义检索
-- `calltool`：模型只看到 `tool_search` + `call_tool` 两个工具
+- `dispatch`：模型只看到 `tool_search` + `call_tool` 两个工具
 
 ### 快速开始
 评估资产（evalset/metrics）通常只需生成一次，仓库内已放在 `data/` 下；日常跑评估直接执行即可。
@@ -26,7 +26,7 @@
 - `go run . -model <MODEL_NAME> -mode none      -evalset toolsearch-catalog-multiturn -max-tools 5`
 - `go run . -model <MODEL_NAME> -mode keyword   -evalset toolsearch-catalog-multiturn -max-tools 5`
 - `go run . -model <MODEL_NAME> -mode knowledge -evalset toolsearch-catalog-multiturn -max-tools 5`
-- `go run . -model <MODEL_NAME> -mode calltool  -evalset toolsearch-catalog-multiturn -max-tools 5`
+- `go run . -model <MODEL_NAME> -mode dispatch  -evalset toolsearch-catalog-multiturn -max-tools 5`
 
 ### 输入与产物
 - 评估输入：`data/<app>/<evalset>.evalset.json`（用户输入在 evalset 内的 `conversation` 里）
