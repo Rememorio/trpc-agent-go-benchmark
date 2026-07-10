@@ -208,7 +208,7 @@ func BuildSummaryFile(cfg BenchmarkConfig, result *evaluation.EvaluationResult, 
 					expected = FirstToolName(invRes.ExpectedInvocation)
 				}
 				if invRes.ActualInvocation != nil {
-					actualTools = ToolNames(normalizeCallTool(invRes.ActualInvocation))
+					actualTools = ToolNames(invRes.ActualInvocation)
 				}
 				turnStats := TurnStats{}
 				if report != nil {

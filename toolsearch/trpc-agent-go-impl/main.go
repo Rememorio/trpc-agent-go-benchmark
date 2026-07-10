@@ -187,7 +187,7 @@ func PrintCaseReport(result *evaluation.EvaluationResult, report *Report) {
 				expected = FirstToolName(invRes.ExpectedInvocation)
 			}
 			if invRes.ActualInvocation != nil {
-				actualTools = strings.Join(ToolNames(normalizeCallTool(invRes.ActualInvocation)), ",")
+				actualTools = strings.Join(ToolNames(invRes.ActualInvocation), ",")
 			}
 
 			turnStats := report.LookupTurn(r.SessionID, turnID)
