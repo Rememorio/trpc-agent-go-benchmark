@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -155,7 +156,11 @@ func TestBuildLongMemEvalAnswerPromptPreferenceGuidance(t *testing.T) {
 		Question:     "Can you recommend events this weekend?",
 	}
 	prompt := buildLongMemEvalAnswerPrompt(inst, []memoryHit{{
-		Memory: "Interested in language exchange events focused on French and Spanish practice.",
+		Memory:       "Attended a language exchange event focused on French and Spanish practice.",
+		Kind:         "episode",
+		EventTime:    "2023-05-20",
+		Participants: []string{"Alice"},
+		Location:     "Community Center",
 	}})
 
 	if !strings.Contains(prompt, "Question type: single-session-preference") {
@@ -182,6 +187,9 @@ func TestBuildLongMemEvalAnswerPromptPreferenceGuidance(t *testing.T) {
 	if !strings.Contains(prompt, "The user would prefer") {
 		t.Fatalf("missing preference answer shape: %s", prompt)
 	}
+	if !strings.Contains(prompt, "[kind=episode; event_time=2023-05-20; participants=Alice; location=Community Center]") {
+		t.Fatalf("missing memory metadata: %s", prompt)
+	}
 }
 
 func TestBuildLongMemEvalAnswerPromptNonPreference(t *testing.T) {
@@ -202,6 +210,12 @@ func TestBuildLongMemEvalAnswerPromptNonPreference(t *testing.T) {
 	if !strings.Contains(normalizedPrompt, "shortest final span") {
 		t.Fatalf("missing concise scalar guidance: %s", prompt)
 	}
+	if !strings.Contains(normalizedPrompt, "first token must be part of the final answer") {
+		t.Fatalf("missing no-reasoning output guard: %s", prompt)
+	}
+	if !strings.Contains(normalizedPrompt, "comma-separated list") {
+		t.Fatalf("missing list output guard: %s", prompt)
+	}
 	if !strings.Contains(normalizedPrompt, "support every entity") {
 		t.Fatalf("missing full-question support guard: %s", prompt)
 	}
@@ -219,6 +233,41 @@ func TestBuildLongMemEvalAnswerPromptNonPreference(t *testing.T) {
 	}
 	if !strings.Contains(normalizedPrompt, "not include markdown") {
 		t.Fatalf("missing markdown/explanation guard: %s", prompt)
+	}
+}
+
+func TestHitsFromEntriesIncludesEpisodicMetadata(t *testing.T) {
+	t.Parallel()
+
+	eventTime := time.Date(2023, 3, 4, 0, 0, 0, 0, time.UTC)
+	entries := []*memory.Entry{{
+		ID: "mem-1",
+		Memory: &memory.Memory{
+			Memory:       "Visited the Natural History Museum on 2023-03-04.",
+			Kind:         memory.KindEpisode,
+			EventTime:    &eventTime,
+			Participants: []string{"niece"},
+			Location:     "Natural History Museum",
+		},
+		Score: 0.7,
+	}}
+
+	hits := hitsFromEntries(entries)
+	if len(hits) != 1 {
+		t.Fatalf("unexpected hit count: got %d", len(hits))
+	}
+	hit := hits[0]
+	if hit.Kind != "episode" {
+		t.Fatalf("missing kind: %+v", hit)
+	}
+	if hit.EventTime != "2023-03-04" {
+		t.Fatalf("missing event_time: %+v", hit)
+	}
+	if strings.Join(hit.Participants, ",") != "niece" {
+		t.Fatalf("missing participants: %+v", hit)
+	}
+	if hit.Location != "Natural History Museum" {
+		t.Fatalf("missing location: %+v", hit)
 	}
 }
 

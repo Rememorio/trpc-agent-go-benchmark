@@ -119,6 +119,10 @@ type memoryHit struct {
 	Score           float64   `json:"score,omitempty"`
 	SourceSessions  []string  `json:"source_sessions,omitempty"`
 	SourceHasAnswer bool      `json:"source_has_answer,omitempty"`
+	Kind            string    `json:"kind,omitempty"`
+	EventTime       string    `json:"event_time,omitempty"`
+	Participants    []string  `json:"participants,omitempty"`
+	Location        string    `json:"location,omitempty"`
 	CreatedAt       time.Time `json:"created_at,omitempty"`
 	UpdatedAt       time.Time `json:"updated_at,omitempty"`
 }
@@ -129,6 +133,10 @@ type memorySnapshot struct {
 	Score           float64   `json:"score,omitempty"`
 	SourceSessions  []string  `json:"source_sessions,omitempty"`
 	SourceHasAnswer bool      `json:"source_has_answer,omitempty"`
+	Kind            string    `json:"kind,omitempty"`
+	EventTime       string    `json:"event_time,omitempty"`
+	Participants    []string  `json:"participants,omitempty"`
+	Location        string    `json:"location,omitempty"`
 	CreatedAt       time.Time `json:"created_at,omitempty"`
 	UpdatedAt       time.Time `json:"updated_at,omitempty"`
 }
@@ -1050,6 +1058,9 @@ func buildLongMemEvalAnswerPrompt(inst *lmeInstance, hits []memoryHit) string {
 	} else {
 		for i, hit := range hits {
 			fmt.Fprintf(&b, "%d. %s", i+1, hit.Memory)
+			if meta := formatMemoryMetadata(hit.Kind, hit.EventTime, hit.Participants, hit.Location); meta != "" {
+				fmt.Fprintf(&b, " [%s]", meta)
+			}
 			if hit.Score != 0 {
 				fmt.Fprintf(&b, " (score=%.4f)", hit.Score)
 			}
@@ -1060,6 +1071,11 @@ func buildLongMemEvalAnswerPrompt(inst *lmeInstance, hits []memoryHit) string {
 	return fmt.Sprintf(`You are answering a LongMemEval memory question.
 
 Use only the retrieved memories below. If the memories do not contain enough information, answer "I don't know".
+Output only the final answer. Do not explain, reason step by step, cite
+memory numbers, mention uncertainty analysis, or use markdown. The first token
+must be part of the final answer. If the question asks for an order, list, or
+sequence, output only a comma-separated list of the requested entities, without
+numbering or dates unless the question explicitly asks for dates.
 %s
 For non-preference questions, verify that the retrieved memories directly
 support every entity, relationship, event or action, time constraint, and
@@ -1553,11 +1569,15 @@ func snapshotsFromEntries(entries []*memory.Entry) []memorySnapshot {
 			continue
 		}
 		out = append(out, memorySnapshot{
-			ID:        e.ID,
-			Memory:    e.Memory.Memory,
-			Score:     e.Score,
-			CreatedAt: e.CreatedAt,
-			UpdatedAt: e.UpdatedAt,
+			ID:           e.ID,
+			Memory:       e.Memory.Memory,
+			Score:        e.Score,
+			Kind:         string(e.Memory.Kind),
+			EventTime:    formatEventTime(e.Memory.EventTime),
+			Participants: append([]string(nil), e.Memory.Participants...),
+			Location:     e.Memory.Location,
+			CreatedAt:    e.CreatedAt,
+			UpdatedAt:    e.UpdatedAt,
 		})
 	}
 	return out
@@ -1570,14 +1590,42 @@ func hitsFromEntries(entries []*memory.Entry) []memoryHit {
 			continue
 		}
 		out = append(out, memoryHit{
-			ID:        e.ID,
-			Memory:    e.Memory.Memory,
-			Score:     e.Score,
-			CreatedAt: e.CreatedAt,
-			UpdatedAt: e.UpdatedAt,
+			ID:           e.ID,
+			Memory:       e.Memory.Memory,
+			Score:        e.Score,
+			Kind:         string(e.Memory.Kind),
+			EventTime:    formatEventTime(e.Memory.EventTime),
+			Participants: append([]string(nil), e.Memory.Participants...),
+			Location:     e.Memory.Location,
+			CreatedAt:    e.CreatedAt,
+			UpdatedAt:    e.UpdatedAt,
 		})
 	}
 	return out
+}
+
+func formatEventTime(t *time.Time) string {
+	if t == nil {
+		return ""
+	}
+	return t.UTC().Format(time.DateOnly)
+}
+
+func formatMemoryMetadata(kind, eventTime string, participants []string, location string) string {
+	var parts []string
+	if kind != "" {
+		parts = append(parts, "kind="+kind)
+	}
+	if eventTime != "" {
+		parts = append(parts, "event_time="+eventTime)
+	}
+	if len(participants) > 0 {
+		parts = append(parts, "participants="+strings.Join(participants, ","))
+	}
+	if location != "" {
+		parts = append(parts, "location="+location)
+	}
+	return strings.Join(parts, "; ")
 }
 
 func diffSnapshots(before, after []memorySnapshot) []memorySnapshot {

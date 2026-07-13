@@ -3,7 +3,7 @@ module trpc.group/trpc-go/trpc-agent-go-benchmark/memory/trpc-agent-go-impl
 go 1.24.0
 
 replace (
-	trpc.group/trpc-go/trpc-agent-go => github.com/Rememorio/trpc-agent-go v0.0.0-20260713061906-0c50105054ee
+	trpc.group/trpc-go/trpc-agent-go => github.com/Rememorio/trpc-agent-go v0.0.0-20260713132203-d3dece6ef9a5
 	trpc.group/trpc-go/trpc-agent-go/memory/mysql => github.com/trpc-group/trpc-agent-go/memory/mysql v1.7.1-0.20260402032440-a4e36132659f
 	trpc.group/trpc-go/trpc-agent-go/memory/pgvector => github.com/Rememorio/trpc-agent-go/memory/pgvector v0.0.0-20260713052744-7952f7b6b63d
 	trpc.group/trpc-go/trpc-agent-go/memory/sqlite => github.com/trpc-group/trpc-agent-go/memory/sqlite v1.7.1-0.20260402032440-a4e36132659f
