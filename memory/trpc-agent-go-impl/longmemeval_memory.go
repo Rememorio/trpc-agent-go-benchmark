@@ -318,17 +318,38 @@ func (m *lmeTrackingModel) GenerateContent(
 			defer cancel()
 		}
 		defer close(out)
+		sawError := false
 		for resp := range respCh {
 			if resp != nil && resp.Usage != nil {
 				m.tracker.Record(resp.Usage)
 			}
+			if resp != nil && resp.Error != nil {
+				sawError = true
+			}
 			out <- resp
+		}
+		if err := ctx.Err(); err != nil && !sawError {
+			out <- &model.Response{
+				Object: model.ObjectTypeError,
+				Done:   true,
+				Error: &model.ResponseError{
+					Type:    model.ErrorTypeCancelled,
+					Message: lmeModelCallContextError(err, m.timeout),
+				},
+			}
 		}
 	}()
 	return out, nil
 }
 
 func (m *lmeTrackingModel) Info() model.Info { return m.base.Info() }
+
+func lmeModelCallContextError(err error, timeout time.Duration) string {
+	if errors.Is(err, context.DeadlineExceeded) && timeout > 0 {
+		return fmt.Sprintf("model call timed out after %s", timeout)
+	}
+	return fmt.Sprintf("model call canceled: %v", err)
+}
 
 func (u *lmeTokenUsage) Add(other lmeTokenUsage) {
 	u.PromptTokens += other.PromptTokens

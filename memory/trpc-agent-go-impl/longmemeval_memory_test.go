@@ -524,10 +524,24 @@ func TestLongMemEvalTrackingModelTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generate content: %v", err)
 	}
-	for range ch {
+	var responses []*model.Response
+	for resp := range ch {
+		responses = append(responses, resp)
 	}
 	if elapsed := time.Since(start); elapsed > time.Second {
 		t.Fatalf("timeout did not close response channel promptly: %v", elapsed)
+	}
+	if len(responses) != 1 {
+		t.Fatalf("responses = %d, want 1", len(responses))
+	}
+	if responses[0] == nil || responses[0].Error == nil {
+		t.Fatalf("missing timeout response error: %#v", responses[0])
+	}
+	if responses[0].Error.Type != model.ErrorTypeCancelled {
+		t.Fatalf("error type = %q, want %q", responses[0].Error.Type, model.ErrorTypeCancelled)
+	}
+	if !strings.Contains(responses[0].Error.Message, "timed out") {
+		t.Fatalf("error message missing timeout detail: %q", responses[0].Error.Message)
 	}
 }
 
