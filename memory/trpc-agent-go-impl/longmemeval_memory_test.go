@@ -106,11 +106,20 @@ func TestBuildLongMemEvalAnswerPromptPreferenceGuidance(t *testing.T) {
 	if !strings.Contains(prompt, "LongMemEval expects the user's preference profile") {
 		t.Fatalf("missing preference guidance: %s", prompt)
 	}
-	if !strings.Contains(prompt, "Do not answer \"I don't know\" merely because") {
+	if !strings.Contains(prompt, "do not say\n\"I don't know\"") {
 		t.Fatalf("missing unknown-answer guard: %s", prompt)
 	}
-	if !strings.Contains(prompt, "Do not answer\nas a recommendation list") {
+	if !strings.Contains(prompt, "When any retrieved memory is relevant to the preference topic") {
+		t.Fatalf("missing relevant-memory guard: %s", prompt)
+	}
+	if !strings.Contains(prompt, "not a recommendation list") {
 		t.Fatalf("missing recommendation-list guard: %s", prompt)
+	}
+	if !strings.Contains(prompt, "Start\nwith \"The user would prefer\"") {
+		t.Fatalf("missing preference start constraint: %s", prompt)
+	}
+	if !strings.Contains(prompt, "compatibility, quality") {
+		t.Fatalf("missing concrete preference dimensions: %s", prompt)
 	}
 	if !strings.Contains(prompt, "The user would prefer") {
 		t.Fatalf("missing preference answer shape: %s", prompt)

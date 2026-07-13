@@ -1009,12 +1009,17 @@ For preference questions, LongMemEval expects the user's preference profile,
 not real-time recommendations. If the retrieved memories show relevant
 preferences, constraints, likes, dislikes, prior choices, or recommendation
 history, summarize what the user would prefer and what they would not prefer.
-Do not answer "I don't know" merely because the memories lack current local
-events, live availability, prices, or fresh product listings. Do not answer
-as a recommendation list. Use this shape: "The user would prefer ... They
-would also appreciate ... They would not prefer ..." Include negative
-constraints implied by the memories, such as incompatibility, lack of the
-desired activity, or failure to satisfy the user's stated goal.`
+When any retrieved memory is relevant to the preference topic, do not say
+"I don't know" and do not mention missing live data, current local events,
+availability, prices, or fresh product listings.
+Write a 2-3 sentence preference profile, not a recommendation list. Start
+with "The user would prefer". Use this shape: "The user would prefer ... They
+would also appreciate ... They would not prefer ..." Mention concrete
+categories and constraints from memory, such as compatibility, quality,
+durability, protection, portability, language practice, cultural exchange,
+or learning resources. Include negative constraints implied by the memories,
+such as incompatibility, lack of the desired activity, or failure to satisfy
+the user's stated goal.`
 	}
 	return ""
 }
