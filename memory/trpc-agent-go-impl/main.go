@@ -338,9 +338,21 @@ const (
 	envOpenAIEmbeddingBaseURL = "OPENAI_EMBEDDING_BASE_URL"
 )
 
+var lmeEmbeddingRetryBackoff = []time.Duration{
+	2 * time.Second,
+	4 * time.Second,
+	8 * time.Second,
+	16 * time.Second,
+	32 * time.Second,
+	60 * time.Second,
+	90 * time.Second,
+}
+
 func newEmbeddingEmbedder(modelName string) *openai.Embedder {
 	opts := []openai.Option{
 		openai.WithModel(modelName),
+		openai.WithMaxRetries(len(lmeEmbeddingRetryBackoff)),
+		openai.WithRetryBackoff(lmeEmbeddingRetryBackoff),
 	}
 
 	if apiKey := os.Getenv(envOpenAIEmbeddingAPIKey); apiKey != "" {
