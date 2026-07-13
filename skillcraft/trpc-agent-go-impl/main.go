@@ -1471,6 +1471,9 @@ func evaluateTaskWithContext(
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	cmd := exec.CommandContext(
 		ctx,
 		"uv",
