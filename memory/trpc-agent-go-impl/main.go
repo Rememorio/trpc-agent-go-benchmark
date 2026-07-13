@@ -147,6 +147,11 @@ var (
 		true,
 		"Generate LongMemEval answers from retrieved memories",
 	)
+	flagLMEAnalyzeResults = flag.String(
+		"lme-analyze-results",
+		"",
+		"Analyze an existing LongMemEval results.json and write analysis files",
+	)
 	flagMem0Host = flag.String(
 		"mem0-host",
 		"",

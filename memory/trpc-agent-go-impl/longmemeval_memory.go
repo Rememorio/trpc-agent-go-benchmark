@@ -528,6 +528,9 @@ func (b *mem0Backend) Read(ctx context.Context, userKey memory.UserKey, limit in
 func (b *mem0Backend) Close() error { return b.svc.Close() }
 
 func runLongMemEvalMemory(ctx context.Context) error {
+	if path := strings.TrimSpace(*flagLMEAnalyzeResults); path != "" {
+		return analyzeLongMemEvalResults(path, longMemEvalAnalysisOutputDir(path))
+	}
 	if err := os.MkdirAll(*flagOutput, 0755); err != nil {
 		return fmt.Errorf("create output dir: %w", err)
 	}

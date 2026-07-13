@@ -211,6 +211,12 @@ go run . \
   -lme-sample-seed 42 \
   -table-suffix _lme_baseline \
   -output ../results/lme-baseline
+
+# Analyze an existing LongMemEval run without making model calls.
+go run . \
+  -dataset-format longmemeval \
+  -lme-analyze-results ../results/lme-baseline/results.json \
+  -output ../results/lme-baseline
 ```
 
 ## Command-Line Options

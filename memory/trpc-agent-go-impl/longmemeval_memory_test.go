@@ -10,6 +10,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -42,5 +44,49 @@ func TestWithObservationDate(t *testing.T) {
 	}
 	if out := withObservationDate("content", "  "); out != "content" {
 		t.Fatalf("empty date should leave content unchanged: %q", out)
+	}
+}
+
+func TestAnalyzeLongMemEvalResults(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	resultsPath := filepath.Join(dir, "results.json")
+	result := &runResult{
+		Summary: &runSummary{TotalCases: 1},
+		Cases: []*caseResult{{
+			QuestionID:   "q1",
+			QuestionType: "single-session-user",
+			Question:     "Where did I meet Sophia?",
+			Answer:       "a coffee shop",
+			BackendResults: map[string]*backendResult{
+				"pgvector": {
+					Backend:      "pgvector",
+					FailureStage: "answer_miss",
+					Answer:       "I don't know.",
+					F1:           0,
+					BLEU:         0,
+					Evidence: &evidenceMetrics{
+						HasEvidenceLabels:  true,
+						ExtractRecallAny:   true,
+						RetrievalRecallAny: true,
+						RetrievalRecallAll: true,
+					},
+				},
+			},
+		}},
+	}
+	saveLongMemEvalResults(dir, result)
+	if err := analyzeLongMemEvalResults(resultsPath, dir); err != nil {
+		t.Fatalf("analyze results: %v", err)
+	}
+	for _, name := range []string{"analysis.md", "bad_cases.tsv"} {
+		data, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		if !strings.Contains(string(data), "q1") {
+			t.Fatalf("%s missing question id: %s", name, data)
+		}
 	}
 }
