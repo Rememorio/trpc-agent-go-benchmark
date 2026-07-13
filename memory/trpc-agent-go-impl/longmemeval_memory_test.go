@@ -216,6 +216,9 @@ func TestBuildLongMemEvalAnswerPromptNonPreference(t *testing.T) {
 	if !strings.Contains(normalizedPrompt, "comma-separated list") {
 		t.Fatalf("missing list output guard: %s", prompt)
 	}
+	if !strings.Contains(normalizedPrompt, "do not answer with the start date") {
+		t.Fatalf("missing duration output guard: %s", prompt)
+	}
 	if !strings.Contains(normalizedPrompt, "support every entity") {
 		t.Fatalf("missing full-question support guard: %s", prompt)
 	}

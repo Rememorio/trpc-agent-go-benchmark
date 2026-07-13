@@ -1076,6 +1076,9 @@ memory numbers, mention uncertainty analysis, or use markdown. The first token
 must be part of the final answer. If the question asks for an order, list, or
 sequence, output only a comma-separated list of the requested entities, without
 numbering or dates unless the question explicitly asks for dates.
+If the question asks "how long" or asks for a duration, output the elapsed
+duration in the unit implied by the question or reference memories; do not
+answer with the start date.
 %s
 For non-preference questions, verify that the retrieved memories directly
 support every entity, relationship, event or action, time constraint, and
