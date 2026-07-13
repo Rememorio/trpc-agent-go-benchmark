@@ -44,6 +44,39 @@ type lmeBackendAnalysis struct {
 	ErrorCounts    map[string]int
 }
 
+type lmeCompareRow struct {
+	QuestionID      string
+	QuestionType    string
+	Backend         string
+	BaselineStage   string
+	CandidateStage  string
+	BaselineEM      bool
+	CandidateEM     bool
+	BaselineF1      float64
+	CandidateF1     float64
+	DeltaF1         float64
+	BaselineBLEU    float64
+	CandidateBLEU   float64
+	DeltaBLEU       float64
+	BaselineError   string
+	CandidateError  string
+	Diagnosis       string
+	BaselineAnswer  string
+	CandidateAnswer string
+	Reference       string
+	Question        string
+}
+
+type lmeCompareBackendSummary struct {
+	Cases        int
+	BaselineEM   int
+	CandidateEM  int
+	TotalDeltaF1 float64
+	Improved     int
+	Regressed    int
+	Unchanged    int
+}
+
 func analyzeLongMemEvalResults(path, outputDir string) error {
 	result, err := loadLongMemEvalResults(path)
 	if err != nil {
@@ -68,6 +101,36 @@ func analyzeLongMemEvalResults(path, outputDir string) error {
 	return nil
 }
 
+func compareLongMemEvalResults(baselinePath, candidatePath, outputDir string) error {
+	baseline, err := loadLongMemEvalResults(baselinePath)
+	if err != nil {
+		return fmt.Errorf("load baseline results: %w", err)
+	}
+	candidate, err := loadLongMemEvalResults(candidatePath)
+	if err != nil {
+		return fmt.Errorf("load candidate results: %w", err)
+	}
+	if outputDir == "" {
+		outputDir = filepath.Dir(candidatePath)
+	}
+	if err := os.MkdirAll(outputDir, 0755); err != nil {
+		return fmt.Errorf("create compare output dir: %w", err)
+	}
+	rows := compareLongMemEvalRows(
+		longMemEvalAnalysisRows(baseline),
+		longMemEvalAnalysisRows(candidate),
+	)
+	if err := os.WriteFile(filepath.Join(outputDir, "comparison.tsv"), []byte(formatLongMemEvalComparisonTSV(rows)), 0644); err != nil {
+		return fmt.Errorf("write comparison.tsv: %w", err)
+	}
+	report := formatLongMemEvalComparisonMarkdown(baselinePath, candidatePath, rows)
+	if err := os.WriteFile(filepath.Join(outputDir, "comparison.md"), []byte(report), 0644); err != nil {
+		return fmt.Errorf("write comparison.md: %w", err)
+	}
+	fmt.Printf("LongMemEval comparison written to %s\n", outputDir)
+	return nil
+}
+
 func loadLongMemEvalResults(path string) (*runResult, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -85,6 +148,21 @@ func longMemEvalAnalysisOutputDir(resultsPath string) string {
 		return filepath.Dir(resultsPath)
 	}
 	return *flagOutput
+}
+
+func longMemEvalCompareOutputDir(candidatePath string) string {
+	if strings.TrimSpace(*flagOutput) == "" || *flagOutput == "../results" {
+		return filepath.Dir(candidatePath)
+	}
+	return *flagOutput
+}
+
+func parseLongMemEvalComparePaths(raw string) (string, string, error) {
+	parts := parseCommaList(raw)
+	if len(parts) != 2 {
+		return "", "", fmt.Errorf("lme-compare-results expects baseline,candidate paths")
+	}
+	return parts[0], parts[1], nil
 }
 
 func longMemEvalAnalysisRows(result *runResult) []lmeAnalysisRow {
@@ -124,6 +202,71 @@ func longMemEvalAnalysisRows(result *runResult) []lmeAnalysisRow {
 		}
 	}
 	return rows
+}
+
+func compareLongMemEvalRows(baselineRows, candidateRows []lmeAnalysisRow) []lmeCompareRow {
+	baseline := make(map[string]lmeAnalysisRow, len(baselineRows))
+	candidate := make(map[string]lmeAnalysisRow, len(candidateRows))
+	keys := make(map[string]bool)
+	for _, row := range baselineRows {
+		key := lmeCompareKey(row.QuestionID, row.Backend)
+		baseline[key] = row
+		keys[key] = true
+	}
+	for _, row := range candidateRows {
+		key := lmeCompareKey(row.QuestionID, row.Backend)
+		candidate[key] = row
+		keys[key] = true
+	}
+	out := make([]lmeCompareRow, 0, len(keys))
+	for key := range keys {
+		base, hasBase := baseline[key]
+		cand, hasCand := candidate[key]
+		row := lmeCompareRow{}
+		if hasCand {
+			row.QuestionID = cand.QuestionID
+			row.QuestionType = cand.QuestionType
+			row.Backend = cand.Backend
+			row.CandidateStage = cand.Stage
+			row.CandidateEM = cand.ExactMatch
+			row.CandidateF1 = cand.F1
+			row.CandidateBLEU = cand.BLEU
+			row.CandidateError = cand.Error
+			row.Diagnosis = cand.Diagnosis
+			row.CandidateAnswer = cand.Answer
+			row.Reference = cand.Reference
+			row.Question = cand.Question
+		}
+		if hasBase {
+			if row.QuestionID == "" {
+				row.QuestionID = base.QuestionID
+				row.QuestionType = base.QuestionType
+				row.Backend = base.Backend
+				row.Reference = base.Reference
+				row.Question = base.Question
+			}
+			row.BaselineStage = base.Stage
+			row.BaselineEM = base.ExactMatch
+			row.BaselineF1 = base.F1
+			row.BaselineBLEU = base.BLEU
+			row.BaselineError = base.Error
+			row.BaselineAnswer = base.Answer
+		}
+		row.DeltaF1 = row.CandidateF1 - row.BaselineF1
+		row.DeltaBLEU = row.CandidateBLEU - row.BaselineBLEU
+		out = append(out, row)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].QuestionID != out[j].QuestionID {
+			return out[i].QuestionID < out[j].QuestionID
+		}
+		return out[i].Backend < out[j].Backend
+	})
+	return out
+}
+
+func lmeCompareKey(questionID, backend string) string {
+	return questionID + "\x00" + backend
 }
 
 func summarizeLongMemEvalRows(rows []lmeAnalysisRow) map[string]*lmeBackendAnalysis {
@@ -213,6 +356,149 @@ func formatLongMemEvalBadCases(rows []lmeAnalysisRow) string {
 		)
 	}
 	return b.String()
+}
+
+func formatLongMemEvalComparisonTSV(rows []lmeCompareRow) string {
+	var b strings.Builder
+	b.WriteString("question_id\tquestion_type\tbackend\tbaseline_stage\tcandidate_stage\tbaseline_em\tcandidate_em\tbaseline_f1\tcandidate_f1\tdelta_f1\tbaseline_bleu\tcandidate_bleu\tdelta_bleu\tdiagnosis\tbaseline_answer\tcandidate_answer\treference\tquestion\n")
+	for _, row := range rows {
+		fmt.Fprintf(&b, "%s\t%s\t%s\t%s\t%s\t%v\t%v\t%.4f\t%.4f\t%+.4f\t%.4f\t%.4f\t%+.4f\t%s\t%s\t%s\t%s\t%s\n",
+			tsvCell(row.QuestionID),
+			tsvCell(row.QuestionType),
+			tsvCell(row.Backend),
+			tsvCell(row.BaselineStage),
+			tsvCell(row.CandidateStage),
+			row.BaselineEM,
+			row.CandidateEM,
+			row.BaselineF1,
+			row.CandidateF1,
+			row.DeltaF1,
+			row.BaselineBLEU,
+			row.CandidateBLEU,
+			row.DeltaBLEU,
+			tsvCell(row.Diagnosis),
+			tsvCell(row.BaselineAnswer),
+			tsvCell(row.CandidateAnswer),
+			tsvCell(row.Reference),
+			tsvCell(row.Question),
+		)
+	}
+	return b.String()
+}
+
+func formatLongMemEvalComparisonMarkdown(baselinePath, candidatePath string, rows []lmeCompareRow) string {
+	summary := summarizeLongMemEvalCompareRows(rows)
+	var b strings.Builder
+	b.WriteString("# LongMemEval Comparison\n\n")
+	fmt.Fprintf(&b, "- Baseline: `%s`\n", baselinePath)
+	fmt.Fprintf(&b, "- Candidate: `%s`\n", candidatePath)
+	b.WriteString("- Comparison uses saved `results.json`; no model calls are made.\n\n")
+
+	b.WriteString("## Backend Delta Summary\n\n")
+	b.WriteString("| Backend | Cases | EM Baseline | EM Candidate | Avg Delta F1 | Improved | Regressed | Unchanged |\n")
+	b.WriteString("|---|---:|---:|---:|---:|---:|---:|---:|\n")
+	for _, backend := range sortedCompareBackends(summary) {
+		s := summary[backend]
+		avgDelta := 0.0
+		if s.Cases > 0 {
+			avgDelta = s.TotalDeltaF1 / float64(s.Cases)
+		}
+		fmt.Fprintf(&b, "| %s | %d | %d | %d | %+.4f | %d | %d | %d |\n",
+			mdCell(backend), s.Cases, s.BaselineEM, s.CandidateEM,
+			avgDelta, s.Improved, s.Regressed, s.Unchanged)
+	}
+
+	b.WriteString("\n## Top Improvements\n\n")
+	writeCompareRowsTable(&b, topCompareRows(rows, true, 20))
+	b.WriteString("\n## Top Regressions\n\n")
+	writeCompareRowsTable(&b, topCompareRows(rows, false, 20))
+	return b.String()
+}
+
+func summarizeLongMemEvalCompareRows(rows []lmeCompareRow) map[string]*lmeCompareBackendSummary {
+	out := make(map[string]*lmeCompareBackendSummary)
+	for _, row := range rows {
+		s := out[row.Backend]
+		if s == nil {
+			s = &lmeCompareBackendSummary{}
+			out[row.Backend] = s
+		}
+		s.Cases++
+		if row.BaselineEM {
+			s.BaselineEM++
+		}
+		if row.CandidateEM {
+			s.CandidateEM++
+		}
+		s.TotalDeltaF1 += row.DeltaF1
+		switch {
+		case row.DeltaF1 > 0:
+			s.Improved++
+		case row.DeltaF1 < 0:
+			s.Regressed++
+		default:
+			s.Unchanged++
+		}
+	}
+	return out
+}
+
+func sortedCompareBackends(summary map[string]*lmeCompareBackendSummary) []string {
+	out := make([]string, 0, len(summary))
+	for backend := range summary {
+		out = append(out, backend)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func topCompareRows(rows []lmeCompareRow, improvements bool, limit int) []lmeCompareRow {
+	filtered := make([]lmeCompareRow, 0, len(rows))
+	for _, row := range rows {
+		if improvements && row.DeltaF1 <= 0 {
+			continue
+		}
+		if !improvements && row.DeltaF1 >= 0 {
+			continue
+		}
+		filtered = append(filtered, row)
+	}
+	sort.Slice(filtered, func(i, j int) bool {
+		if filtered[i].DeltaF1 != filtered[j].DeltaF1 {
+			if improvements {
+				return filtered[i].DeltaF1 > filtered[j].DeltaF1
+			}
+			return filtered[i].DeltaF1 < filtered[j].DeltaF1
+		}
+		if filtered[i].QuestionID != filtered[j].QuestionID {
+			return filtered[i].QuestionID < filtered[j].QuestionID
+		}
+		return filtered[i].Backend < filtered[j].Backend
+	})
+	if limit > 0 && len(filtered) > limit {
+		return filtered[:limit]
+	}
+	return filtered
+}
+
+func writeCompareRowsTable(b *strings.Builder, rows []lmeCompareRow) {
+	b.WriteString("| Question | Type | Backend | Delta F1 | Baseline | Candidate | Diagnosis |\n")
+	b.WriteString("|---|---|---|---:|---|---|---|\n")
+	for _, row := range rows {
+		fmt.Fprintf(b, "| %s | %s | %s | %+.4f | %s | %s | %s |\n",
+			mdCell(row.QuestionID),
+			mdCell(row.QuestionType),
+			mdCell(row.Backend),
+			row.DeltaF1,
+			mdCell(compareAnswerCell(row.BaselineStage, row.BaselineF1, row.BaselineAnswer)),
+			mdCell(compareAnswerCell(row.CandidateStage, row.CandidateF1, row.CandidateAnswer)),
+			mdCell(truncate(row.Diagnosis, 120)),
+		)
+	}
+}
+
+func compareAnswerCell(stage string, f1 float64, answer string) string {
+	return fmt.Sprintf("stage=%s F1=%.4f answer=%s", stage, f1, truncate(answer, 80))
 }
 
 func formatLongMemEvalAnalysisMarkdown(

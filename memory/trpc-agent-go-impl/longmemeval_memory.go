@@ -528,6 +528,13 @@ func (b *mem0Backend) Read(ctx context.Context, userKey memory.UserKey, limit in
 func (b *mem0Backend) Close() error { return b.svc.Close() }
 
 func runLongMemEvalMemory(ctx context.Context) error {
+	if raw := strings.TrimSpace(*flagLMECompareResults); raw != "" {
+		baseline, candidate, err := parseLongMemEvalComparePaths(raw)
+		if err != nil {
+			return err
+		}
+		return compareLongMemEvalResults(baseline, candidate, longMemEvalCompareOutputDir(candidate))
+	}
 	if path := strings.TrimSpace(*flagLMEAnalyzeResults); path != "" {
 		return analyzeLongMemEvalResults(path, longMemEvalAnalysisOutputDir(path))
 	}

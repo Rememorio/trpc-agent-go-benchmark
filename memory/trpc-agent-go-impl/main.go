@@ -157,6 +157,11 @@ var (
 		"",
 		"Analyze an existing LongMemEval results.json and write analysis files",
 	)
+	flagLMECompareResults = flag.String(
+		"lme-compare-results",
+		"",
+		"Compare two LongMemEval results.json files (baseline,candidate)",
+	)
 	flagMem0Host = flag.String(
 		"mem0-host",
 		"",

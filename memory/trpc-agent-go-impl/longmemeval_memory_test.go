@@ -183,6 +183,85 @@ func TestAnalyzeLongMemEvalResults(t *testing.T) {
 	}
 }
 
+func TestCompareLongMemEvalResults(t *testing.T) {
+	t.Parallel()
+
+	baseDir := t.TempDir()
+	candidateDir := t.TempDir()
+	outputDir := t.TempDir()
+	basePath := filepath.Join(baseDir, "results.json")
+	candidatePath := filepath.Join(candidateDir, "results.json")
+	base := &runResult{
+		Summary: &runSummary{TotalCases: 1},
+		Cases: []*caseResult{{
+			QuestionID:   "q1",
+			QuestionType: "single-session-assistant",
+			Question:     "What was the fifth bottle?",
+			Answer:       "Absinthe",
+			BackendResults: map[string]*backendResult{
+				"pgvector": {
+					Backend:      "pgvector",
+					FailureStage: "answer_miss",
+					Answer:       "I don't know.",
+					F1:           0,
+					BLEU:         0,
+				},
+			},
+		}},
+	}
+	candidate := &runResult{
+		Summary: &runSummary{TotalCases: 1},
+		Cases: []*caseResult{{
+			QuestionID:   "q1",
+			QuestionType: "single-session-assistant",
+			Question:     "What was the fifth bottle?",
+			Answer:       "Absinthe",
+			BackendResults: map[string]*backendResult{
+				"pgvector": {
+					Backend:      "pgvector",
+					FailureStage: "ok",
+					ExactMatch:   true,
+					Answer:       "Absinthe",
+					F1:           1,
+					BLEU:         1,
+				},
+			},
+		}},
+	}
+	saveLongMemEvalResults(baseDir, base)
+	saveLongMemEvalResults(candidateDir, candidate)
+
+	if err := compareLongMemEvalResults(basePath, candidatePath, outputDir); err != nil {
+		t.Fatalf("compare results: %v", err)
+	}
+	for _, name := range []string{"comparison.md", "comparison.tsv"} {
+		data, err := os.ReadFile(filepath.Join(outputDir, name))
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		text := string(data)
+		if !strings.Contains(text, "q1") {
+			t.Fatalf("%s missing question id: %s", name, text)
+		}
+		if !strings.Contains(text, "+1.0000") {
+			t.Fatalf("%s missing delta: %s", name, text)
+		}
+	}
+}
+
+func TestParseLongMemEvalComparePaths(t *testing.T) {
+	base, candidate, err := parseLongMemEvalComparePaths("base.json, candidate.json")
+	if err != nil {
+		t.Fatalf("parse compare paths: %v", err)
+	}
+	if base != "base.json" || candidate != "candidate.json" {
+		t.Fatalf("unexpected paths: %q %q", base, candidate)
+	}
+	if _, _, err := parseLongMemEvalComparePaths("only-one.json"); err == nil {
+		t.Fatal("expected parse error")
+	}
+}
+
 func TestMissingReferenceKeywords(t *testing.T) {
 	got := missingReferenceKeywords(
 		"The user would prefer cultural events.",

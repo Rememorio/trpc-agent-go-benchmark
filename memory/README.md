@@ -226,11 +226,19 @@ go run . \
   -dataset-format longmemeval \
   -lme-analyze-results ../results/lme-baseline/results.json \
   -output ../results/lme-baseline
+
+# Compare two LongMemEval runs without making model calls.
+go run . \
+  -dataset-format longmemeval \
+  -lme-compare-results ../results/lme-baseline/results.json,../results/lme-candidate/results.json \
+  -output ../results/lme-candidate
 ```
 
 The analysis command writes `analysis.md` and `bad_cases.tsv`, including
 failure stages, evidence status, backend disagreements, and answer-gap
 diagnostics for missing reference keywords or preference slots.
+The comparison command writes `comparison.md` and `comparison.tsv` with EM,
+F1, BLEU, stage, and answer deltas by backend and question.
 
 ## Command-Line Options
 
@@ -270,6 +278,8 @@ LongMemEval-specific options:
 | `-lme-max-pairs`         | 0       | Max user/assistant pairs per case            |
 | `-lme-ingest-wait`       | 250ms   | Wait after each pair before reading memories |
 | `-lme-answer`            | true    | Generate answers from retrieved memories     |
+| `-lme-analyze-results`   |         | Analyze one saved LongMemEval `results.json` |
+| `-lme-compare-results`   |         | Compare baseline,candidate `results.json`    |
 | `-mem0-host`             | (env)   | Self-hosted mem0 OSS host                    |
 | `-mem0-cloud`            | false   | Use hosted mem0 API semantics                |
 
