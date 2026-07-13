@@ -1027,6 +1027,11 @@ func buildLongMemEvalAnswerPrompt(inst *lmeInstance, hits []memoryHit) string {
 
 Use only the retrieved memories below. If the memories do not contain enough information, answer "I don't know".
 %s
+For non-preference questions, answer with the shortest final span that satisfies
+the question. If the question asks for a count, total, duration, date
+difference, percentage, name, or other scalar value, compute the final value
+from the memories and output only that value. Do not include markdown,
+explanations, citations, or restatements of the question.
 
 Question date: %s
 Question type: %s

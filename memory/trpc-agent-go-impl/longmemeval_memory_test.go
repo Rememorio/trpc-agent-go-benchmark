@@ -140,6 +140,15 @@ func TestBuildLongMemEvalAnswerPromptNonPreference(t *testing.T) {
 	if !strings.Contains(prompt, "(no memories retrieved)") {
 		t.Fatalf("missing empty-memory marker: %s", prompt)
 	}
+	if !strings.Contains(prompt, "answer with the shortest final span") {
+		t.Fatalf("missing concise scalar guidance: %s", prompt)
+	}
+	if !strings.Contains(prompt, "compute the final value") {
+		t.Fatalf("missing final-value guidance: %s", prompt)
+	}
+	if !strings.Contains(prompt, "Do not include markdown") {
+		t.Fatalf("missing markdown/explanation guard: %s", prompt)
+	}
 }
 
 func TestNewLongMemEvalAnswerRequestDisablesThinking(t *testing.T) {
