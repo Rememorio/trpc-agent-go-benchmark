@@ -31,6 +31,7 @@ type lmeAnalysisRow struct {
 	Answer       string
 	Reference    string
 	Question     string
+	Diagnosis    string
 }
 
 type lmeBackendAnalysis struct {
@@ -118,6 +119,7 @@ func longMemEvalAnalysisRows(result *runResult) []lmeAnalysisRow {
 				Answer:       br.Answer,
 				Reference:    cr.Answer,
 				Question:     cr.Question,
+				Diagnosis:    answerGapDiagnosis(cr.QuestionType, br.Answer, cr.Answer),
 			})
 		}
 	}
@@ -189,12 +191,12 @@ func evidenceStatus(ev *evidenceMetrics) string {
 
 func formatLongMemEvalBadCases(rows []lmeAnalysisRow) string {
 	var b strings.Builder
-	b.WriteString("question_id\tquestion_type\tbackend\tstage\texact_match\tf1\tbleu\tevidence\terror\tanswer\treference\tquestion\n")
+	b.WriteString("question_id\tquestion_type\tbackend\tstage\texact_match\tf1\tbleu\tevidence\tdiagnosis\terror\tanswer\treference\tquestion\n")
 	for _, row := range rows {
 		if row.ExactMatch && row.Stage == "ok" {
 			continue
 		}
-		fmt.Fprintf(&b, "%s\t%s\t%s\t%s\t%v\t%.4f\t%.4f\t%s\t%s\t%s\t%s\t%s\n",
+		fmt.Fprintf(&b, "%s\t%s\t%s\t%s\t%v\t%.4f\t%.4f\t%s\t%s\t%s\t%s\t%s\t%s\n",
 			tsvCell(row.QuestionID),
 			tsvCell(row.QuestionType),
 			tsvCell(row.Backend),
@@ -203,6 +205,7 @@ func formatLongMemEvalBadCases(rows []lmeAnalysisRow) string {
 			row.F1,
 			row.BLEU,
 			tsvCell(row.Evidence),
+			tsvCell(row.Diagnosis),
 			tsvCell(row.Error),
 			tsvCell(row.Answer),
 			tsvCell(row.Reference),
@@ -273,16 +276,17 @@ func formatLongMemEvalAnalysisMarkdown(
 	}
 
 	b.WriteString("\n## Lowest F1 Bad Cases\n\n")
-	b.WriteString("| Question | Type | Backend | Stage | F1 | Evidence | Answer | Reference |\n")
-	b.WriteString("|---|---|---|---|---:|---|---|---|\n")
+	b.WriteString("| Question | Type | Backend | Stage | F1 | Evidence | Diagnosis | Answer | Reference |\n")
+	b.WriteString("|---|---|---|---|---:|---|---|---|---|\n")
 	for _, row := range lowestF1Rows(rows, 20) {
-		fmt.Fprintf(&b, "| %s | %s | %s | %s | %.4f | %s | %s | %s |\n",
+		fmt.Fprintf(&b, "| %s | %s | %s | %s | %.4f | %s | %s | %s | %s |\n",
 			mdCell(row.QuestionID),
 			mdCell(row.QuestionType),
 			mdCell(row.Backend),
 			mdCell(row.Stage),
 			row.F1,
 			mdCell(row.Evidence),
+			mdCell(truncate(row.Diagnosis, 120)),
 			mdCell(truncate(row.Answer, 120)),
 			mdCell(truncate(row.Reference, 120)),
 		)
@@ -391,6 +395,123 @@ func lowestF1Rows(rows []lmeAnalysisRow, limit int) []lmeAnalysisRow {
 		return filtered[:limit]
 	}
 	return filtered
+}
+
+func answerGapDiagnosis(questionType, answer, reference string) string {
+	parts := make([]string, 0, 2)
+	missing := missingReferenceKeywords(answer, reference, 8)
+	if len(missing) > 0 {
+		parts = append(parts, "missing="+strings.Join(missing, ","))
+	}
+	slots := missingAnswerSlots(questionType, answer, reference)
+	if len(slots) > 0 {
+		parts = append(parts, "slots="+strings.Join(slots, ","))
+	}
+	return strings.Join(parts, "; ")
+}
+
+func missingReferenceKeywords(answer, reference string, limit int) []string {
+	answerSet := tokenFrequency(answer)
+	refFreq := tokenFrequency(reference)
+	type scoredToken struct {
+		Token string
+		Count int
+	}
+	missing := make([]scoredToken, 0)
+	for token, count := range refFreq {
+		if answerSet[token] == 0 {
+			missing = append(missing, scoredToken{Token: token, Count: count})
+		}
+	}
+	sort.Slice(missing, func(i, j int) bool {
+		if missing[i].Count != missing[j].Count {
+			return missing[i].Count > missing[j].Count
+		}
+		return missing[i].Token < missing[j].Token
+	})
+	if limit > 0 && len(missing) > limit {
+		missing = missing[:limit]
+	}
+	out := make([]string, 0, len(missing))
+	for _, item := range missing {
+		out = append(out, item.Token)
+	}
+	return out
+}
+
+func tokenFrequency(text string) map[string]int {
+	out := make(map[string]int)
+	for _, token := range normalizedTokens(text) {
+		if isAnalysisStopword(token) {
+			continue
+		}
+		out[token]++
+	}
+	return out
+}
+
+func normalizedTokens(text string) []string {
+	fields := strings.FieldsFunc(strings.ToLower(text), func(r rune) bool {
+		return !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9')
+	})
+	out := make([]string, 0, len(fields))
+	for _, field := range fields {
+		field = strings.TrimSpace(field)
+		if len(field) < 3 {
+			continue
+		}
+		out = append(out, field)
+	}
+	return out
+}
+
+func isAnalysisStopword(token string) bool {
+	_, ok := analysisStopwords[token]
+	return ok
+}
+
+var analysisStopwords = map[string]struct{}{
+	"about": {}, "after": {}, "also": {}, "and": {}, "any": {}, "are": {},
+	"because": {}, "been": {}, "but": {}, "can": {}, "could": {}, "did": {},
+	"does": {}, "for": {}, "from": {}, "had": {}, "has": {}, "have": {},
+	"her": {}, "him": {}, "his": {}, "how": {}, "into": {}, "may": {},
+	"not": {}, "off": {}, "one": {}, "only": {}, "out": {}, "over": {},
+	"own": {}, "should": {}, "some": {}, "such": {}, "than": {}, "that": {},
+	"the": {}, "their": {}, "them": {}, "there": {}, "these": {}, "they": {},
+	"this": {}, "those": {}, "through": {}, "too": {}, "user": {}, "was": {},
+	"were": {}, "what": {}, "when": {}, "where": {}, "which": {}, "while": {},
+	"who": {}, "why": {}, "will": {}, "with": {}, "would": {}, "you": {},
+	"your": {},
+}
+
+func missingAnswerSlots(questionType, answer, reference string) []string {
+	if !strings.Contains(questionType, "preference") {
+		return nil
+	}
+	answer = strings.ToLower(answer)
+	reference = strings.ToLower(reference)
+	slots := make([]string, 0)
+	if strings.Contains(reference, "would prefer") && !strings.Contains(answer, "would prefer") {
+		slots = append(slots, "positive_preference")
+	}
+	if containsAny(reference, []string{"would also appreciate", "appreciate"}) &&
+		!containsAny(answer, []string{"would also appreciate", "appreciate"}) {
+		slots = append(slots, "secondary_preference")
+	}
+	if containsAny(reference, []string{"would not prefer", "may not prefer", "not prefer"}) &&
+		!containsAny(answer, []string{"would not prefer", "may not prefer", "not prefer"}) {
+		slots = append(slots, "negative_preference")
+	}
+	return slots
+}
+
+func containsAny(text string, needles []string) bool {
+	for _, needle := range needles {
+		if strings.Contains(text, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 func tsvCell(s string) string {

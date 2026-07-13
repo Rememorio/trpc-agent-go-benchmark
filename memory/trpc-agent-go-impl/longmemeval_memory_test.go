@@ -142,14 +142,14 @@ func TestAnalyzeLongMemEvalResults(t *testing.T) {
 		Summary: &runSummary{TotalCases: 1},
 		Cases: []*caseResult{{
 			QuestionID:   "q1",
-			QuestionType: "single-session-user",
+			QuestionType: "single-session-preference",
 			Question:     "Where did I meet Sophia?",
-			Answer:       "a coffee shop",
+			Answer:       "The user would prefer coffee shops with quiet seating. They would not prefer crowded restaurants.",
 			BackendResults: map[string]*backendResult{
 				"pgvector": {
 					Backend:      "pgvector",
 					FailureStage: "answer_miss",
-					Answer:       "I don't know.",
+					Answer:       "The user likes coffee.",
 					F1:           0,
 					BLEU:         0,
 					Evidence: &evidenceMetrics{
@@ -174,5 +174,23 @@ func TestAnalyzeLongMemEvalResults(t *testing.T) {
 		if !strings.Contains(string(data), "q1") {
 			t.Fatalf("%s missing question id: %s", name, data)
 		}
+		if !strings.Contains(string(data), "missing=") {
+			t.Fatalf("%s missing answer gap diagnosis: %s", name, data)
+		}
+		if !strings.Contains(string(data), "negative_preference") {
+			t.Fatalf("%s missing preference slot diagnosis: %s", name, data)
+		}
+	}
+}
+
+func TestMissingReferenceKeywords(t *testing.T) {
+	got := missingReferenceKeywords(
+		"The user would prefer cultural events.",
+		"The user would prefer cultural events with Spanish language practice and learning resources.",
+		4,
+	)
+	want := []string{"language", "learning", "practice", "resources"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("unexpected missing keywords: got %v want %v", got, want)
 	}
 }

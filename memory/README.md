@@ -228,6 +228,10 @@ go run . \
   -output ../results/lme-baseline
 ```
 
+The analysis command writes `analysis.md` and `bad_cases.tsv`, including
+failure stages, evidence status, backend disagreements, and answer-gap
+diagnostics for missing reference keywords or preference slots.
+
 ## Command-Line Options
 
 | Option              | Default                | Description                            |
