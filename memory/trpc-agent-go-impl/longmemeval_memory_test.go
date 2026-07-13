@@ -89,6 +89,50 @@ func TestFilterCasesByQuestionIDs(t *testing.T) {
 	}
 }
 
+func TestBuildLongMemEvalAnswerPromptPreferenceGuidance(t *testing.T) {
+	inst := &lmeInstance{
+		QuestionID:   "q-pref",
+		QuestionType: "single-session-preference",
+		QuestionDate: "2023/05/27 (Sat) 09:00",
+		Question:     "Can you recommend events this weekend?",
+	}
+	prompt := buildLongMemEvalAnswerPrompt(inst, []memoryHit{{
+		Memory: "Interested in language exchange events focused on French and Spanish practice.",
+	}})
+
+	if !strings.Contains(prompt, "Question type: single-session-preference") {
+		t.Fatalf("missing question type: %s", prompt)
+	}
+	if !strings.Contains(prompt, "LongMemEval expects the user's preference profile") {
+		t.Fatalf("missing preference guidance: %s", prompt)
+	}
+	if !strings.Contains(prompt, "Do not answer \"I don't know\" merely because") {
+		t.Fatalf("missing unknown-answer guard: %s", prompt)
+	}
+	if !strings.Contains(prompt, "Do not answer\nas a recommendation list") {
+		t.Fatalf("missing recommendation-list guard: %s", prompt)
+	}
+	if !strings.Contains(prompt, "The user would prefer") {
+		t.Fatalf("missing preference answer shape: %s", prompt)
+	}
+}
+
+func TestBuildLongMemEvalAnswerPromptNonPreference(t *testing.T) {
+	inst := &lmeInstance{
+		QuestionID:   "q-fact",
+		QuestionType: "single-session-assistant",
+		Question:     "What was the fifth bottle?",
+	}
+	prompt := buildLongMemEvalAnswerPrompt(inst, nil)
+
+	if strings.Contains(prompt, "preference profile") {
+		t.Fatalf("unexpected preference guidance: %s", prompt)
+	}
+	if !strings.Contains(prompt, "(no memories retrieved)") {
+		t.Fatalf("missing empty-memory marker: %s", prompt)
+	}
+}
+
 func TestAnalyzeLongMemEvalResults(t *testing.T) {
 	t.Parallel()
 

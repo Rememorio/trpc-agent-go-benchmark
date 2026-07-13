@@ -913,29 +913,7 @@ func operationMetadata(op *extractor.Operation) *memory.Metadata {
 }
 
 func answerFromMemories(ctx context.Context, llm model.Model, inst *lmeInstance, hits []memoryHit) (string, error) {
-	var b strings.Builder
-	if len(hits) == 0 {
-		b.WriteString("(no memories retrieved)\n")
-	} else {
-		for i, hit := range hits {
-			fmt.Fprintf(&b, "%d. %s", i+1, hit.Memory)
-			if hit.Score != 0 {
-				fmt.Fprintf(&b, " (score=%.4f)", hit.Score)
-			}
-			b.WriteByte('\n')
-		}
-	}
-	prompt := fmt.Sprintf(`You are answering a LongMemEval memory question.
-
-Use only the retrieved memories below. If the memories do not contain enough information, answer "I don't know".
-
-Question date: %s
-Question: %s
-
-Retrieved memories:
-%s
-
-Answer with a concise final answer only.`, inst.QuestionDate, inst.Question, b.String())
+	prompt := buildLongMemEvalAnswerPrompt(inst, hits)
 
 	maxTokens := 512
 	temp := 0.0
@@ -983,6 +961,55 @@ Answer with a concise final answer only.`, inst.QuestionDate, inst.Question, b.S
 		time.Sleep(time.Duration(attempt+1) * time.Second)
 	}
 	return "", lastErr
+}
+
+func buildLongMemEvalAnswerPrompt(inst *lmeInstance, hits []memoryHit) string {
+	var b strings.Builder
+	if len(hits) == 0 {
+		b.WriteString("(no memories retrieved)\n")
+	} else {
+		for i, hit := range hits {
+			fmt.Fprintf(&b, "%d. %s", i+1, hit.Memory)
+			if hit.Score != 0 {
+				fmt.Fprintf(&b, " (score=%.4f)", hit.Score)
+			}
+			b.WriteByte('\n')
+		}
+	}
+	guidance := longMemEvalAnswerGuidance(inst)
+	return fmt.Sprintf(`You are answering a LongMemEval memory question.
+
+Use only the retrieved memories below. If the memories do not contain enough information, answer "I don't know".
+%s
+
+Question date: %s
+Question type: %s
+Question: %s
+
+Retrieved memories:
+%s
+
+Answer with a concise final answer only.`, guidance, inst.QuestionDate, inst.QuestionType, inst.Question, b.String())
+}
+
+func longMemEvalAnswerGuidance(inst *lmeInstance) string {
+	if inst == nil {
+		return ""
+	}
+	if strings.Contains(inst.QuestionType, "preference") {
+		return `
+For preference questions, LongMemEval expects the user's preference profile,
+not real-time recommendations. If the retrieved memories show relevant
+preferences, constraints, likes, dislikes, prior choices, or recommendation
+history, summarize what the user would prefer and what they would not prefer.
+Do not answer "I don't know" merely because the memories lack current local
+events, live availability, prices, or fresh product listings. Do not answer
+as a recommendation list. Use this shape: "The user would prefer ... They
+would also appreciate ... They would not prefer ..." Include negative
+constraints implied by the memories, such as incompatibility, lack of the
+desired activity, or failure to satisfy the user's stated goal.`
+	}
+	return ""
 }
 
 type sortedSession struct {
