@@ -47,6 +47,9 @@ func TestWithObservationDate(t *testing.T) {
 	if !strings.HasPrefix(got, "Observation date: 2023/04/10 (Mon) 14:47\n") {
 		t.Fatalf("missing observation date prefix: %q", got)
 	}
+	if !strings.Contains(got, "Do not use today's system date") {
+		t.Fatalf("missing system-date guard: %q", got)
+	}
 	if !strings.Contains(got, "The Fitbit has been used for 9 months.") {
 		t.Fatalf("missing original content: %q", got)
 	}

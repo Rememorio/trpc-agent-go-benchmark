@@ -1969,7 +1969,11 @@ func withObservationDate(content, date string) string {
 	if date == "" {
 		return content
 	}
-	return fmt.Sprintf("Observation date: %s\n%s", date, content)
+	return fmt.Sprintf("Observation date: %s\n"+
+		"Use this observation date as the event date for any newly mentioned "+
+		"past or present visit, meeting, purchase, class, presentation, "+
+		"recommendation, or concrete experience that has no explicit date. "+
+		"Do not use today's system date for those events.\n%s", date, content)
 }
 
 func isRetryableMem0Error(err error) bool {
