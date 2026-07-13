@@ -148,6 +148,78 @@ final JSON deliverable directly to the workspace and recovers from
 common encoding mistakes. Prompts steer the agent to prefer this tool
 for the final deliverable.
 
+## Reflective Skill Optimization
+
+`-mode optimize` evaluates one existing skill with the pure-Go
+`evolution/optimization` package. Unlike the asynchronous `evolution` mode,
+it does not learn from tasks in sequence. It runs an explicit offline search:
+
+1. evaluate the seed skill on validation tasks;
+2. run paired parent/child feedback tasks and ask the reflection model to
+   change one skill component;
+3. retain only children that strictly improve the paired feedback score;
+4. select candidates on validation tasks; and
+5. compare the frozen winner with the seed on unseen holdout tasks.
+
+The default scaled-task split trains on `e1,e2`, selects on `e3,m1`, and
+holds out `m2,h1`. Splits must be disjoint. The included seed specs are JSON
+representations of managed skills so experiments do not need a lossy
+SKILL.md parser.
+
+`weather_multi_city_legacy.json` is a conservative control for checking that
+unhelpful rewrites are rejected instead of being promoted merely because they
+are different.
+
+```bash
+go run . \
+  -skillcraft-root "$SKILLCRAFT_ROOT" \
+  -base-task openmeteo-weather \
+  -scales e1,e2,e3,m1,m2,h1 \
+  -mode optimize \
+  -model "$MODEL_NAME" \
+  -reviewer-model "$MODEL_NAME" \
+  -optimization-seed-spec ../seeds/weather_multi_city_legacy.json \
+  -optimization-max-iterations 4 \
+  -optimization-reflection-batch-size 2 \
+  -optimization-max-metric-calls 30 \
+  -max-tokens 8192 \
+  -max-tool-iterations 24 \
+  -output ../results/gepa_weather
+```
+
+The search score preserves a hard pass/fail boundary. Among passing runs,
+official SkillCraft quality dominates and normalized agent-token efficiency
+is a small tie-breaker. Raw quality, pass status, tokens, tool calls,
+duration, and observed `skill_load` usage remain separate objectives in the
+report. Only exact duplicate tool calls (same normalized tool name and
+argument hash) are reported to the reflector; argument contents are not
+persisted.
+
+The recipe evaluator's generic `Field completeness` message does not identify
+which fields are absent. For feedback cases, the adapter enriches that signal
+without reading evaluator source: it combines the task's declared
+`meta.tools_used` with the generated cookbook JSON and reports missing
+`category_dishes`, `cuisine_dishes`, or `ingredient_dishes` fields by recipe
+count. This is the
+actionable side information needed for reflective mutation. Validation and
+holdout results remain hidden from reflection.
+
+Outputs include `optimization_result.json`, `OPTIMIZATION_REPORT.md`, the
+selected `optimized_skill/`, and a full `optimization_experiments/` lineage.
+The result and report expose `promotion_eligible` and `promotion_reason` even
+when revision submission is disabled, so a validation winner that regresses on
+holdout is explicit rather than silently presented as deployable.
+Use repeated cases and multiple optimizer seeds for effectiveness claims:
+the optimizer seed makes sampling reproducible, but an OpenAI-compatible
+model endpoint may still be nondeterministic.
+
+A sanitized GLM-5.2 search record is kept under
+[`results/gepa_reflective_optimization`](results/gepa_reflective_optimization/README.md).
+It intentionally reports a non-promotable result: the reflected recipe skill
+improved validation efficiency but regressed on holdout cost. The evidence is
+useful for verifying the holdout gate, not for claiming a recipe-skill quality
+gain.
+
 ## Key Flags
 
 | Flag | Description |
@@ -166,6 +238,11 @@ for the final deliverable.
 | `-max-prompt-skills` | Cap the number of full skill summaries rendered into the prompt |
 | `-enable-approval-gate` | Route reviewer output through the Phase A revision store + Phase B deterministic SpecGate / SafetyGate; writes immutable revisions and an audit log under `<output>/managed_skills_revisions/` |
 | `-approval-gate-shadow` | Run the quality gate in shadow mode: still publish even when gates reject, for comparison only |
+| `-optimization-seed-spec` | Seed `SkillSpec` JSON used by `-mode optimize` |
+| `-optimization-*-scales` | Disjoint feedback, validation, and holdout scale lists |
+| `-optimization-repeats` | Independent runs per task in every split |
+| `-optimization-max-iterations` | Reflective mutation attempt limit |
+| `-optimization-max-metric-calls` | Evaluated-case budget, including validation and holdout |
 
 ## Output Layout
 

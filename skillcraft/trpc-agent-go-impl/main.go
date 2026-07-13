@@ -47,6 +47,7 @@ const (
 	modeBaseline  runMode = "baseline"
 	modeEvolution runMode = "evolution"
 	modeCompare   runMode = "compare"
+	modeOptimize  runMode = "optimize"
 )
 
 // modeLearnsSkills reports whether the given mode runs the background
@@ -229,6 +230,7 @@ type benchmarkConfig struct {
 	EnableApprovalGate     bool
 	ApprovalGateShadow     bool
 	EffectivenessGate      bool
+	Optimization           optimizationBenchmarkConfig
 }
 
 type rawTaskConfig struct {
@@ -239,10 +241,11 @@ type rawTaskConfig struct {
 	MaxTurns         int      `json:"max_turns"`
 	Timeout          int      `json:"timeout"`
 	Meta             struct {
-		BaseTask    string `json:"base_task"`
-		ScaleLevel  string `json:"scale_level"`
-		Difficulty  string `json:"difficulty"`
-		Description string `json:"description"`
+		BaseTask    string   `json:"base_task"`
+		ScaleLevel  string   `json:"scale_level"`
+		Difficulty  string   `json:"difficulty"`
+		Description string   `json:"description"`
+		ToolsUsed   []string `json:"tools_used"`
 	} `json:"meta"`
 }
 
@@ -262,6 +265,7 @@ type taskDefinition struct {
 	InitialWorkspace  string   `json:"initialWorkspace,omitempty"`
 	NeededMCPServers  []string `json:"neededMCPServers"`
 	NeededLocalTools  []string `json:"neededLocalTools"`
+	ToolsUsed         []string `json:"toolsUsed,omitempty"`
 	MaxTurns          int      `json:"maxTurns"`
 	TimeoutSeconds    int      `json:"timeoutSeconds"`
 	HasInitialContent bool     `json:"hasInitialContent"`
@@ -433,22 +437,23 @@ type scoreItem struct {
 // directly on taskRunResult after evaluator + reviewer have completed
 // (see runSingleTask), so they do not appear here.
 type runStats struct {
-	PromptTokens     int
-	CompletionTokens int
-	TotalTokens      int
-	ToolCalls        []string
-	SkillToolCalls   []string
-	LoadedSkillNames []string
-	ClaimDoneCalled  bool
-	SkillToolInvoked bool
-	FinalResponse    string
-	EventErrors      []string
+	PromptTokens       int
+	CompletionTokens   int
+	TotalTokens        int
+	ToolCalls          []string
+	ToolCallSignatures []string
+	SkillToolCalls     []string
+	LoadedSkillNames   []string
+	ClaimDoneCalled    bool
+	SkillToolInvoked   bool
+	FinalResponse      string
+	EventErrors        []string
 }
 
 type trackedUsage struct {
-	PromptTokens     int
-	CompletionTokens int
-	TotalTokens      int
+	PromptTokens     int `json:"promptTokens"`
+	CompletionTokens int `json:"completionTokens"`
+	TotalTokens      int `json:"totalTokens"`
 }
 
 type usageTracker struct {
@@ -557,6 +562,13 @@ func main() {
 	if err := os.MkdirAll(cfg.OutputDir, 0o755); err != nil {
 		log.Fatalf("create output dir: %v", err)
 	}
+	if cfg.Mode == modeOptimize {
+		if err := runOptimizationBenchmark(context.Background(), cfg, tasks); err != nil {
+			log.Fatalf("optimization run failed: %v", err)
+		}
+		log.Printf("Saved optimization outputs to %s", cfg.OutputDir)
+		return
+	}
 	flushPartial := func() {
 		if writeErr := writeResults(cfg.OutputDir, result); writeErr != nil {
 			log.Printf("warning: failed to flush partial results.json: %v", writeErr)
@@ -617,7 +629,7 @@ func buildConfig() (*benchmarkConfig, error) {
 
 	mode := runMode(strings.ToLower(strings.TrimSpace(*flagMode)))
 	switch mode {
-	case modeBaseline, modeEvolution, modeCompare:
+	case modeBaseline, modeEvolution, modeCompare, modeOptimize:
 	default:
 		return nil, fmt.Errorf("unsupported -mode %q", *flagMode)
 	}
@@ -664,6 +676,13 @@ func buildConfig() (*benchmarkConfig, error) {
 		EnableApprovalGate:     *flagEnableApprovalGate,
 		ApprovalGateShadow:     *flagApprovalGateShadow,
 		EffectivenessGate:      *flagEffectivenessGate,
+	}
+	if mode == modeOptimize {
+		optimizationCfg, err := buildOptimizationBenchmarkConfig()
+		if err != nil {
+			return nil, err
+		}
+		cfg.Optimization = optimizationCfg
 	}
 	if *flagTaskTimeoutSeconds > 0 {
 		cfg.TaskTimeout = time.Duration(*flagTaskTimeoutSeconds) * time.Second
@@ -780,6 +799,7 @@ func loadTaskDefinition(skillcraftRoot, spec string) (*taskDefinition, error) {
 		InitialWorkspace:  initialWorkspace,
 		NeededMCPServers:  append([]string(nil), taskCfg.NeededMCPServers...),
 		NeededLocalTools:  append([]string(nil), taskCfg.NeededLocalTools...),
+		ToolsUsed:         append([]string(nil), taskCfg.Meta.ToolsUsed...),
 		MaxTurns:          taskCfg.MaxTurns,
 		TimeoutSeconds:    taskCfg.Timeout,
 		HasInitialContent: hasInitialContent,
@@ -1183,7 +1203,7 @@ func outcomeFromEval(runErr error, eval *officialEval, evalErr error) *evolution
 		out.Notes = "evaluator did not return a verdict"
 	case eval.Passed:
 		out.Status = evolution.OutcomeSuccess
-		score := eval.Score.Percent
+		score := eval.Score.Percent / 100
 		out.Score = &score
 		if status := strings.ToLower(strings.TrimSpace(eval.Status)); status == "partial" {
 			out.Status = evolution.OutcomePartial
@@ -1191,7 +1211,7 @@ func outcomeFromEval(runErr error, eval *officialEval, evalErr error) *evolution
 		}
 	default:
 		out.Status = evolution.OutcomeFail
-		score := eval.Score.Percent
+		score := eval.Score.Percent / 100
 		out.Score = &score
 		out.Notes = truncateOutcomeNote(joinScoreNotes(eval))
 	}
@@ -1254,6 +1274,25 @@ func executeTask(
 	sessionService *sessioninmemory.SessionService,
 	appName, userID, sessionID string,
 ) (*runStats, error) {
+	return executeTaskWithContext(
+		context.Background(), cfg, task, mode, workspace, repo,
+		sessionService, appName, userID, sessionID,
+	)
+}
+
+func executeTaskWithContext(
+	parentCtx context.Context,
+	cfg *benchmarkConfig,
+	task *taskDefinition,
+	mode runMode,
+	workspace string,
+	repo *skill.FSRepository,
+	sessionService *sessioninmemory.SessionService,
+	appName, userID, sessionID string,
+) (*runStats, error) {
+	if parentCtx == nil {
+		parentCtx = context.Background()
+	}
 	modelInstance := newOpenAIModel(cfg.ModelName, cfg.Variant)
 	stats := &runStats{}
 	var availableSkills []string
@@ -1274,10 +1313,7 @@ func executeTask(
 	if hasSkills {
 		availableSkills = summariesToNames(repo.Summaries())
 	}
-	maxTokens := cfg.MaxTokens
-	if taskNeedsLowerCompletionBudget(task) && maxTokens > 2048 {
-		maxTokens = 2048
-	}
+	maxTokens := completionTokenBudget(task, mode, cfg.MaxTokens)
 	genConfig := model.GenerationConfig{
 		MaxTokens: intPtr(maxTokens),
 		Stream:    false,
@@ -1286,7 +1322,9 @@ func executeTask(
 	agentOpts := []llmagent.Option{
 		llmagent.WithModel(modelInstance),
 		llmagent.WithDescription("SkillCraft benchmark agent"),
-		llmagent.WithInstruction(buildInstruction(task, workspace, availableSkills)),
+		llmagent.WithInstruction(buildInstructionForMode(
+			task, workspace, availableSkills, mode,
+		)),
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithToolSets([]tool.ToolSet{localTools, filesystemTools}),
 		llmagent.WithMaxToolIterations(cfg.MaxToolIterations),
@@ -1339,7 +1377,7 @@ func executeTask(
 		taskTimeout = defaultFallbackTaskLimit
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(taskTimeout)*time.Second)
+	ctx, cancel := context.WithTimeout(parentCtx, time.Duration(taskTimeout)*time.Second)
 	defer cancel()
 
 	userPrompt := buildUserPrompt(task, workspace, availableSkills)
@@ -1421,7 +1459,20 @@ func evaluateTask(
 	task *taskDefinition,
 	workspace string,
 ) (*officialEval, error) {
-	cmd := exec.Command(
+	return evaluateTaskWithContext(context.Background(), cfg, task, workspace)
+}
+
+func evaluateTaskWithContext(
+	ctx context.Context,
+	cfg *benchmarkConfig,
+	task *taskDefinition,
+	workspace string,
+) (*officialEval, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	cmd := exec.CommandContext(
+		ctx,
 		"uv",
 		"run",
 		"--project", cfg.SkillCraftRoot,
@@ -1495,6 +1546,10 @@ func consumeEvents(evtCh <-chan *event.Event) *runStats {
 					}
 					normalizedName := normalizeToolCallName(rawName)
 					stats.ToolCalls = append(stats.ToolCalls, rawName)
+					stats.ToolCallSignatures = append(
+						stats.ToolCallSignatures,
+						toolCallSignature(normalizedName, call.Function.Arguments),
+					)
 					if normalizedName == "local-claim_done" {
 						stats.ClaimDoneCalled = true
 					}
@@ -1542,6 +1597,15 @@ func extractLoadedSkillName(arguments []byte) string {
 }
 
 func buildInstruction(task *taskDefinition, workspace string, availableSkills []string) string {
+	return buildInstructionForMode(task, workspace, availableSkills, modeBaseline)
+}
+
+func buildInstructionForMode(
+	task *taskDefinition,
+	workspace string,
+	availableSkills []string,
+	mode runMode,
+) string {
 	parts := []string{
 		"You are solving one SkillCraft benchmark task in a single uninterrupted session.",
 	}
@@ -1597,6 +1661,11 @@ func buildInstruction(task *taskDefinition, workspace string, availableSkills []
 			"After deciding a loaded skill is incomplete or irrelevant, stop reconsidering it and continue with the task using the task specification and tool results.",
 			"These managed skills are textual procedures, not prebuilt executable scripts.",
 		)
+		if mode == modeOptimize {
+			parts = append(parts,
+				"This run evaluates the loaded managed skill as an optimization candidate. Follow every non-conflicting checklist, validation, and output-detail instruction it adds. The task remains authoritative when the two conflict, but a minimal example schema does not cancel extra candidate fields or checks that are compatible with the stated objective.",
+			)
+		}
 	}
 	if taskDocMayContainPreviewMarkers(task.TaskDoc) {
 		parts = append(parts,
@@ -1826,6 +1895,13 @@ func taskNeedsLowerCompletionBudget(task *taskDefinition) bool {
 		return true
 	}
 	return taskNeedsWorkingNotes(task)
+}
+
+func completionTokenBudget(task *taskDefinition, mode runMode, configured int) int {
+	if mode != modeOptimize && taskNeedsLowerCompletionBudget(task) && configured > 2048 {
+		return 2048
+	}
+	return configured
 }
 
 func titleCaseASCII(s string) string {

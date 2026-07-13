@@ -1,0 +1,17 @@
+{
+  "name": "Collect Weather Data for Multiple Cities",
+  "description": "Collect weather data for multiple cities using the required APIs and compile the results into the task-defined JSON output.",
+  "when_to_use": "Use this skill for multi-city weather tasks that require coordinates, current conditions, forecasts, derived summaries, and a validated output artifact.",
+  "steps": [
+    "Read the task specification and extract the exact city list, required API calls, output fields, and output filename.",
+    "For each specified city, call the coordinate tool before calling weather tools that require latitude and longitude.",
+    "Call each required weather endpoint exactly once per city unless a call fails or returns incomplete data.",
+    "Compute only the summaries required by the current task and preserve the task's exact entity set and output schema.",
+    "Write the complete JSON artifact with local-write_final_json, validate that it exists and is valid JSON, then call claim_done."
+  ],
+  "pitfalls": [
+    "Do not repeat successful tool calls with identical arguments.",
+    "Do not add cities or fields from helper files when the task specifies an exact set.",
+    "Do not finish with JSON only in the assistant response; persist the required file before claim_done."
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "name": "Create Recipe Cookbook with International Dishes",
+  "description": "Build a structured cookbook for the exact dishes in the task by using the required meal APIs and producing the specified JSON artifact.",
+  "when_to_use": "Use this skill for multi-dish cookbook tasks that combine meal search, category, area, ingredient, and output-validation requirements.",
+  "steps": [
+    "Read the task specification and extract the exact dish list, required API sequence, output fields (including any related-dish or summary fields such as category_dishes and cuisine_dishes), and output filename.",
+    "For each dish, call the required search, category, and area or ingredient tools with the task-specified values and avoid substituting other dishes.",
+    "From each category, area, or ingredient tool result, capture the related-dish list into the corresponding output field (e.g., category_dishes from category results, cuisine_dishes from area results) using the task-specified format such as count plus top-3 meal names.",
+    "Derive ingredient counts, cuisine metadata, cooking summaries, difficulty ratings, or other requested fields from the returned data without inventing missing values.",
+    "Assemble one complete JSON document that follows the required schema, ensuring every requested field including related-dish summary fields is populated for each dish, and contains exactly the requested dishes.",
+    "Write the artifact with local-write_final_json, verify that it is valid and complete, then call claim_done."
+  ],
+  "pitfalls": [
+    "Do not repeat successful API calls with identical arguments.",
+    "Do not treat a plan or helper file as the final cookbook artifact.",
+    "Do not omit the final file write or claim_done step after collecting the data."
+  ]
+}

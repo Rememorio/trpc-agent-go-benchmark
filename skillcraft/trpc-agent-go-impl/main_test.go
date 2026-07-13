@@ -327,7 +327,7 @@ func TestOutcomeFromEval(t *testing.T) {
 		}, nil)
 		require.Equal(t, evolution.OutcomeSuccess, o.Status)
 		require.NotNil(t, o.Score)
-		require.InDelta(t, 100.0, *o.Score, 1e-9)
+		require.InDelta(t, 1.0, *o.Score, 1e-9)
 	})
 
 	t.Run("passed=true status=partial becomes partial with notes", func(t *testing.T) {
@@ -341,6 +341,7 @@ func TestOutcomeFromEval(t *testing.T) {
 		}, nil)
 		require.Equal(t, evolution.OutcomePartial, o.Status)
 		require.NotNil(t, o.Score)
+		require.InDelta(t, 0.5, *o.Score, 1e-9)
 		require.Contains(t, o.Notes, "indicator GDP")
 		require.Contains(t, o.Notes, "wrong code")
 	})

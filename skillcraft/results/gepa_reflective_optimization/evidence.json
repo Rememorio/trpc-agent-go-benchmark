@@ -1,0 +1,100 @@
+{
+  "schema_version": 1,
+  "recorded_date": "2026-07-13",
+  "framework_revision": "c0b120728b27",
+  "benchmark_base_revision": "1edee87",
+  "skillcraft_revision": "0a9ba8808ba49bbc7bd40ad2e853896b8c3d4764",
+  "model": "glm52",
+  "promotable_skill_improvement_observed": false,
+  "weather_control": {
+    "splits": {
+      "feedback": ["e1", "e2"],
+      "validation": ["e3", "m1"],
+      "holdout": ["m2", "h1"]
+    },
+    "iterations": 4,
+    "evaluated_cases": 22,
+    "accepted_candidates_including_seed": 2,
+    "search_agent_tokens": 2062391,
+    "reflection_tokens": 11763,
+    "seed_validation_score": 0.999025965,
+    "accepted_candidate_validation_score": 0.99878106,
+    "selected_validation_score": 0.999025965,
+    "seed_holdout_score": 0.99810174,
+    "selected_holdout_score": 0.99810174,
+    "selected_changed": false
+  },
+  "recipe_search": {
+    "splits": {
+      "feedback": ["e1", "e2"],
+      "validation": ["e3", "m1"],
+      "holdout": ["m2", "h1"]
+    },
+    "iterations": 4,
+    "evaluated_cases": 26,
+    "accepted_candidates_including_seed": 3,
+    "search_agent_tokens": 3819019,
+    "reflection_tokens": 11537,
+    "baseline_validation": {
+      "score": 0.989455445,
+      "official_quality": 0.955,
+      "pass_rate": 1.0,
+      "agent_tokens": 199455.5,
+      "tool_calls": 20.5
+    },
+    "selected_validation": {
+      "score": 0.989930445,
+      "official_quality": 0.955,
+      "pass_rate": 1.0,
+      "agent_tokens": 151955.5,
+      "tool_calls": 19.5
+    },
+    "baseline_holdout": {
+      "score": 0.987553435,
+      "official_quality": 0.943,
+      "pass_rate": 1.0,
+      "agent_tokens": 161656.5,
+      "tool_calls": 25.5
+    },
+    "selected_holdout": {
+      "score": 0.986576015,
+      "official_quality": 0.943,
+      "pass_rate": 1.0,
+      "agent_tokens": 259398.5,
+      "tool_calls": 30.5
+    },
+    "promotion_eligible": false,
+    "promotion_reason": "holdout delta -0.0010 is below required 0.0000"
+  },
+  "final_code_frozen_ab": {
+    "search_disabled": true,
+    "optimizer_seed": 29,
+    "validation_scales": ["e3"],
+    "holdout_scales": ["m2", "h1"],
+    "validation": {
+      "seed_score": 0.99206649,
+      "candidate_score": 0.99247784,
+      "official_quality_delta": 0.0,
+      "pass_rate_delta": 0.0,
+      "seed_agent_tokens": 166351,
+      "candidate_agent_tokens": 125216,
+      "agent_token_percent_delta": -24.72783452
+    },
+    "holdout": {
+      "seed_score": 0.98706464,
+      "candidate_score": 0.986568065,
+      "score_delta": -0.000496575,
+      "official_quality_delta": 0.0,
+      "pass_rate_delta": 0.0,
+      "seed_agent_tokens": 210536,
+      "candidate_agent_tokens": 260193.5,
+      "agent_token_percent_delta": 23.58622753,
+      "seed_duration_seconds": 160.3594681,
+      "candidate_duration_seconds": 131.1880193,
+      "duration_percent_delta": -18.19128558,
+      "seed_tool_calls": 27.0,
+      "candidate_tool_calls": 29.5
+    },
+    "promotion_eligible": false
+  }
+}
