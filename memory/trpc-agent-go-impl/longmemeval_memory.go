@@ -22,6 +22,7 @@ import (
 	"io"
 	"log"
 	"math/rand"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -48,6 +49,7 @@ const (
 
 	lmePGVectorTableBase = "lme_memory_eval"
 	defaultMem0Host      = "http://localhost:8888"
+	lmeMem0IngestRetries = 2
 )
 
 type lmeTurn struct {
@@ -495,26 +497,43 @@ func (b *mem0Backend) ingestPairOSS(ctx context.Context, sess *session.Session, 
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		strings.TrimRight(b.host, "/")+"/memories", bytes.NewReader(data))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
 	client := b.httpClient
 	if client == nil {
 		client = http.DefaultClient
 	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+	endpoint := strings.TrimRight(b.host, "/") + "/memories"
+	var lastErr error
+	for attempt := 0; attempt <= lmeMem0IngestRetries; attempt++ {
+		if attempt > 0 {
+			if err := sleepWithContext(ctx, time.Duration(attempt)*time.Second); err != nil {
+				return err
+			}
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(data))
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := client.Do(req)
+		if err != nil {
+			lastErr = err
+			if isRetryableMem0Error(err) {
+				continue
+			}
+			return err
+		}
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return fmt.Errorf("mem0 OSS ingest failed: status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(body)))
+		_ = resp.Body.Close()
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			return nil
+		}
+		lastErr = fmt.Errorf("mem0 OSS ingest failed: status=%d body=%s",
+			resp.StatusCode, strings.TrimSpace(string(body)))
+		if !isRetryableMem0Status(resp.StatusCode) {
+			return lastErr
+		}
 	}
-	return nil
+	return lastErr
 }
 
 func (b *mem0Backend) Search(ctx context.Context, userKey memory.UserKey, query string, topK int) ([]memoryHit, error) {
@@ -1900,6 +1919,32 @@ func withObservationDate(content, date string) string {
 		return content
 	}
 	return fmt.Sprintf("Observation date: %s\n%s", date, content)
+}
+
+func isRetryableMem0Error(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return true
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
+}
+
+func isRetryableMem0Status(status int) bool {
+	return status == http.StatusTooManyRequests || status >= 500
+}
+
+func sleepWithContext(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func appendError(base, next string) string {

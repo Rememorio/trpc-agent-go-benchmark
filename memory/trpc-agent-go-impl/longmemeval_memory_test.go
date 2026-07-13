@@ -11,6 +11,8 @@ package main
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,6 +20,7 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
 func TestLongMemEvalDateHelpers(t *testing.T) {
@@ -48,6 +51,57 @@ func TestWithObservationDate(t *testing.T) {
 	}
 	if out := withObservationDate("content", "  "); out != "content" {
 		t.Fatalf("empty date should leave content unchanged: %q", out)
+	}
+}
+
+func TestMem0OSSIngestRetriesTransientStatus(t *testing.T) {
+	t.Parallel()
+
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if r.URL.Path != "/memories" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		if attempts == 1 {
+			http.Error(w, "busy", http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	sess := session.NewSession(lmeAppName, "user", "session")
+	appendMessages(sess, []model.Message{
+		{Role: model.RoleUser, Content: "hello"},
+		{Role: model.RoleAssistant, Content: "hi"},
+	}, "source", 0)
+	backend := &mem0Backend{
+		host:       server.URL,
+		selfHosted: true,
+		httpClient: server.Client(),
+	}
+	err := backend.ingestPairOSS(context.Background(), sess, ingestMeta{SessionID: "source"})
+	if err != nil {
+		t.Fatalf("ingest pair: %v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("unexpected attempts: got %d want 2", attempts)
+	}
+}
+
+func TestRetryableMem0Status(t *testing.T) {
+	t.Parallel()
+
+	for _, status := range []int{http.StatusTooManyRequests, http.StatusInternalServerError, http.StatusBadGateway} {
+		if !isRetryableMem0Status(status) {
+			t.Fatalf("status %d should be retryable", status)
+		}
+	}
+	for _, status := range []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusNotFound} {
+		if isRetryableMem0Status(status) {
+			t.Fatalf("status %d should not be retryable", status)
+		}
 	}
 }
 
