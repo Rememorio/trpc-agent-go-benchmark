@@ -305,6 +305,109 @@ func TestExactAnswerMatchUsesWholeNormalizedAnswer(t *testing.T) {
 	}
 }
 
+func TestBuildLongMemEvalJudgePromptUsesOfficialTaskRules(t *testing.T) {
+	t.Parallel()
+
+	preference := &caseResult{
+		QuestionID:   "pref-1",
+		QuestionType: "single-session-preference",
+		Question:     "Any dinner ideas?",
+		Answer:       "The user would prefer garden vegetables.",
+	}
+	prompt := buildLongMemEvalJudgePrompt(preference, "Use tomatoes from the garden.")
+	if !strings.Contains(prompt, "desired personalized response") {
+		t.Fatalf("preference prompt should use rubric wording: %s", prompt)
+	}
+
+	abstention := &caseResult{
+		QuestionID:   "abs-1_abs",
+		QuestionType: "multi-session",
+		Question:     "What did I buy?",
+		Answer:       "The information provided is not enough.",
+	}
+	prompt = buildLongMemEvalJudgePrompt(abstention, "I don't know")
+	if !strings.Contains(prompt, "unanswerable") {
+		t.Fatalf("abstention prompt should use unanswerable wording: %s", prompt)
+	}
+
+	temporal := &caseResult{
+		QuestionID:   "time-1",
+		QuestionType: "temporal-reasoning",
+		Question:     "How many days ago?",
+		Answer:       "18 days",
+	}
+	prompt = buildLongMemEvalJudgePrompt(temporal, "19 days")
+	if !strings.Contains(prompt, "off-by-one") {
+		t.Fatalf("temporal prompt should allow off-by-one day counts: %s", prompt)
+	}
+}
+
+func TestParseLongMemEvalJudge(t *testing.T) {
+	t.Parallel()
+
+	if !parseLongMemEvalJudge("Yes.") {
+		t.Fatal("yes response should be correct")
+	}
+	if !parseLongMemEvalJudge("yesThe model response is correct.") {
+		t.Fatal("yes prefix should be correct")
+	}
+	if !parseLongMemEvalJudge("The answer is yes.") {
+		t.Fatal("yes-only fallback should be correct")
+	}
+	if parseLongMemEvalJudge("No.") {
+		t.Fatal("no response should not be correct")
+	}
+	if parseLongMemEvalJudge("No, not yes.") {
+		t.Fatal("first-token no should not be correct")
+	}
+	if !parseLongMemEvalJudge("The response correctly recalls and uses the user's personal information.") {
+		t.Fatal("positive explanatory judge response should be correct")
+	}
+	if parseLongMemEvalJudge("The response does not satisfy the rubric.") {
+		t.Fatal("negative explanatory judge response should not be correct")
+	}
+}
+
+func TestBuildLongMemEvalSummaryIncludesJudgeMetrics(t *testing.T) {
+	t.Parallel()
+
+	result := buildLongMemEvalSummary([]*caseResult{{
+		BackendResults: map[string]*backendResult{
+			"pgvector": {
+				Backend: "pgvector",
+				Judge: &lmeJudgeResult{
+					Correct: true,
+					TokenUsage: &lmeTokenUsage{
+						LLMCalls:    1,
+						TotalTokens: 11,
+					},
+				},
+			},
+			"mem0": {
+				Backend: "mem0",
+				Judge: &lmeJudgeResult{
+					Correct: false,
+					TokenUsage: &lmeTokenUsage{
+						LLMCalls:    1,
+						TotalTokens: 9,
+					},
+				},
+			},
+		},
+	}})
+	if result.BackendSummaries["pgvector"].JudgedCases != 1 ||
+		result.BackendSummaries["pgvector"].JudgeCorrect != 1 {
+		t.Fatalf("unexpected pgvector judge summary: %+v", result.BackendSummaries["pgvector"])
+	}
+	if result.BackendSummaries["mem0"].JudgedCases != 1 ||
+		result.BackendSummaries["mem0"].JudgeCorrect != 0 {
+		t.Fatalf("unexpected mem0 judge summary: %+v", result.BackendSummaries["mem0"])
+	}
+	if result.JudgeTokenUsage.LLMCalls != 2 || result.JudgeTokenUsage.TotalTokens != 20 {
+		t.Fatalf("unexpected judge token usage: %+v", result.JudgeTokenUsage)
+	}
+}
+
 func TestHitsFromEntriesIncludesEpisodicMetadata(t *testing.T) {
 	t.Parallel()
 

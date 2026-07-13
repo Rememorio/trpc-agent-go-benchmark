@@ -181,6 +181,7 @@ type backendResult struct {
 	AnswerUsage    *lmeTokenUsage   `json:"answer_token_usage,omitempty"`
 	Evidence       *evidenceMetrics `json:"evidence,omitempty"`
 	FailureStage   string           `json:"failure_stage,omitempty"`
+	Judge          *lmeJudgeResult  `json:"judge,omitempty"`
 	ExactMatch     bool             `json:"exact_match"`
 	F1             float64          `json:"f1"`
 	BLEU           float64          `json:"bleu"`
@@ -188,6 +189,15 @@ type backendResult struct {
 	SearchDuration int64            `json:"search_duration_ms"`
 	AnswerDuration int64            `json:"answer_duration_ms,omitempty"`
 	Error          string           `json:"error,omitempty"`
+}
+
+type lmeJudgeResult struct {
+	Model      string         `json:"model"`
+	Correct    bool           `json:"correct"`
+	Raw        string         `json:"raw"`
+	TokenUsage *lmeTokenUsage `json:"token_usage,omitempty"`
+	DurationMs int64          `json:"duration_ms,omitempty"`
+	Error      string         `json:"error,omitempty"`
 }
 
 type caseResult struct {
@@ -211,11 +221,14 @@ type runSummary struct {
 	TotalCases       int                        `json:"total_cases"`
 	BackendSummaries map[string]*backendSummary `json:"backend_summaries"`
 	TokenUsage       lmeTokenUsage              `json:"token_usage"`
+	JudgeTokenUsage  lmeTokenUsage              `json:"judge_token_usage,omitempty"`
 }
 
 type backendSummary struct {
 	Cases              int           `json:"cases"`
 	ExactMatches       int           `json:"exact_matches"`
+	JudgedCases        int           `json:"judged_cases,omitempty"`
+	JudgeCorrect       int           `json:"judge_correct,omitempty"`
 	TotalPairs         int           `json:"total_pairs"`
 	TotalMemories      int           `json:"total_memories"`
 	TotalHits          int           `json:"total_hits"`
@@ -229,6 +242,7 @@ type backendSummary struct {
 	AvgF1              float64       `json:"avg_f1"`
 	AvgBLEU            float64       `json:"avg_bleu"`
 	TokenUsage         lmeTokenUsage `json:"token_usage"`
+	JudgeTokenUsage    lmeTokenUsage `json:"judge_token_usage,omitempty"`
 }
 
 type evidenceMetrics struct {
@@ -623,6 +637,9 @@ func runLongMemEvalMemory(ctx context.Context) error {
 			return err
 		}
 		return compareLongMemEvalResults(baseline, candidate, longMemEvalCompareOutputDir(candidate))
+	}
+	if path := strings.TrimSpace(*flagLMEJudgeResults); path != "" {
+		return judgeLongMemEvalResults(ctx, path, longMemEvalAnalysisOutputDir(path))
 	}
 	if path := strings.TrimSpace(*flagLMEAnalyzeResults); path != "" {
 		return analyzeLongMemEvalResults(path, longMemEvalAnalysisOutputDir(path))
@@ -1057,6 +1074,279 @@ func answerFromMemories(ctx context.Context, llm model.Model, inst *lmeInstance,
 		time.Sleep(time.Duration(attempt+1) * time.Second)
 	}
 	return "", lastErr
+}
+
+func judgeLongMemEvalResults(ctx context.Context, path, outputDir string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read results: %w", err)
+	}
+	var result runResult
+	if err := json.Unmarshal(data, &result); err != nil {
+		return fmt.Errorf("parse results: %w", err)
+	}
+	modelName := getEvalModelName()
+	modelVariant := getModelVariant()
+	baseLLM, err := newLongMemEvalModel(modelName, modelVariant)
+	if err != nil {
+		return err
+	}
+	if result.Metadata == nil {
+		result.Metadata = make(map[string]any)
+	}
+	result.Metadata["judge_model"] = modelName
+	result.Metadata["judge_model_variant"] = modelVariant
+	result.Metadata["judged_at"] = time.Now().UTC().Format(time.RFC3339)
+	result.Metadata["judge_note"] = "LLM semantic correctness judge adapted from the official LongMemEval QA evaluator."
+
+	for _, cr := range result.Cases {
+		if cr == nil {
+			continue
+		}
+		log.Printf("judging %s type=%s", cr.QuestionID, cr.QuestionType)
+		for backendName, br := range cr.BackendResults {
+			if br == nil {
+				continue
+			}
+			if strings.TrimSpace(br.Answer) == "" {
+				br.Judge = &lmeJudgeResult{
+					Model: modelName,
+					Error: "missing answer",
+				}
+				continue
+			}
+			tracker := &lmeTokenTracker{}
+			llm := &lmeTrackingModel{
+				base:    baseLLM,
+				tracker: tracker,
+				timeout: *flagLMEModelCallTimeout,
+			}
+			start := time.Now()
+			raw, err := judgeLongMemEvalAnswer(ctx, llm, cr, br.Answer)
+			usage := tracker.Snapshot()
+			judge := &lmeJudgeResult{
+				Model:      modelName,
+				Raw:        raw,
+				Correct:    parseLongMemEvalJudge(raw),
+				TokenUsage: tokenUsagePtr(usage),
+				DurationMs: time.Since(start).Milliseconds(),
+			}
+			if err != nil {
+				judge.Error = err.Error()
+			}
+			br.Judge = judge
+			log.Printf("  %s judge correct=%v raw=%q err=%s",
+				backendName, judge.Correct, truncate(judge.Raw, 80), judge.Error)
+		}
+	}
+	result.Summary = buildLongMemEvalSummary(result.Cases)
+	if err := os.MkdirAll(outputDir, 0755); err != nil {
+		return fmt.Errorf("create judge output dir: %w", err)
+	}
+	outPath := filepath.Join(outputDir, "judged_results.json")
+	b, err := json.MarshalIndent(&result, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal judged results: %w", err)
+	}
+	if err := os.WriteFile(outPath, b, 0644); err != nil {
+		return fmt.Errorf("write judged results: %w", err)
+	}
+	printLongMemEvalSummary(&result)
+	log.Printf("LongMemEval judged results written to %s", outPath)
+	return nil
+}
+
+func judgeLongMemEvalAnswer(
+	ctx context.Context,
+	llm model.Model,
+	cr *caseResult,
+	response string,
+) (string, error) {
+	prompt := buildLongMemEvalJudgePrompt(cr, response)
+	req := newLongMemEvalJudgeRequest(prompt)
+	respCh, err := llm.GenerateContent(ctx, req)
+	if err != nil {
+		return "", err
+	}
+	var out string
+	var delta strings.Builder
+	for resp := range respCh {
+		if resp == nil {
+			continue
+		}
+		if resp.Error != nil {
+			return "", errors.New(resp.Error.Message)
+		}
+		if len(resp.Choices) > 0 {
+			choice := resp.Choices[0]
+			if choice.Delta.Content != "" {
+				delta.WriteString(choice.Delta.Content)
+			}
+			if choice.Message.Content != "" {
+				out = choice.Message.Content
+			}
+		}
+	}
+	if out == "" {
+		out = delta.String()
+	}
+	out = strings.TrimSpace(out)
+	if out == "" {
+		return "", errors.New("judge returned empty answer")
+	}
+	return out, nil
+}
+
+func newLongMemEvalJudgeRequest(prompt string) *model.Request {
+	maxTokens := 160
+	temp := 0.0
+	reasoningEffort := "low"
+	thinkingEnabled := false
+	return &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage("You are a strict LongMemEval evaluator. The first word of your response must be yes or no."),
+			model.NewUserMessage(prompt),
+		},
+		GenerationConfig: model.GenerationConfig{
+			Stream:          false,
+			MaxTokens:       &maxTokens,
+			Temperature:     &temp,
+			ReasoningEffort: &reasoningEffort,
+			ThinkingEnabled: &thinkingEnabled,
+		},
+	}
+}
+
+func buildLongMemEvalJudgePrompt(cr *caseResult, response string) string {
+	if cr == nil {
+		return ""
+	}
+	if strings.Contains(cr.QuestionID, "_abs") {
+		return fmt.Sprintf(`Task: Decide whether the model correctly identifies the question as unanswerable.
+Return yes if the model says the information is incomplete, unavailable, or not mentioned. Return no otherwise.
+
+Question: %s
+
+Explanation: %s
+
+Model Response: %s
+
+Decision:`, cr.Question, cr.Answer, response)
+	}
+	switch cr.QuestionType {
+	case "single-session-user", "single-session-assistant", "multi-session":
+		return fmt.Sprintf(`Task: Decide whether the model response is correct.
+Return yes if the response contains the correct answer, is equivalent to the correct answer, or contains all intermediate steps needed to get it. Return no if it only contains a subset of the required answer.
+
+Question: %s
+
+Correct Answer: %s
+
+Model Response: %s
+
+Decision:`, cr.Question, cr.Answer, response)
+	case "temporal-reasoning":
+		return fmt.Sprintf(`Task: Decide whether the model response is correct.
+Return yes if the response contains or is equivalent to the correct answer, or contains all intermediate steps needed to get it. Return no if it only contains a subset of the required answer. For day/week/month count questions, do not penalize off-by-one errors.
+
+Question: %s
+
+Correct Answer: %s
+
+Model Response: %s
+
+Decision:`, cr.Question, cr.Answer, response)
+	case "knowledge-update":
+		return fmt.Sprintf(`Task: Decide whether the model response is correct.
+Return yes if the response contains the updated correct answer, even if it also mentions previous information. Return no otherwise.
+
+Question: %s
+
+Correct Answer: %s
+
+Model Response: %s
+
+Decision:`, cr.Question, cr.Answer, response)
+	case "single-session-preference":
+		return fmt.Sprintf(`Task: Decide whether the model response satisfies the desired personalized response.
+Return yes if the response recalls and uses the user's personal information correctly. It does not need to reflect every point in the rubric. Return no otherwise.
+
+Question: %s
+
+Rubric: %s
+
+Model Response: %s
+
+Decision:`, cr.Question, cr.Answer, response)
+	default:
+		return fmt.Sprintf(`Task: Decide whether the model response is correct.
+Return yes if the response is equivalent to the correct answer. Return no otherwise.
+
+Question: %s
+
+Correct Answer: %s
+
+Model Response: %s
+
+Decision:`, cr.Question, cr.Answer, response)
+	}
+}
+
+func parseLongMemEvalJudge(raw string) bool {
+	compact := strings.TrimSpace(strings.ToLower(raw))
+	if strings.HasPrefix(compact, "yes") {
+		return true
+	}
+	if strings.HasPrefix(compact, "no") {
+		return false
+	}
+	tokens := strings.Fields(normalizeExactAnswer(raw))
+	if len(tokens) == 0 {
+		return false
+	}
+	switch tokens[0] {
+	case "yes":
+		return true
+	case "no":
+		return false
+	}
+	hasYes := false
+	hasNo := false
+	for _, token := range tokens {
+		hasYes = hasYes || token == "yes"
+		hasNo = hasNo || token == "no"
+	}
+	if hasYes && !hasNo {
+		return true
+	}
+	lower := strings.ToLower(raw)
+	for _, pattern := range []string{
+		"does not",
+		"do not",
+		"not correct",
+		"not satisfy",
+		"doesn't satisfy",
+		"incorrect",
+		"fails to",
+	} {
+		if strings.Contains(lower, pattern) {
+			return false
+		}
+	}
+	for _, pattern := range []string{
+		"correctly recalls",
+		"correctly identifies",
+		"response is correct",
+		"is correct",
+		"satisfies",
+		"equivalent",
+		"contains the correct answer",
+	} {
+		if strings.Contains(lower, pattern) {
+			return true
+		}
+	}
+	return false
 }
 
 func postprocessLongMemEvalAnswer(inst *lmeInstance, hits []memoryHit, raw string) string {
@@ -1597,8 +1887,13 @@ func printLongMemEvalSummary(result *runResult) {
 	}
 	fmt.Println("\n--- Backend Summary ---")
 	for backend, summary := range result.Summary.BackendSummaries {
-		fmt.Printf("  %s: cases=%d EM=%d evidence=%d extractAny=%d retrievalAny=%d retrievalAll=%d turnEvidence=%d turnExtractAny=%d turnRetrievalAny=%d avgF1=%.3f avgBLEU=%.3f calls=%d tokens=%d cached=%d cacheHit=%.3f\n",
+		judgeText := ""
+		if summary.JudgedCases > 0 {
+			judgeText = fmt.Sprintf(" judge=%d/%d", summary.JudgeCorrect, summary.JudgedCases)
+		}
+		fmt.Printf("  %s: cases=%d EM=%d%s evidence=%d extractAny=%d retrievalAny=%d retrievalAll=%d turnEvidence=%d turnExtractAny=%d turnRetrievalAny=%d avgF1=%.3f avgBLEU=%.3f calls=%d tokens=%d cached=%d cacheHit=%.3f\n",
 			backend, summary.Cases, summary.ExactMatches,
+			judgeText,
 			summary.EvidenceCases, summary.ExtractRecallAny, summary.RetrievalRecallAny, summary.RetrievalRecallAll,
 			summary.TurnEvidenceCases, summary.ExtractTurnAny, summary.RetrievalTurnAny,
 			summary.AvgF1, summary.AvgBLEU,
@@ -1631,6 +1926,12 @@ func buildLongMemEvalSummary(cases []*caseResult) *runSummary {
 			if br.ExactMatch {
 				bs.ExactMatches++
 			}
+			if br.Judge != nil && br.Judge.Error == "" {
+				bs.JudgedCases++
+				if br.Judge.Correct {
+					bs.JudgeCorrect++
+				}
+			}
 			bs.TotalPairs += br.IngestedPairs
 			bs.TotalMemories += len(br.FinalMemories)
 			bs.TotalHits += len(br.Retrieval)
@@ -1660,6 +1961,10 @@ func buildLongMemEvalSummary(cases []*caseResult) *runSummary {
 			if br.TokenUsage != nil {
 				bs.TokenUsage.Add(*br.TokenUsage)
 				summary.TokenUsage.Add(*br.TokenUsage)
+			}
+			if br.Judge != nil && br.Judge.TokenUsage != nil {
+				bs.JudgeTokenUsage.Add(*br.Judge.TokenUsage)
+				summary.JudgeTokenUsage.Add(*br.Judge.TokenUsage)
 			}
 		}
 	}

@@ -167,6 +167,11 @@ var (
 		"",
 		"Analyze an existing LongMemEval results.json and write analysis files",
 	)
+	flagLMEJudgeResults = flag.String(
+		"lme-judge-results",
+		"",
+		"Run an LLM semantic judge over an existing LongMemEval results.json",
+	)
 	flagLMECompareResults = flag.String(
 		"lme-compare-results",
 		"",
