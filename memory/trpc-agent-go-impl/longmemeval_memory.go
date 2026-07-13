@@ -1068,6 +1068,13 @@ func loadLongMemEval(path string) ([]*lmeInstance, error) {
 }
 
 func filterCases(instances []*lmeInstance) []*lmeInstance {
+	idSet := make(map[string]bool)
+	if strings.TrimSpace(*flagLMEQuestionID) != "" {
+		idSet[strings.TrimSpace(*flagLMEQuestionID)] = true
+	}
+	for _, id := range parseCommaList(*flagLMEQuestionIDs) {
+		idSet[id] = true
+	}
 	typeSet := make(map[string]bool)
 	for _, t := range parseCommaList(*flagLMEQuestionTypes) {
 		typeSet[t] = true
@@ -1077,7 +1084,7 @@ func filterCases(instances []*lmeInstance) []*lmeInstance {
 		if inst == nil {
 			continue
 		}
-		if *flagLMEQuestionID != "" && inst.QuestionID != *flagLMEQuestionID {
+		if len(idSet) > 0 && !idSet[inst.QuestionID] {
 			continue
 		}
 		if len(typeSet) > 0 && !typeSet[inst.QuestionType] {

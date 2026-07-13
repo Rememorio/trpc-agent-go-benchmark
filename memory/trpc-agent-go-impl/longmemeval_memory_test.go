@@ -47,6 +47,48 @@ func TestWithObservationDate(t *testing.T) {
 	}
 }
 
+func TestFilterCasesByQuestionIDs(t *testing.T) {
+	oldID := *flagLMEQuestionID
+	oldIDs := *flagLMEQuestionIDs
+	oldTypes := *flagLMEQuestionTypes
+	oldPerType := *flagLMEPerType
+	oldAbstention := *flagLMEAbstentionCount
+	oldMaxTasks := *flagMaxTasks
+	defer func() {
+		*flagLMEQuestionID = oldID
+		*flagLMEQuestionIDs = oldIDs
+		*flagLMEQuestionTypes = oldTypes
+		*flagLMEPerType = oldPerType
+		*flagLMEAbstentionCount = oldAbstention
+		*flagMaxTasks = oldMaxTasks
+	}()
+
+	*flagLMEQuestionID = "q1"
+	*flagLMEQuestionIDs = "q3, q2"
+	*flagLMEQuestionTypes = ""
+	*flagLMEPerType = 0
+	*flagLMEAbstentionCount = 0
+	*flagMaxTasks = 0
+
+	instances := []*lmeInstance{
+		{QuestionID: "q1", QuestionType: "single-session-user"},
+		{QuestionID: "skip", QuestionType: "single-session-user"},
+		{QuestionID: "q2", QuestionType: "multi-session"},
+		{QuestionID: "q3", QuestionType: "temporal-reasoning"},
+		nil,
+	}
+	got := filterCases(instances)
+	want := []string{"q1", "q2", "q3"}
+	if len(got) != len(want) {
+		t.Fatalf("unexpected case count: got %d want %d", len(got), len(want))
+	}
+	for i, inst := range got {
+		if inst.QuestionID != want[i] {
+			t.Fatalf("case %d: got %q want %q", i, inst.QuestionID, want[i])
+		}
+	}
+}
+
 func TestAnalyzeLongMemEvalResults(t *testing.T) {
 	t.Parallel()
 

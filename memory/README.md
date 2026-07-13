@@ -201,6 +201,15 @@ go run . \
   -table-suffix _lme_smoke \
   -output ../results/lme-smoke
 
+# Targeted bad-case replay.
+go run . \
+  -dataset-format longmemeval \
+  -dataset ../../summary/data/longmemeval-cleaned/longmemeval_oracle.json \
+  -memory-backend pgvector,mem0 \
+  -lme-question-ids 07b6f563,35a27287,gpt4_0a05b494 \
+  -table-suffix _lme_badcase \
+  -output ../results/lme-badcase
+
 # Stratified baseline subset.
 go run . \
   -dataset-format longmemeval \
@@ -248,6 +257,7 @@ LongMemEval-specific options:
 | ------------------------ | ------- | -------------------------------------------- |
 | `-dataset-format`        | locomo  | Use `longmemeval` for LongMemEval JSON       |
 | `-lme-question-id`       |         | Run one LongMemEval question                 |
+| `-lme-question-ids`      |         | Comma-separated `question_id` filter         |
 | `-lme-question-types`    |         | Comma-separated `question_type` filter       |
 | `-lme-per-type`          | 0       | Stratified sample count per question type    |
 | `-lme-abstention-count`  | 0       | Additional abstention questions to sample    |

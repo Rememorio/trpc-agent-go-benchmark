@@ -107,6 +107,11 @@ var (
 		"",
 		"Only run the given LongMemEval question_id",
 	)
+	flagLMEQuestionIDs = flag.String(
+		"lme-question-ids",
+		"",
+		"Comma-separated LongMemEval question_id filter",
+	)
 	flagLMEQuestionTypes = flag.String(
 		"lme-question-types",
 		"",
