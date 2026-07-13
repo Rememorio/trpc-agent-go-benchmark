@@ -242,6 +242,69 @@ func TestBuildLongMemEvalAnswerPromptNonPreference(t *testing.T) {
 	}
 }
 
+func TestPostprocessLongMemEvalAnswerCompletesTruncatedListItem(t *testing.T) {
+	t.Parallel()
+
+	inst := &lmeInstance{
+		QuestionType: "temporal-reasoning",
+		Question:     "What is the order of the museums from earliest to latest?",
+	}
+	raw := "Science Museum, Museum of Contemporary Art, Natural"
+	hits := []memoryHit{{Memory: "User visited the Natural History Museum on 2023-03-04."}}
+
+	got := postprocessLongMemEvalAnswer(inst, hits, raw)
+	want := "Science Museum, Museum of Contemporary Art, Natural History Museum"
+	if got != want {
+		t.Fatalf("unexpected answer: got %q want %q", got, want)
+	}
+}
+
+func TestPostprocessLongMemEvalAnswerExtractsNumberedOrder(t *testing.T) {
+	t.Parallel()
+
+	inst := &lmeInstance{
+		QuestionType: "temporal-reasoning",
+		Question:     "What is the order of the six museums I visited from earliest to latest?",
+	}
+	raw := `Let me find the visits.
+1. Science Museum - January 15, 2023
+2. Museum of Contemporary Art - around January 15, 2023
+3. Metropolitan Museum of Art - February 10, 2023`
+
+	got := postprocessLongMemEvalAnswer(inst, nil, raw)
+	want := "Science Museum, Museum of Contemporary Art, Metropolitan Museum of Art"
+	if got != want {
+		t.Fatalf("unexpected answer: got %q want %q", got, want)
+	}
+}
+
+func TestPostprocessLongMemEvalAnswerSumsShortCountAnswer(t *testing.T) {
+	t.Parallel()
+
+	inst := &lmeInstance{
+		QuestionType: "multi-session",
+		Question:     "How many plants did I initially plant for tomatoes and cucumbers?",
+	}
+	got := postprocessLongMemEvalAnswer(inst, nil, "5 tomato plants and 3 cucumber plants")
+	if got != "8" {
+		t.Fatalf("unexpected answer: got %q want 8", got)
+	}
+}
+
+func TestExactAnswerMatchUsesWholeNormalizedAnswer(t *testing.T) {
+	t.Parallel()
+
+	if exactAnswerMatch("The final total is 8 plants.", "8") {
+		t.Fatal("substring numeric match should not be exact")
+	}
+	if !exactAnswerMatch("I don't know.", "I don't know") {
+		t.Fatal("punctuation-only difference should match")
+	}
+	if !exactAnswerMatch("United Airlines", "united airlines") {
+		t.Fatal("case-only difference should match")
+	}
+}
+
 func TestHitsFromEntriesIncludesEpisodicMetadata(t *testing.T) {
 	t.Parallel()
 

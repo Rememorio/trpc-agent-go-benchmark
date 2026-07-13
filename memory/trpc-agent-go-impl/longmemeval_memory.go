@@ -26,7 +26,9 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -174,6 +176,7 @@ type backendResult struct {
 	FinalMemories  []memorySnapshot `json:"final_memories"`
 	Retrieval      []memoryHit      `json:"retrieval"`
 	Answer         string           `json:"answer,omitempty"`
+	RawAnswer      string           `json:"raw_answer,omitempty"`
 	TokenUsage     *lmeTokenUsage   `json:"token_usage,omitempty"`
 	AnswerUsage    *lmeTokenUsage   `json:"answer_token_usage,omitempty"`
 	Evidence       *evidenceMetrics `json:"evidence,omitempty"`
@@ -821,7 +824,7 @@ afterIngest:
 
 	if *flagLMEAnswer {
 		answerStart := time.Now()
-		answer, err := answerFromMemories(ctx, llm, inst, hits)
+		rawAnswer, err := answerFromMemories(ctx, llm, inst, hits)
 		usage := tracker.Snapshot()
 		br.AnswerDuration = time.Since(answerStart).Milliseconds()
 		br.AnswerUsage = tokenUsagePtr(usage)
@@ -834,7 +837,8 @@ afterIngest:
 		if err != nil {
 			br.Error = appendError(br.Error, "answer: "+err.Error())
 		}
-		br.Answer = answer
+		br.RawAnswer = rawAnswer
+		br.Answer = postprocessLongMemEvalAnswer(inst, hits, rawAnswer)
 	}
 	usage := tracker.Snapshot()
 	if !usage.IsZero() {
@@ -843,7 +847,7 @@ afterIngest:
 		}
 		br.TokenUsage.Add(usage)
 	}
-	br.ExactMatch = containsExactMatch(br.Answer, inst.Answer.String())
+	br.ExactMatch = exactAnswerMatch(br.Answer, inst.Answer.String())
 	br.F1 = metrics.CalculateF1(br.Answer, inst.Answer.String())
 	br.BLEU = metrics.CalculateBLEU(br.Answer, inst.Answer.String())
 	br.Evidence = computeEvidenceMetrics(inst, br, *flagVectorTopK)
@@ -1032,6 +1036,143 @@ func answerFromMemories(ctx context.Context, llm model.Model, inst *lmeInstance,
 		time.Sleep(time.Duration(attempt+1) * time.Second)
 	}
 	return "", lastErr
+}
+
+func postprocessLongMemEvalAnswer(inst *lmeInstance, hits []memoryHit, raw string) string {
+	answer := strings.TrimSpace(raw)
+	if answer == "" || inst == nil || isPreferenceQuestion(inst) {
+		return answer
+	}
+	if isOrderListQuestion(inst.Question) {
+		if list, ok := orderedListFromAnswer(answer); ok {
+			return completeTrailingListItem(list, hits)
+		}
+		answer = completeTrailingListItem(answer, hits)
+	}
+	if summed, ok := additiveCountAnswer(inst.Question, answer); ok {
+		return summed
+	}
+	return answer
+}
+
+func isPreferenceQuestion(inst *lmeInstance) bool {
+	return inst != nil && strings.Contains(inst.QuestionType, "preference")
+}
+
+func isOrderListQuestion(question string) bool {
+	q := strings.ToLower(question)
+	return strings.Contains(q, "order") ||
+		strings.Contains(q, "earliest to latest") ||
+		strings.Contains(q, "latest to earliest") ||
+		strings.Contains(q, "sequence")
+}
+
+func orderedListFromAnswer(answer string) (string, bool) {
+	lines := strings.Split(answer, "\n")
+	items := make([]string, 0, 8)
+	for _, line := range lines {
+		item, ok := numberedListItem(line)
+		if !ok {
+			continue
+		}
+		items = append(items, item)
+	}
+	if len(items) < 2 {
+		return "", false
+	}
+	return strings.Join(items, ", "), true
+}
+
+var numberedListRE = regexp.MustCompile(`^\s*\d+[\.)]\s+(.+?)\s*$`)
+
+func numberedListItem(line string) (string, bool) {
+	matches := numberedListRE.FindStringSubmatch(line)
+	if len(matches) != 2 {
+		return "", false
+	}
+	item := strings.TrimSpace(matches[1])
+	item = strings.ReplaceAll(item, "\u2013", "-")
+	item = strings.ReplaceAll(item, "\u2014", "-")
+	if strings.HasPrefix(strings.ToLower(item), "memory ") {
+		return "", false
+	}
+	for _, sep := range []string{" - ", " -- ", " ("} {
+		if i := strings.Index(item, sep); i >= 0 {
+			item = strings.TrimSpace(item[:i])
+		}
+	}
+	item = strings.Trim(item, " \t\"'`")
+	if item == "" || strings.Contains(item, ":") {
+		return "", false
+	}
+	return item, true
+}
+
+func completeTrailingListItem(answer string, hits []memoryHit) string {
+	parts := strings.Split(answer, ",")
+	if len(parts) < 2 {
+		return answer
+	}
+	last := strings.TrimSpace(parts[len(parts)-1])
+	if last == "" || strings.Contains(last, " ") {
+		return answer
+	}
+	if completion := completeEntityPrefix(last, hits); completion != "" {
+		parts[len(parts)-1] = " " + completion
+		return strings.TrimSpace(strings.Join(parts, ","))
+	}
+	return answer
+}
+
+var titlePhraseRE = regexp.MustCompile(`\b[A-Z][A-Za-z0-9&'\x{2019}-]*(?:\s+[A-Z][A-Za-z0-9&'\x{2019}-]*){1,5}\b`)
+
+func completeEntityPrefix(prefix string, hits []memoryHit) string {
+	prefix = strings.TrimSpace(prefix)
+	if prefix == "" {
+		return ""
+	}
+	lowerPrefix := strings.ToLower(prefix)
+	best := ""
+	for _, hit := range hits {
+		for _, candidate := range titlePhraseRE.FindAllString(hit.Memory, -1) {
+			candidate = strings.TrimSpace(candidate)
+			lowerCandidate := strings.ToLower(candidate)
+			if lowerCandidate == lowerPrefix ||
+				!strings.HasPrefix(lowerCandidate, lowerPrefix+" ") {
+				continue
+			}
+			if len(candidate) > len(best) {
+				best = candidate
+			}
+		}
+	}
+	return best
+}
+
+func additiveCountAnswer(question, answer string) (string, bool) {
+	q := strings.ToLower(question)
+	if !strings.Contains(q, "how many") && !strings.Contains(q, "count") {
+		return "", false
+	}
+	if strings.Contains(answer, "\n") || len(answer) > 160 || isUnknownAnswer(answer) {
+		return "", false
+	}
+	if strings.ContainsAny(answer, "$%") {
+		return "", false
+	}
+	matches := regexp.MustCompile(`\b\d+\b`).FindAllString(answer, -1)
+	if len(matches) < 2 || len(matches) > 6 {
+		return "", false
+	}
+	total := 0
+	for _, match := range matches {
+		n, err := strconv.Atoi(match)
+		if err != nil {
+			return "", false
+		}
+		total += n
+	}
+	return strconv.Itoa(total), true
 }
 
 func newLongMemEvalAnswerRequest(prompt string) *model.Request {
@@ -1930,13 +2071,35 @@ func sortedSet(values map[string]bool) []string {
 	return out
 }
 
-func containsExactMatch(prediction, reference string) bool {
-	prediction = strings.ToLower(strings.TrimSpace(prediction))
-	reference = strings.ToLower(strings.TrimSpace(reference))
+func exactAnswerMatch(prediction, reference string) bool {
+	prediction = normalizeExactAnswer(prediction)
+	reference = normalizeExactAnswer(reference)
 	if reference == "" {
 		return prediction == ""
 	}
-	return strings.Contains(prediction, reference)
+	return prediction == reference
+}
+
+func normalizeExactAnswer(answer string) string {
+	answer = strings.TrimSpace(strings.ToLower(answer))
+	if answer == "" {
+		return ""
+	}
+	answer = strings.ReplaceAll(answer, "<\uff5cend\u2581of\u2581sentence\uff5c>", " ")
+	var b strings.Builder
+	for _, r := range answer {
+		switch {
+		case r >= 'a' && r <= 'z':
+			b.WriteRune(r)
+		case r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case r == '_':
+			b.WriteRune(r)
+		default:
+			b.WriteByte(' ')
+		}
+	}
+	return strings.Join(strings.Fields(b.String()), " ")
 }
 
 func parseLMEDate(date string) (time.Time, bool) {
