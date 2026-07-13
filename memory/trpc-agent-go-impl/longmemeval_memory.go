@@ -921,17 +921,7 @@ func operationMetadata(op *extractor.Operation) *memory.Metadata {
 
 func answerFromMemories(ctx context.Context, llm model.Model, inst *lmeInstance, hits []memoryHit) (string, error) {
 	prompt := buildLongMemEvalAnswerPrompt(inst, hits)
-
-	maxTokens := 512
-	temp := 0.0
-	req := &model.Request{
-		Messages: []model.Message{model.NewUserMessage(prompt)},
-		GenerationConfig: model.GenerationConfig{
-			Stream:      false,
-			MaxTokens:   &maxTokens,
-			Temperature: &temp,
-		},
-	}
+	req := newLongMemEvalAnswerRequest(prompt)
 	var lastErr error
 	for attempt := 0; attempt < 2; attempt++ {
 		respCh, err := llm.GenerateContent(ctx, req)
@@ -968,6 +958,23 @@ func answerFromMemories(ctx context.Context, llm model.Model, inst *lmeInstance,
 		time.Sleep(time.Duration(attempt+1) * time.Second)
 	}
 	return "", lastErr
+}
+
+func newLongMemEvalAnswerRequest(prompt string) *model.Request {
+	maxTokens := 512
+	temp := 0.0
+	reasoningEffort := "low"
+	thinkingEnabled := false
+	return &model.Request{
+		Messages: []model.Message{model.NewUserMessage(prompt)},
+		GenerationConfig: model.GenerationConfig{
+			Stream:          false,
+			MaxTokens:       &maxTokens,
+			Temperature:     &temp,
+			ReasoningEffort: &reasoningEffort,
+			ThinkingEnabled: &thinkingEnabled,
+		},
+	}
 }
 
 func buildLongMemEvalAnswerPrompt(inst *lmeInstance, hits []memoryHit) string {

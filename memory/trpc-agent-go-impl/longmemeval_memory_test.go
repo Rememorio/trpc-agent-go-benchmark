@@ -142,6 +142,25 @@ func TestBuildLongMemEvalAnswerPromptNonPreference(t *testing.T) {
 	}
 }
 
+func TestNewLongMemEvalAnswerRequestDisablesThinking(t *testing.T) {
+	req := newLongMemEvalAnswerRequest("answer this")
+	if len(req.Messages) != 1 || req.Messages[0].Content != "answer this" {
+		t.Fatalf("unexpected messages: %+v", req.Messages)
+	}
+	if req.MaxTokens == nil || *req.MaxTokens != 512 {
+		t.Fatalf("unexpected max tokens: %v", req.MaxTokens)
+	}
+	if req.Temperature == nil || *req.Temperature != 0 {
+		t.Fatalf("unexpected temperature: %v", req.Temperature)
+	}
+	if req.ThinkingEnabled == nil || *req.ThinkingEnabled {
+		t.Fatalf("thinking should be explicitly disabled: %v", req.ThinkingEnabled)
+	}
+	if req.ReasoningEffort == nil || *req.ReasoningEffort != "low" {
+		t.Fatalf("unexpected reasoning effort: %v", req.ReasoningEffort)
+	}
+}
+
 func TestAnalyzeLongMemEvalResults(t *testing.T) {
 	t.Parallel()
 
