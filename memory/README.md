@@ -180,6 +180,39 @@ Run specific combinations of scenarios.
 go run . -scenario agentic,auto -memory-backend pgvector,mysql
 ```
 
+### 6. LongMemEval Memory Runner
+
+LongMemEval uses a separate dataset format because each question carries its
+own haystack sessions. The runner replays sessions in chronological order and
+triggers memory extraction after each user/assistant pair, then records
+per-pair memory diffs, retrieval hits, answer text, token usage, and evidence
+recall in `results.json`.
+
+```bash
+export PGVECTOR_DSN="postgres://user:password@localhost:5432/vectordb?sslmode=disable"
+export MEM0_HOST="http://localhost:8888"
+
+# One-case smoke test.
+go run . \
+  -dataset-format longmemeval \
+  -dataset ../../summary/data/longmemeval-cleaned/longmemeval_oracle.json \
+  -memory-backend pgvector,mem0 \
+  -lme-question-id 08f4fc43 \
+  -table-suffix _lme_smoke \
+  -output ../results/lme-smoke
+
+# Stratified baseline subset.
+go run . \
+  -dataset-format longmemeval \
+  -dataset ../../summary/data/longmemeval-cleaned/longmemeval_oracle.json \
+  -memory-backend pgvector,mem0 \
+  -lme-per-type 10 \
+  -lme-abstention-count 20 \
+  -lme-sample-seed 42 \
+  -table-suffix _lme_baseline \
+  -output ../results/lme-baseline
+```
+
 ## Command-Line Options
 
 | Option              | Default                | Description                            |
@@ -203,6 +236,23 @@ go run . -scenario agentic,auto -memory-backend pgvector,mysql
 | `-verbose`          | false                  | Verbose output                         |
 | `-resume`           | false                  | Resume from checkpoint                 |
 
+LongMemEval-specific options:
+
+| Option                   | Default | Description                                  |
+| ------------------------ | ------- | -------------------------------------------- |
+| `-dataset-format`        | locomo  | Use `longmemeval` for LongMemEval JSON       |
+| `-lme-question-id`       |         | Run one LongMemEval question                 |
+| `-lme-question-types`    |         | Comma-separated `question_type` filter       |
+| `-lme-per-type`          | 0       | Stratified sample count per question type    |
+| `-lme-abstention-count`  | 0       | Additional abstention questions to sample    |
+| `-lme-sample-seed`       | 42      | Sampling seed                                |
+| `-lme-max-sessions`      | 0       | Max haystack sessions per case               |
+| `-lme-max-pairs`         | 0       | Max user/assistant pairs per case            |
+| `-lme-ingest-wait`       | 250ms   | Wait after each pair before reading memories |
+| `-lme-answer`            | true    | Generate answers from retrieved memories     |
+| `-mem0-host`             | (env)   | Self-hosted mem0 OSS host                    |
+| `-mem0-cloud`            | false   | Use hosted mem0 API semantics                |
+
 ## Environment Variables
 
 | Variable                    | Description                               |
@@ -217,6 +267,7 @@ go run . -scenario agentic,auto -memory-backend pgvector,mysql
 | `EMBED_MODEL_NAME`          | Embedding model for vector backends       |
 | `OPENAI_EMBEDDING_API_KEY`  | API key for embedding model (optional)    |
 | `OPENAI_EMBEDDING_BASE_URL` | Base URL for embedding API (optional)     |
+| `MEM0_HOST`                 | Self-hosted mem0 OSS host                 |
 
 ## Dataset Setup
 
