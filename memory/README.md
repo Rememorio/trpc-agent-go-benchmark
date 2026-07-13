@@ -245,6 +245,7 @@ F1, BLEU, stage, and answer deltas by backend and question.
 | Option              | Default                | Description                            |
 | ------------------- | ---------------------- | -------------------------------------- |
 | `-model`            | gpt-4o-mini            | Model name                             |
+| `-model-variant`    |                        | OpenAI-compatible model variant        |
 | `-eval-model`       | same as model          | Evaluation model for LLM judge         |
 | `-dataset`          | ../data                | Dataset directory                      |
 | `-data-file`        | locomo10.json          | Dataset file name                      |

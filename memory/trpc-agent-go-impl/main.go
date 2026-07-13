@@ -23,7 +23,12 @@ import (
 
 // Command-line flags.
 var (
-	flagModel         = flag.String("model", "", "Model name (env MODEL_NAME or gpt-4o-mini)")
+	flagModel        = flag.String("model", "", "Model name (env MODEL_NAME or gpt-4o-mini)")
+	flagModelVariant = flag.String(
+		"model-variant",
+		"",
+		"OpenAI-compatible model variant: openai, deepseek, hunyuan, qwen, glm (env MODEL_VARIANT)",
+	)
 	flagEvalModel     = flag.String("eval-model", "", "Evaluation model for LLM judge")
 	flagDataset       = flag.String("dataset", defaultLoCoMoDataset, "Dataset directory or JSON file")
 	flagDataFile      = flag.String("data-file", defaultLoCoMoDataFile, "Dataset file name")
@@ -293,6 +298,13 @@ func getModelName() string {
 		return env
 	}
 	return "gpt-4o-mini"
+}
+
+func getModelVariant() string {
+	if *flagModelVariant != "" {
+		return *flagModelVariant
+	}
+	return os.Getenv("MODEL_VARIANT")
 }
 
 func getEvalModelName() string {

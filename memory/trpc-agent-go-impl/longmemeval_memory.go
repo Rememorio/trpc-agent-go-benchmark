@@ -527,6 +527,33 @@ func (b *mem0Backend) Read(ctx context.Context, userKey memory.UserKey, limit in
 
 func (b *mem0Backend) Close() error { return b.svc.Close() }
 
+func newLongMemEvalModel(modelName, variant string) (model.Model, error) {
+	opts, err := openAIModelOptionsForVariant(variant)
+	if err != nil {
+		return nil, err
+	}
+	return openaimodel.New(modelName, opts...), nil
+}
+
+func openAIModelOptionsForVariant(variant string) ([]openaimodel.Option, error) {
+	switch strings.ToLower(strings.TrimSpace(variant)) {
+	case "":
+		return nil, nil
+	case "openai":
+		return []openaimodel.Option{openaimodel.WithVariant(openaimodel.VariantOpenAI)}, nil
+	case "deepseek":
+		return []openaimodel.Option{openaimodel.WithVariant(openaimodel.VariantDeepSeek)}, nil
+	case "hunyuan":
+		return []openaimodel.Option{openaimodel.WithVariant(openaimodel.VariantHunyuan)}, nil
+	case "qwen":
+		return []openaimodel.Option{openaimodel.WithVariant(openaimodel.VariantQwen)}, nil
+	case "glm":
+		return []openaimodel.Option{openaimodel.WithVariant(openaimodel.VariantGLM)}, nil
+	default:
+		return nil, fmt.Errorf("unsupported model variant %q", variant)
+	}
+}
+
 func runLongMemEvalMemory(ctx context.Context) error {
 	if raw := strings.TrimSpace(*flagLMECompareResults); raw != "" {
 		baseline, candidate, err := parseLongMemEvalComparePaths(raw)
@@ -543,7 +570,11 @@ func runLongMemEvalMemory(ctx context.Context) error {
 	}
 
 	modelName := getModelName()
-	baseLLM := openaimodel.New(modelName)
+	modelVariant := getModelVariant()
+	baseLLM, err := newLongMemEvalModel(modelName, modelVariant)
+	if err != nil {
+		return err
+	}
 	datasetPath := resolveLongMemEvalDatasetPath()
 	instances, err := loadLongMemEval(datasetPath)
 	if err != nil {
@@ -561,6 +592,7 @@ func runLongMemEvalMemory(ctx context.Context) error {
 			"benchmark":               "longmemeval-memory",
 			"dataset":                 datasetPath,
 			"model":                   modelName,
+			"model_variant":           modelVariant,
 			"backends":                backends,
 			"top_k":                   *flagVectorTopK,
 			"run_id":                  runID,

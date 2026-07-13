@@ -161,6 +161,17 @@ func TestNewLongMemEvalAnswerRequestDisablesThinking(t *testing.T) {
 	}
 }
 
+func TestOpenAIModelOptionsForVariant(t *testing.T) {
+	for _, variant := range []string{"", "openai", "deepseek", "hunyuan", "qwen", "glm", " GLM "} {
+		if _, err := openAIModelOptionsForVariant(variant); err != nil {
+			t.Fatalf("variant %q returned error: %v", variant, err)
+		}
+	}
+	if _, err := openAIModelOptionsForVariant("unknown"); err == nil {
+		t.Fatal("expected error for unsupported variant")
+	}
+}
+
 func TestAnalyzeLongMemEvalResults(t *testing.T) {
 	t.Parallel()
 
