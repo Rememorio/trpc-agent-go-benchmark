@@ -281,18 +281,29 @@ func (t *lmeTokenTracker) Snapshot() lmeTokenUsage {
 type lmeTrackingModel struct {
 	base    model.Model
 	tracker *lmeTokenTracker
+	timeout time.Duration
 }
 
 func (m *lmeTrackingModel) GenerateContent(
 	ctx context.Context,
 	req *model.Request,
 ) (<-chan *model.Response, error) {
+	var cancel context.CancelFunc
+	if m.timeout > 0 {
+		ctx, cancel = context.WithTimeout(ctx, m.timeout)
+	}
 	respCh, err := m.base.GenerateContent(ctx, req)
 	if err != nil {
+		if cancel != nil {
+			cancel()
+		}
 		return nil, err
 	}
 	out := make(chan *model.Response)
 	go func() {
+		if cancel != nil {
+			defer cancel()
+		}
 		defer close(out)
 		for resp := range respCh {
 			if resp != nil && resp.Usage != nil {
@@ -629,7 +640,11 @@ func runLongMemEvalMemory(ctx context.Context) error {
 
 		for _, backendName := range backends {
 			tracker := &lmeTokenTracker{}
-			llm := &lmeTrackingModel{base: baseLLM, tracker: tracker}
+			llm := &lmeTrackingModel{
+				base:    baseLLM,
+				tracker: tracker,
+				timeout: *flagLMEModelCallTimeout,
+			}
 			backend, err := newBackend(backendName, llm)
 			if err != nil {
 				cr.BackendResults[backendName] = &backendResult{Backend: backendName, Error: err.Error()}
@@ -1027,11 +1042,18 @@ func buildLongMemEvalAnswerPrompt(inst *lmeInstance, hits []memoryHit) string {
 
 Use only the retrieved memories below. If the memories do not contain enough information, answer "I don't know".
 %s
-For non-preference questions, answer with the shortest final span that satisfies
-the question. If the question asks for a count, total, duration, date
-difference, percentage, name, or other scalar value, compute the final value
-from the memories and output only that value. Do not include markdown,
-explanations, citations, or restatements of the question.
+For non-preference questions, verify that the retrieved memories directly
+support every entity, relationship, event or action, time constraint, and
+qualifier in the question. Related or nearby facts are not enough. If any
+required condition is missing, answer "I don't know". Do not substitute a
+similar but different event, project type, source, or purpose. For example,
+course work, thesis research, job work, personal projects, applications,
+presentations, purchases, visits, and recommendations are distinct unless the
+memories explicitly connect them. Otherwise, answer with the shortest final
+span that satisfies the question. If the question asks for a count, total,
+duration, date difference, percentage, name, or other scalar value, compute the
+final value from the memories and output only that value. Do not include
+markdown, explanations, citations, or restatements of the question.
 
 Question date: %s
 Question type: %s

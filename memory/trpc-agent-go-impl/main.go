@@ -152,6 +152,11 @@ var (
 		250*time.Millisecond,
 		"Wait after each LongMemEval pair ingestion before diffing memories",
 	)
+	flagLMEModelCallTimeout = flag.Duration(
+		"lme-model-call-timeout",
+		3*time.Minute,
+		"Timeout for each LongMemEval model call (0=disabled)",
+	)
 	flagLMEAnswer = flag.Bool(
 		"lme-answer",
 		true,

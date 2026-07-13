@@ -10,10 +10,14 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 func TestLongMemEvalDateHelpers(t *testing.T) {
@@ -133,6 +137,7 @@ func TestBuildLongMemEvalAnswerPromptNonPreference(t *testing.T) {
 		Question:     "What was the fifth bottle?",
 	}
 	prompt := buildLongMemEvalAnswerPrompt(inst, nil)
+	normalizedPrompt := strings.Join(strings.Fields(prompt), " ")
 
 	if strings.Contains(prompt, "preference profile") {
 		t.Fatalf("unexpected preference guidance: %s", prompt)
@@ -140,13 +145,25 @@ func TestBuildLongMemEvalAnswerPromptNonPreference(t *testing.T) {
 	if !strings.Contains(prompt, "(no memories retrieved)") {
 		t.Fatalf("missing empty-memory marker: %s", prompt)
 	}
-	if !strings.Contains(prompt, "answer with the shortest final span") {
+	if !strings.Contains(normalizedPrompt, "shortest final span") {
 		t.Fatalf("missing concise scalar guidance: %s", prompt)
 	}
-	if !strings.Contains(prompt, "compute the final value") {
+	if !strings.Contains(normalizedPrompt, "support every entity") {
+		t.Fatalf("missing full-question support guard: %s", prompt)
+	}
+	if !strings.Contains(normalizedPrompt, "Related or nearby facts are not enough") {
+		t.Fatalf("missing related-fact abstention guard: %s", prompt)
+	}
+	if !strings.Contains(normalizedPrompt, "project type") {
+		t.Fatalf("missing project-type guard: %s", prompt)
+	}
+	if !strings.Contains(normalizedPrompt, "course work, thesis research") {
+		t.Fatalf("missing distinct-event examples: %s", prompt)
+	}
+	if !strings.Contains(normalizedPrompt, "compute the final value") {
 		t.Fatalf("missing final-value guidance: %s", prompt)
 	}
-	if !strings.Contains(prompt, "Do not include markdown") {
+	if !strings.Contains(normalizedPrompt, "not include markdown") {
 		t.Fatalf("missing markdown/explanation guard: %s", prompt)
 	}
 }
@@ -321,3 +338,39 @@ func TestMissingReferenceKeywords(t *testing.T) {
 		t.Fatalf("unexpected missing keywords: got %v want %v", got, want)
 	}
 }
+
+func TestLongMemEvalTrackingModelTimeout(t *testing.T) {
+	t.Parallel()
+
+	wrapped := &lmeTrackingModel{
+		base:    blockingModel{},
+		tracker: &lmeTokenTracker{},
+		timeout: 10 * time.Millisecond,
+	}
+	start := time.Now()
+	ch, err := wrapped.GenerateContent(context.Background(), &model.Request{})
+	if err != nil {
+		t.Fatalf("generate content: %v", err)
+	}
+	for range ch {
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("timeout did not close response channel promptly: %v", elapsed)
+	}
+}
+
+type blockingModel struct{}
+
+func (blockingModel) GenerateContent(
+	ctx context.Context,
+	req *model.Request,
+) (<-chan *model.Response, error) {
+	ch := make(chan *model.Response)
+	go func() {
+		defer close(ch)
+		<-ctx.Done()
+	}()
+	return ch, nil
+}
+
+func (blockingModel) Info() model.Info { return model.Info{} }
