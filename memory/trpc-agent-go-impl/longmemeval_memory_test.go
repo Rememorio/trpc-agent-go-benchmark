@@ -237,6 +237,10 @@ func TestBuildLongMemEvalAnswerPromptNonPreference(t *testing.T) {
 	if !strings.Contains(normalizedPrompt, "compute the final value") {
 		t.Fatalf("missing final-value guidance: %s", prompt)
 	}
+	if !strings.Contains(normalizedPrompt, "product brand") ||
+		!strings.Contains(normalizedPrompt, "private-label name") {
+		t.Fatalf("missing brand/source guidance: %s", prompt)
+	}
 	if !strings.Contains(normalizedPrompt, "not include markdown") {
 		t.Fatalf("missing markdown/explanation guard: %s", prompt)
 	}

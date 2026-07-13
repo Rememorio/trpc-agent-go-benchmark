@@ -1542,8 +1542,11 @@ presentations, purchases, visits, and recommendations are distinct unless the
 memories explicitly connect them. Otherwise, answer with the shortest final
 span that satisfies the question. If the question asks for a count, total,
 duration, date difference, percentage, name, or other scalar value, compute the
-final value from the memories and output only that value. Do not include
-markdown, explanations, citations, or restatements of the question.
+final value from the memories and output only that value. If a question asks
+for a product brand and the memories identify the product only by a store,
+retailer, maker, source, or private-label name, use that name unless the
+memories also name a different brand. Do not include markdown, explanations,
+citations, or restatements of the question.
 
 Question date: %s
 Question type: %s
