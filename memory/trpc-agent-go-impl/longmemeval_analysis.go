@@ -229,54 +229,43 @@ func longMemEvalAnalysisRows(result *runResult) []lmeAnalysisRow {
 func compareLongMemEvalRows(baselineRows, candidateRows []lmeAnalysisRow) []lmeCompareRow {
 	baseline := make(map[string]lmeAnalysisRow, len(baselineRows))
 	candidate := make(map[string]lmeAnalysisRow, len(candidateRows))
-	keys := make(map[string]bool)
 	for _, row := range baselineRows {
 		key := lmeCompareKey(row.QuestionID, row.Backend)
 		baseline[key] = row
-		keys[key] = true
 	}
 	for _, row := range candidateRows {
 		key := lmeCompareKey(row.QuestionID, row.Backend)
 		candidate[key] = row
-		keys[key] = true
 	}
-	out := make([]lmeCompareRow, 0, len(keys))
-	for key := range keys {
-		base, hasBase := baseline[key]
-		cand, hasCand := candidate[key]
-		row := lmeCompareRow{}
-		if hasCand {
-			row.QuestionID = cand.QuestionID
-			row.QuestionType = cand.QuestionType
-			row.Backend = cand.Backend
-			row.CandidateStage = cand.Stage
-			row.CandidateCorrect = cand.EvaluatedCorrect
-			row.CandidateJudgeAvailable = cand.JudgeAvailable
-			row.CandidateEM = cand.ExactMatch
-			row.CandidateF1 = cand.F1
-			row.CandidateBLEU = cand.BLEU
-			row.CandidateError = cand.Error
-			row.Diagnosis = cand.Diagnosis
-			row.CandidateAnswer = cand.Answer
-			row.Reference = cand.Reference
-			row.Question = cand.Question
+	out := make([]lmeCompareRow, 0, len(candidate))
+	for key, cand := range candidate {
+		base, ok := baseline[key]
+		if !ok {
+			continue
 		}
-		if hasBase {
-			if row.QuestionID == "" {
-				row.QuestionID = base.QuestionID
-				row.QuestionType = base.QuestionType
-				row.Backend = base.Backend
-				row.Reference = base.Reference
-				row.Question = base.Question
-			}
-			row.BaselineStage = base.Stage
-			row.BaselineCorrect = base.EvaluatedCorrect
-			row.BaselineJudgeAvailable = base.JudgeAvailable
-			row.BaselineEM = base.ExactMatch
-			row.BaselineF1 = base.F1
-			row.BaselineBLEU = base.BLEU
-			row.BaselineError = base.Error
-			row.BaselineAnswer = base.Answer
+		row := lmeCompareRow{
+			QuestionID:              cand.QuestionID,
+			QuestionType:            cand.QuestionType,
+			Backend:                 cand.Backend,
+			BaselineStage:           base.Stage,
+			CandidateStage:          cand.Stage,
+			BaselineCorrect:         base.EvaluatedCorrect,
+			CandidateCorrect:        cand.EvaluatedCorrect,
+			BaselineJudgeAvailable:  base.JudgeAvailable,
+			CandidateJudgeAvailable: cand.JudgeAvailable,
+			BaselineEM:              base.ExactMatch,
+			CandidateEM:             cand.ExactMatch,
+			BaselineF1:              base.F1,
+			CandidateF1:             cand.F1,
+			BaselineBLEU:            base.BLEU,
+			CandidateBLEU:           cand.BLEU,
+			BaselineError:           base.Error,
+			CandidateError:          cand.Error,
+			Diagnosis:               cand.Diagnosis,
+			BaselineAnswer:          base.Answer,
+			CandidateAnswer:         cand.Answer,
+			Reference:               cand.Reference,
+			Question:                cand.Question,
 		}
 		row.DeltaF1 = row.CandidateF1 - row.BaselineF1
 		row.DeltaBLEU = row.CandidateBLEU - row.BaselineBLEU
@@ -469,7 +458,8 @@ func formatLongMemEvalComparisonMarkdown(baselinePath, candidatePath string, row
 	b.WriteString("# LongMemEval Comparison\n\n")
 	fmt.Fprintf(&b, "- Baseline: `%s`\n", baselinePath)
 	fmt.Fprintf(&b, "- Candidate: `%s`\n", candidatePath)
-	b.WriteString("- Correctness uses the semantic judge when available and falls back to exact match; no model calls are made.\n\n")
+	b.WriteString("- Correctness uses the semantic judge when available and falls back to exact match; no model calls are made.\n")
+	b.WriteString("- Only question/backend pairs present in both runs are compared.\n\n")
 
 	b.WriteString("## Backend Delta Summary\n\n")
 	b.WriteString("| Backend | Cases | Correct Baseline | Correct Candidate | EM Baseline | EM Candidate | Avg Delta F1 | Improved | Regressed | Unchanged |\n")

@@ -1210,6 +1210,14 @@ func TestCompareLongMemEvalResults(t *testing.T) {
 			Question:     "What was the fifth bottle?",
 			Answer:       "Absinthe",
 			BackendResults: map[string]*backendResult{
+				"mem0": {
+					Backend:      "mem0",
+					FailureStage: "ok",
+					ExactMatch:   true,
+					Answer:       "Absinthe",
+					F1:           1,
+					BLEU:         1,
+				},
 				"pgvector": {
 					Backend:      "pgvector",
 					FailureStage: "answer_miss",
@@ -1292,6 +1300,12 @@ func TestCompareLongMemEvalResults(t *testing.T) {
 		longMemEvalAnalysisRows(base),
 		longMemEvalAnalysisRows(candidate),
 	)
+	if len(rows) != 2 {
+		t.Fatalf("comparison rows = %d, want only shared question/backend pairs", len(rows))
+	}
+	if summary := summarizeLongMemEvalCompareRows(rows)["mem0"]; summary != nil {
+		t.Fatalf("comparison included backend missing from candidate: %#v", summary)
+	}
 	summary := summarizeLongMemEvalCompareRows(rows)["pgvector"]
 	if summary == nil || summary.Improved != 1 || summary.Regressed != 1 {
 		t.Fatalf("semantic comparison summary = %#v, want one improvement and one regression", summary)
