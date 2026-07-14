@@ -28,6 +28,7 @@ import (
 	"sync"
 	"time"
 
+	skilloptimization "trpc.group/trpc-go/trpc-agent-go-benchmark/skillcraft/trpc-agent-go-impl/internal/optimization"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/evolution"
@@ -230,7 +231,7 @@ type benchmarkConfig struct {
 	EnableApprovalGate     bool
 	ApprovalGateShadow     bool
 	EffectivenessGate      bool
-	Optimization           *optimizationBenchmarkConfig
+	Optimization           *skilloptimization.Config
 }
 
 type rawTaskConfig struct {
@@ -272,24 +273,24 @@ type taskDefinition struct {
 }
 
 type benchmarkResult struct {
-	Timestamp         string                       `json:"timestamp"`
-	RequestedMode     runMode                      `json:"requestedMode"`
-	Model             string                       `json:"model"`
-	ReviewerModel     string                       `json:"reviewerModel"`
-	Variant           string                       `json:"variant,omitempty"`
-	SkillCraftRoot    string                       `json:"skillcraftRoot"`
-	TaskRoot          string                       `json:"taskRoot"`
-	BaseTask          string                       `json:"baseTask,omitempty"`
-	Scales            []string                     `json:"scales,omitempty"`
-	Tasks             []*taskSummary               `json:"tasks"`
-	Baseline          *modeResult                  `json:"baseline,omitempty"`
-	Evolution         *modeResult                  `json:"evolution,omitempty"`
-	Comparison        *compareResult               `json:"comparison,omitempty"`
-	Optimization      *optimizationBenchmarkResult `json:"optimization,omitempty"`
-	OutputDir         string                       `json:"outputDir"`
-	KeepWorkspaces    bool                         `json:"keepWorkspaces"`
-	MaxToolIterations int                          `json:"maxToolIterations"`
-	TaskTimeoutSec    int                          `json:"taskTimeoutSeconds"`
+	Timestamp         string                    `json:"timestamp"`
+	RequestedMode     runMode                   `json:"requestedMode"`
+	Model             string                    `json:"model"`
+	ReviewerModel     string                    `json:"reviewerModel"`
+	Variant           string                    `json:"variant,omitempty"`
+	SkillCraftRoot    string                    `json:"skillcraftRoot"`
+	TaskRoot          string                    `json:"taskRoot"`
+	BaseTask          string                    `json:"baseTask,omitempty"`
+	Scales            []string                  `json:"scales,omitempty"`
+	Tasks             []*taskSummary            `json:"tasks"`
+	Baseline          *modeResult               `json:"baseline,omitempty"`
+	Evolution         *modeResult               `json:"evolution,omitempty"`
+	Comparison        *compareResult            `json:"comparison,omitempty"`
+	Optimization      *skilloptimization.Result `json:"optimization,omitempty"`
+	OutputDir         string                    `json:"outputDir"`
+	KeepWorkspaces    bool                      `json:"keepWorkspaces"`
+	MaxToolIterations int                       `json:"maxToolIterations"`
+	TaskTimeoutSec    int                       `json:"taskTimeoutSeconds"`
 }
 
 type taskSummary struct {
@@ -590,7 +591,7 @@ func executeBenchmark(
 		onProgress = func() {}
 	}
 	if cfg.Mode == modeOptimize {
-		optimizationResult, err := runOptimizationBenchmark(ctx, cfg, tasks)
+		optimizationResult, err := runOptimize(ctx, cfg, tasks)
 		if err != nil {
 			return fmt.Errorf("optimize: %w", err)
 		}
@@ -688,11 +689,11 @@ func buildConfig() (*benchmarkConfig, error) {
 		EffectivenessGate:      *flagEffectivenessGate,
 	}
 	if mode == modeOptimize {
-		optimizationCfg, err := buildOptimizationBenchmarkConfig()
+		optimizationCfg, err := buildOptimizeConfig()
 		if err != nil {
 			return nil, err
 		}
-		cfg.Optimization = &optimizationCfg
+		cfg.Optimization = optimizationCfg
 	}
 	if *flagTaskTimeoutSeconds > 0 {
 		cfg.TaskTimeout = time.Duration(*flagTaskTimeoutSeconds) * time.Second
@@ -2165,7 +2166,7 @@ func writeBenchmarkOutputs(
 		return fmt.Errorf("create output directory: %w", err)
 	}
 	if result.Optimization != nil {
-		optimizationResult := result.Optimization.Result
+		optimizationResult := result.Optimization.Search
 		if optimizationResult == nil || optimizationResult.Spec == nil {
 			return errors.New("incomplete optimization result")
 		}
@@ -2215,7 +2216,7 @@ func writeReport(outputDir string, result *benchmarkResult) error {
 		appendComparisonSection(&b, "Comparison (evolution vs. baseline)", result.Comparison)
 	}
 	if result.Optimization != nil {
-		appendOptimizationSection(&b, result.Optimization)
+		skilloptimization.AppendReport(&b, result.Optimization)
 	}
 
 	if err := os.WriteFile(filepath.Join(outputDir, "REPORT.md"), []byte(b.String()), 0o644); err != nil {

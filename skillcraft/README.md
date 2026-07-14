@@ -164,6 +164,11 @@ report pipeline as every other mode, but runs an explicit offline search:
 4. select candidates on validation tasks; and
 5. compare the frozen winner with the seed on unseen holdout tasks.
 
+The reusable search, dataset, evaluator, and report code lives under
+`trpc-agent-go-impl/internal/optimization`. The top-level `optimize.go` only
+adapts SkillCraft workspaces, agent execution, and the official evaluator to
+that internal contract.
+
 The default scaled-task split trains on `e1,e2`, selects on `e3,m1`, and
 holds out `m2,h1`. Splits must be disjoint. The included seed specs are JSON
 representations of managed skills so experiments do not need a lossy
