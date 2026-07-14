@@ -13,6 +13,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -21,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -40,6 +42,11 @@ var (
 		"",
 		"JSON file containing the seed evolution.SkillSpec for optimize mode",
 	)
+	flagOptimizationCandidateSpec = flag.String(
+		"optimization-candidate-spec",
+		"",
+		"Optional frozen candidate SkillSpec; compares it with the seed without reflection",
+	)
 	flagOptimizationFeedbackScales = flag.String(
 		"optimization-feedback-scales",
 		"e1,e2",
@@ -54,6 +61,11 @@ var (
 		"optimization-holdout-scales",
 		"m2,h1",
 		"Comma-separated task scales used only for final paired evaluation",
+	)
+	flagOptimizationCriticalScales = flag.String(
+		"optimization-critical-scales",
+		"",
+		"Optional holdout scales requiring per-case score non-regression",
 	)
 	flagOptimizationRepeats = flag.Int(
 		"optimization-repeats",
@@ -80,6 +92,11 @@ var (
 		7,
 		"Seed for deterministic case sampling and paired evaluator calls",
 	)
+	flagOptimizationEvaluationTemperature = flag.Float64(
+		"optimization-evaluation-temperature",
+		0,
+		"Agent sampling temperature during optimization evaluation",
+	)
 	flagOptimizationTimeLimitSeconds = flag.Int(
 		"optimization-time-limit-seconds",
 		0,
@@ -105,17 +122,31 @@ func buildOptimizeConfig() (*skilloptimization.Config, error) {
 	if err != nil || info.IsDir() {
 		return nil, fmt.Errorf("invalid optimization seed spec: %s", absSeedPath)
 	}
+	candidatePath := strings.TrimSpace(*flagOptimizationCandidateSpec)
+	if candidatePath != "" {
+		candidatePath, err = filepath.Abs(candidatePath)
+		if err != nil {
+			return nil, fmt.Errorf("resolve optimization candidate spec: %w", err)
+		}
+		info, err = os.Stat(candidatePath)
+		if err != nil || info.IsDir() {
+			return nil, fmt.Errorf("invalid optimization candidate spec: %s", candidatePath)
+		}
+	}
 	cfg := &skilloptimization.Config{
-		SeedSpecPath:     absSeedPath,
-		FeedbackScales:   parseCSV(*flagOptimizationFeedbackScales),
-		ValidationScales: parseCSV(*flagOptimizationValidationScales),
-		HoldoutScales:    parseCSV(*flagOptimizationHoldoutScales),
-		Repeats:          *flagOptimizationRepeats,
-		MaxIterations:    *flagOptimizationMaxIterations,
-		ReflectionBatch:  *flagOptimizationReflectionBatch,
-		MaxMetricCalls:   *flagOptimizationMaxMetricCalls,
-		RandomSeed:       *flagOptimizationRandomSeed,
-		TokenBudget:      *flagOptimizationTokenBudget,
+		SeedSpecPath:          absSeedPath,
+		CandidateSpecPath:     candidatePath,
+		FeedbackScales:        parseCSV(*flagOptimizationFeedbackScales),
+		ValidationScales:      parseCSV(*flagOptimizationValidationScales),
+		HoldoutScales:         parseCSV(*flagOptimizationHoldoutScales),
+		CriticalScales:        parseCSV(*flagOptimizationCriticalScales),
+		Repeats:               *flagOptimizationRepeats,
+		MaxIterations:         *flagOptimizationMaxIterations,
+		ReflectionBatch:       *flagOptimizationReflectionBatch,
+		MaxMetricCalls:        *flagOptimizationMaxMetricCalls,
+		RandomSeed:            *flagOptimizationRandomSeed,
+		EvaluationTemperature: *flagOptimizationEvaluationTemperature,
+		TokenBudget:           *flagOptimizationTokenBudget,
 	}
 	if *flagOptimizationTimeLimitSeconds > 0 {
 		cfg.TimeLimit = time.Duration(*flagOptimizationTimeLimitSeconds) * time.Second
@@ -134,9 +165,16 @@ func runOptimize(
 	if cfg.Optimization == nil {
 		return nil, errors.New("missing optimization configuration")
 	}
-	seed, err := skilloptimization.LoadSeed(cfg.Optimization.SeedSpecPath)
+	seed, err := skilloptimization.LoadSpec(cfg.Optimization.SeedSpecPath)
 	if err != nil {
 		return nil, err
+	}
+	var candidate *evolution.SkillSpec
+	if cfg.Optimization.CandidateSpecPath != "" {
+		candidate, err = skilloptimization.LoadSpec(cfg.Optimization.CandidateSpecPath)
+		if err != nil {
+			return nil, err
+		}
 	}
 	dataset, err := skilloptimization.BuildDataset(
 		searchTasks(tasks),
@@ -150,41 +188,53 @@ func runOptimize(
 		cfg.Optimization.TokenBudget,
 		runtime.Run,
 	)
-	reflectionBase := newOpenAIModel(cfg.ReviewerModelName, cfg.Variant)
-	reflectionModel, reflectionTracker := newTrackingModel(reflectionBase)
-
+	request := skilloptimization.Request{
+		Evaluator: evaluator,
+		Config:    *cfg.Optimization,
+		Seed:      seed,
+		Candidate: candidate,
+		Dataset:   dataset,
+		StoreDir:  filepath.Join(cfg.OutputDir, "optimization_experiments"),
+	}
+	var reflectionTracker *usageTracker
+	if candidate == nil {
+		reflectionBase := newOpenAIModel(cfg.ReviewerModelName, cfg.Variant)
+		request.ReflectionModel, reflectionTracker = newTrackingModel(reflectionBase)
+	}
 	startedAt := time.Now().UTC()
-	search, err := skilloptimization.Run(
-		ctx,
-		skilloptimization.Request{
-			ReflectionModel: reflectionModel,
-			Evaluator:       evaluator,
-			Config:          *cfg.Optimization,
-			Seed:            seed,
-			Dataset:         dataset,
-			StoreDir:        filepath.Join(cfg.OutputDir, "optimization_experiments"),
-		},
-	)
+	outcome, err := skilloptimization.Run(ctx, request)
 	if err != nil {
 		return nil, err
 	}
-	usage := reflectionTracker.snapshot()
+	usage := trackedUsage{}
+	if reflectionTracker != nil {
+		usage = reflectionTracker.snapshot()
+	}
+	candidateSpecName := ""
+	if cfg.Optimization.CandidateSpecPath != "" {
+		candidateSpecName = filepath.Base(cfg.Optimization.CandidateSpecPath)
+	}
 	return &skilloptimization.Result{
-		StartedAt:        startedAt,
-		FinishedAt:       time.Now().UTC(),
-		SeedSpec:         filepath.Base(cfg.Optimization.SeedSpecPath),
-		FeedbackScales:   append([]string(nil), cfg.Optimization.FeedbackScales...),
-		ValidationScales: append([]string(nil), cfg.Optimization.ValidationScales...),
-		HoldoutScales:    append([]string(nil), cfg.Optimization.HoldoutScales...),
-		Repeats:          cfg.Optimization.Repeats,
-		AgentTokens:      evaluator.AgentTokens(),
+		StartedAt:             startedAt,
+		FinishedAt:            time.Now().UTC(),
+		SeedSpec:              filepath.Base(cfg.Optimization.SeedSpecPath),
+		CandidateSpec:         candidateSpecName,
+		FeedbackScales:        append([]string(nil), cfg.Optimization.FeedbackScales...),
+		ValidationScales:      append([]string(nil), cfg.Optimization.ValidationScales...),
+		HoldoutScales:         append([]string(nil), cfg.Optimization.HoldoutScales...),
+		CriticalScales:        append([]string(nil), cfg.Optimization.CriticalScales...),
+		Repeats:               cfg.Optimization.Repeats,
+		RandomSeed:            cfg.Optimization.RandomSeed,
+		EvaluationTemperature: cfg.Optimization.EvaluationTemperature,
+		AgentTokens:           evaluator.AgentTokens(),
 		ReflectionUsage: skilloptimization.Usage{
 			PromptTokens:     usage.PromptTokens,
 			CompletionTokens: usage.CompletionTokens,
 			TotalTokens:      usage.TotalTokens,
 		},
-		SelectedChanged: !reflect.DeepEqual(seed, search.Spec),
-		Search:          search,
+		SelectedChanged: !reflect.DeepEqual(seed, outcome.Search.Spec),
+		Search:          outcome.Search,
+		Comparison:      outcome.Comparison,
 	}, nil
 }
 
@@ -290,23 +340,33 @@ func (r *skillCraftBatchRunner) Run(
 			return nil, fmt.Errorf("unknown optimization task %q", item.Metadata["task_id"])
 		}
 		runID := r.allocateRunID()
+		caseSeed := deriveEvaluationSeed(seed, item.ID)
 		workspace := filepath.Join(
 			r.outputRoot,
 			"workspaces",
 			"optimization",
 			candidateID,
 			sanitizeName(item.ID),
-			fmt.Sprintf("run-%04d-seed-%d", runID, seed),
+			fmt.Sprintf("run-%04d-seed-%d", runID, caseSeed),
 		)
 		if err := prepareWorkspace(task, workspace); err != nil {
 			return nil, fmt.Errorf("prepare optimization workspace: %w", err)
 		}
 		startedAt := time.Now()
 		sessionService := sessioninmemory.NewSessionService()
-		sessionID := fmt.Sprintf("optimization-%s-%d-%d", sanitizeName(item.ID), seed, runID)
+		sessionID := fmt.Sprintf(
+			"optimization-%s-%d-%d", sanitizeName(item.ID), caseSeed, runID,
+		)
+		runConfig := *r.cfg
+		runConfig.EvaluationSeed = &caseSeed
+		evaluationTemperature := 0.0
+		if r.cfg.Optimization != nil {
+			evaluationTemperature = r.cfg.Optimization.EvaluationTemperature
+		}
+		runConfig.EvaluationTemperature = &evaluationTemperature
 		stats, runErr := r.execute(
 			ctx,
-			r.cfg,
+			&runConfig,
 			task,
 			modeOptimize,
 			workspace,
@@ -319,20 +379,27 @@ func (r *skillCraftBatchRunner) Run(
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, ctxErr
 		}
-		official, evalErr := r.evaluate(ctx, r.cfg, task, workspace)
+		official, evalErr := r.evaluate(ctx, &runConfig, task, workspace)
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, ctxErr
 		}
 		results = append(results, skilloptimization.CaseResult{
-			Agent:              agentResult(stats),
-			AgentError:         runErr,
-			Official:           officialResult(official),
-			EvaluationError:    evalErr,
-			AdditionalFeedback: artifactFeedback(task, workspace, official),
-			Duration:           time.Since(startedAt),
+			Agent:           agentResult(stats),
+			AgentError:      runErr,
+			Official:        officialResult(official),
+			EvaluationError: evalErr,
+			AdditionalFeedback: additionalFeedback(
+				task, stats, workspace, official,
+			),
+			Duration: time.Since(startedAt),
 		})
 	}
 	return results, nil
+}
+
+func deriveEvaluationSeed(batchSeed int64, caseID string) int64 {
+	digest := sha256.Sum256([]byte(fmt.Sprintf("%d\x00%s", batchSeed, caseID)))
+	return int64(binary.BigEndian.Uint64(digest[:8]) & (1<<63 - 1))
 }
 
 func (r *skillCraftBatchRunner) allocateRunID() int {
@@ -375,6 +442,95 @@ func officialResult(result *officialEval) *skilloptimization.OfficialResult {
 		Status:   result.Status,
 		Quality:  max(0, min(1, result.Score.Percent/100)),
 		Findings: strings.TrimSpace(joinScoreNotes(result)),
+	}
+}
+
+func additionalFeedback(
+	task *taskDefinition,
+	stats *runStats,
+	workspace string,
+	official *officialEval,
+) string {
+	parts := []string{
+		toolContractFeedback(task, stats),
+		artifactFeedback(task, workspace, official),
+	}
+	result := parts[:0]
+	for _, part := range parts {
+		if part = strings.TrimSpace(part); part != "" {
+			result = append(result, part)
+		}
+	}
+	return strings.Join(result, " ")
+}
+
+func toolContractFeedback(task *taskDefinition, stats *runStats) string {
+	if task == nil || stats == nil || len(task.ToolsUsed) == 0 {
+		return ""
+	}
+	required := make(map[string]bool, len(task.ToolsUsed))
+	for _, name := range task.ToolsUsed {
+		name = normalizeDomainToolName(name)
+		if name == "" || isLocalSupportTool(name) {
+			continue
+		}
+		required[name] = true
+	}
+	observed := make(map[string]int)
+	for _, rawName := range stats.ToolCalls {
+		name := normalizeToolCallName(rawName)
+		if !strings.HasPrefix(name, "local-") {
+			continue
+		}
+		name = normalizeDomainToolName(name)
+		if name == "" || isLocalSupportTool(name) {
+			continue
+		}
+		observed[name]++
+	}
+	missing := make([]string, 0)
+	for name := range required {
+		if observed[name] == 0 {
+			missing = append(missing, name)
+		}
+	}
+	unexpected := make([]string, 0)
+	for name, count := range observed {
+		if !required[name] {
+			unexpected = append(unexpected, fmt.Sprintf("%s (%d calls)", name, count))
+		}
+	}
+	sort.Strings(missing)
+	sort.Strings(unexpected)
+	if len(missing) == 0 && len(unexpected) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, 2)
+	if len(missing) > 0 {
+		parts = append(parts, "missing required domain tools: "+strings.Join(missing, ", "))
+	}
+	if len(unexpected) > 0 {
+		parts = append(parts, "task did not require: "+strings.Join(unexpected, ", "))
+	}
+	return "Task tool contract: " + strings.Join(parts, "; ") +
+		". This evidence is specific to the current case: another case may require " +
+		"these endpoints. Generalize by following each task's declared domain tools " +
+		"instead of banning endpoint names or using a fixed skill-level tool list."
+}
+
+func normalizeDomainToolName(name string) string {
+	name = strings.TrimSpace(name)
+	name = strings.TrimPrefix(name, "mcp_")
+	name = strings.TrimPrefix(name, "local-")
+	return name
+}
+
+func isLocalSupportTool(name string) bool {
+	switch name {
+	case "claim_done", "write_final_json", "file_append", "file_write_json_chunk":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -426,7 +582,9 @@ func artifactFeedback(
 		return ""
 	}
 	return "Artifact completeness: " + strings.Join(missing, "; ") +
-		". Populate these recipe fields from the corresponding category or area tool results."
+		". Use these exact keys on each recipe object; nested or renamed " +
+		"equivalents do not satisfy the artifact contract. Populate them from " +
+		"the corresponding category, area, or ingredient tool results."
 }
 
 func hasPartialScore(official *officialEval, name string) bool {

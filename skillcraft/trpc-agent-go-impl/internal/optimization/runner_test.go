@@ -62,7 +62,7 @@ func TestRun(t *testing.T) {
 	}
 	result, err := run(context.Background(), request, factory)
 	require.NoError(t, err)
-	require.Same(t, want, result)
+	require.Same(t, want, result.Search)
 	require.Same(t, seed, fake.request.Seed)
 	require.Equal(t, dataset.ID, fake.request.Dataset.ID)
 

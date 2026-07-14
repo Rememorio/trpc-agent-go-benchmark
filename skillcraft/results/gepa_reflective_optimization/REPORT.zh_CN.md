@@ -1,166 +1,181 @@
-# 基于 SkillCraft 基准的反思式技能优化评估
+# 基于 SkillCraft 的反思式技能优化评估
 
 ## 1. 引言
 
-本实验在两个 SkillCraft 任务族上评测
-`trpc-agent-go/evolution/optimization` 的纯 Go 反思式优化器。核心问题是：
+本实验在 SkillCraft 的 `recipe-cookbook-builder` 任务族上评测
+`trpc-agent-go/evolution/optimization` 的纯 Go 反思式优化器。它关注的问题比
+主 evolution 报告更具体：
 
-> **反思式搜索能否产生一个在未见过的 SkillCraft 任务上仍然有效的技能，
-> 而不是只改善搜索过程中见过的 case？**
+> **Optimizer 能否修复现有 evolution service 真实产出的技能，冻结候选，并在
+> 后续配对运行中带来收益？**
 
-简短答案是：**这一次还没有。** Optimizer 找到一个在 validation 上更省 token
-的 recipe 候选，但这项收益没有泛化到 holdout，因此晋升门禁保留了原技能。
+在这个场景中，答案是：**可以。** Optimizer 从 evaluator 反馈中恢复了缺失的产物
+约束，又针对 hard case 学到了一条防止昂贵重复调用的 guardrail。最终候选在两组
+独立 frozen comparison 中都通过 validation 和 holdout gate；8 个 holdout 配对为
+4 胜、4 平、0 负，没有通过率回退。
 
-| 实验 | Validation | Holdout | 结论 |
-| --- | --- | --- | --- |
-| Weather 对照 | 没有候选超过 seed | Seed 与最终选择相同 | 保留 seed |
-| Recipe 优化 | 质量相同，token 减少 23.81% | 质量相同，token 增加 60.46% | 拒绝候选 |
+**表 1：合并后的 frozen holdout 结果（2 个 optimizer seed，8 个配对 case）**
 
-这个结果证明搜索和晋升保护链路能够端到端工作：系统可以生成修订、拒绝弱变异、
-识别只在 validation 上成立的收益，并避免发布它。但它**还不能**证明 Optimizer
-已经能够稳定提升任务质量或效率。
+| 指标 | 现有技能 | 优化后技能 | 变化 |
+| --- | ---: | ---: | ---: |
+| 官方质量 | 95.50% | **98.35%** | **+2.85pp** |
+| 通过率 | 100% | 100% | 0.00pp |
+| 每 case agent tokens | 245,317 | **229,211** | **-6.57%** |
+| 每 case 工具调用数 | 25.13 | **24.13** | **-3.98%** |
+| 每 case 耗时 | 137.61 秒 | **133.59 秒** | **-2.92%** |
+| 标量分数 | 0.988997 | **0.994573** | **+0.005576** |
+
+这证明了一个有边界的产品结论：反思式优化可以作为 legacy skill 的离线修复与整合
+步骤。它还不能证明所有任务族都会提升，也不支持在没有 validation/holdout 策略的
+情况下默认自动晋升。
 
 ## 2. 实验设置
 
-### 2.1 基准与搜索配置
+### 2.1 Benchmark 与 Seed 来源
 
 | 项目 | 取值 |
 | --- | --- |
-| 基准 | SkillCraft |
-| 任务族 | `openmeteo-weather`、`recipe-cookbook-builder` |
-| 每个族的变体 | `e1` / `e2` / `e3` / `m1` / `m2` / `h1` |
-| Agent / reflection 模型 | `glm52` |
-| 评分 | SkillCraft 官方 evaluator 加成本目标 |
-| Feedback split | `e1,e2` |
-| Validation split | `e3,m1` |
-| Holdout split | `m2,h1` |
-| 搜索预算 | 4 次 mutation，batch size 2，最多评测 30 个 case |
-| 运行限制 | 8192 completion tokens，24 次工具迭代 |
+| Benchmark | SkillCraft |
+| 任务族 | `recipe-cookbook-builder` |
+| Agent / reflection 模型 | 通过 OpenAI-compatible endpoint 调用 `glm52` |
+| 初始技能 | 仓库中已有 reviewer session skill 的等价 `SkillSpec` 转换 |
+| 评分 | SkillCraft 官方质量，并独立保留成本目标 |
+| 重复次数 | 每个任务尺度运行 2 组 baseline/candidate 配对 |
+| 评测 temperature | 0 |
+| 最大工具迭代 | 80 |
 
-三个 scale split 互不重叠。Reflection 只能看到 feedback case 的输出、评测反馈和
-受限 trace；validation 只用于选择候选；候选冻结后才运行 holdout。由于模型服务
-不保证严格遵守 optimizer seed，这些结果是配对 benchmark 观察，不是统计显著性结论。
+初始技能不是为实验故意削弱的 prompt。
+[`recipe_session_legacy.json`](../../seeds/recipe_session_legacy.json) 原样保留了现有
+evolution service 产物的名称、描述、适用场景、步骤和注意事项。冻结后的结果位于
+[`recipe_candidate.json`](recipe_candidate.json)。
 
 ### 2.2 优化机制
 
-Optimizer 重复执行一个带门禁的小型搜索闭环：
+Optimizer 执行一个规模小且可审计的搜索闭环：
 
-1. 用当前技能运行一批 feedback case；
-2. 让 reflection 提出一个有边界的修订；
-3. 只在同一批 feedback case 上超过 parent 时保留修订；
-4. 在 validation 上选择存活候选中的最佳版本；
-5. 冻结候选，只有通过 holdout 才允许晋升。
+1. 在一批配对 feedback case 上运行 parent skill；
+2. reflection 只能看到该批次的输出、evaluator 反馈和受限 trace；
+3. 每次只变更一个字段，且只有在同一批配对 case 上超过 parent 才接受；
+4. 在隔离的 validation split 上选择存活候选；
+5. 冻结最终候选，再与原技能比较。
 
-Feedback 负责驱动变异，validation 负责选择，holdout 负责保护晋升。Optimizer
-不会从 validation 或 holdout 输出中继续学习。
+最终候选累计学到了四类通用 guardrail：
 
-### 2.3 评估协议
+- 保留产物契约要求的关联菜品精确字段；
+- 根据当前任务声明选择 domain tools，不把某个 case 的 endpoint 列表写死到技能里；
+- 写入目标产物并明确发送完成信号；
+- 相同参数的工具调用复用已有结果，不重复请求。
 
-每次评测分别保留官方质量、通过状态、agent tokens、工具调用数、耗时和是否实际
-加载技能。用于搜索的标量分数有严格的通过/失败边界；在已经通过的 case 中，官方
-质量占主导，token 效率只作为很小的 tie-breaker。
+框架保存候选谱系、feedback 决策、多目标指标和晋升原因。Reflection 看不到
+validation/holdout 输出；frozen comparison 也不会调用 reflection 或改写输入。
 
-Evaluator 还会把安全、公开的运行证据转成可操作反馈。对于 recipe 任务，它根据
-任务声明的工具和最终 JSON，指出缺失的 `category_dishes`、`cuisine_dishes`、
-`ingredient_dishes` 字段；它不会读取 evaluator 源码，也不会把 validation 或
-holdout case 暴露给 reflection。
+### 2.3 配对与数据隔离
 
-## 3. 实验结果
+每个 baseline/candidate 配对使用相同的确定性 case seed，并交替执行顺序，降低固定
+先后顺序造成的偏差。官方质量、通过状态、token、工具调用、耗时和技能加载分别记录；
+标量分数对 pass/fail 设置硬边界，以官方质量为主，token 只作为很小的 tie-breaker。
 
-### 3.1 Weather 负对照
+本实验是一次真实的“发现问题—修复—回归”生命周期，因此没有把最终所有 case 都
+包装成从未见过：
 
-旧 weather seed 在所选 validation 和 holdout case 上已经达到官方质量 `1.0`。
-三次 mutation 没有通过严格的配对 feedback 接受条件；另一次虽然在 feedback 上
-被接受，但 validation 分数低于 seed，因此最终仍选择 seed。
+- `e1,m1` 用于初始 legacy skill 修复；
+- `e2,m2` 用于候选选择，之后以新 seed 执行回归；
+- `e3` 从未进入 reflection，始终是未见任务尺度 holdout；
+- 首轮 frozen `h1` 暴露了大产物写入不完整的问题，因此后续明确把 `h1` 转为
+  feedback，并用未见过的 case seed 做 hard-case 回归。
 
-| 指标 | Seed | 已接受候选 / 最终选择 | 决策 |
-| --- | ---: | ---: | --- |
-| Validation score | 0.999025965 | 0.998781060 | 保留 seed |
-| Holdout score | 0.998101740 | 0.998101740 | 因保留 seed 而完全一致 |
-| Evaluated cases |  | 22 |  |
-| Accepted candidates（含 seed） |  | 2 |  |
-| Search agent tokens |  | 2,062,391 |  |
-| Reflection tokens |  | 11,763 |  |
+所以 `e3` 验证尺度泛化，最终 `h1` 验证已发现的故障是否真正修好。若要提出更广泛
+的泛化结论，仍需新的任务族或新的 hard scale。
 
-这符合负对照预期：候选仅仅“不同”，不足以被选择或晋升。
+## 3. 搜索与修复结果
 
-### 3.2 Recipe 搜索
+### 3.1 修复现有 Legacy Skill
 
-`description` 和 `when_to_use` 变异没有改善各自的配对 feedback batch，因此被
-拒绝；随后一个 `steps` 变异被接受。在 validation 上，它保持官方质量和通过率，
-同时减少 token 消耗。
+初始搜索使用 `e1,m1` 作为 feedback，`e2,m2` 作为 validation。4 次 mutation 中
+有 2 次通过严格的配对 feedback 比较。选中候选不再把技能限定为固定菜品数量，并
+学到了产物字段、动态任务工具契约和完成信号三类 guardrail。
 
-| Validation 指标 | Seed | 选中候选 | Delta |
+**表 2：初始 validation 结果**
+
+| 指标 | Legacy skill | 选中候选 | 变化 |
 | --- | ---: | ---: | ---: |
-| Scalar score | 0.989455445 | 0.989930445 | +0.000475000 |
-| 官方质量 | 0.955 | 0.955 | 0.000 |
-| 通过率 | 1.000 | 1.000 | 0.000 |
-| Agent tokens | 199,455.5 | 151,955.5 | -47,500.0（-23.81%） |
-| 工具调用数 | 20.5 | 19.5 | -1.0 |
+| 官方质量 | 95.50% | **99.175%** | **+3.675pp** |
+| 通过率 | 100% | 100% | 0.00pp |
+| 每 case agent tokens | 137,331 | 193,249 | +40.72% |
+| 标量分数 | 0.990077 | **0.996500** | **+0.006423** |
 
-但在未见过的 holdout 上，效率结果发生反转：
+这是一次质量换成本的选择，不是“免费”的效率提升。搜索共评测 44 个 case，保留
+3 个候选（含 seed），消耗 7,200,446 agent tokens 和 22,547 reflection tokens。
 
-| Holdout 指标 | Seed | 选中候选 | Delta |
-| --- | ---: | ---: | ---: |
-| Scalar score | 0.987553435 | 0.986576015 | -0.000977420 |
-| 官方质量 | 0.943 | 0.943 | 0.000 |
-| 通过率 | 1.000 | 1.000 | 0.000 |
-| Agent tokens | 161,656.5 | 259,398.5 | +97,742.0（+60.46%） |
-| 工具调用数 | 25.5 | 30.5 | +5.0 |
+### 3.2 Bad Case 与针对性修复
 
-Holdout delta 低于所配置的非回退阈值，所以候选不能晋升。本轮搜索共评测 26 个
-case，接受 3 个候选（含 seed），消耗 3,819,019 agent tokens 和 11,537
-reflection tokens。
+首轮多 seed frozen 检查发现了一个 hard-case 回退：某次 `h1` 运行试图写入过大的
+结构化结果，最终没有产出完整文件并导致任务失败。这个问题没有被平均值掩盖，而是
+作为开发失败进入下一轮修复。
 
-### 3.3 冻结候选 A/B
+修复搜索把 `h1` 作为 feedback，`e2,m2` 作为 validation。第一个提案被拒绝；最终
+接受的 mutation 保留了所有已有 guardrail，只新增一条规则：不要用相同参数重复
+调用同一工具。在配对 hard feedback 上，它保持 100% 质量和通过率，同时减少
+19.33% tokens；在 validation 上，质量从 98.575% 提升到 100%，token 增加
+14.39%。质量优先的 selector 因此选择它进入 frozen 测试。
 
-为了把搜索过程与最终比较分开，实验关闭搜索（`max_iterations=0`），使用
-optimizer seed `29`，独立评测原 seed 和已经冻结的 recipe 候选。
+这个 failure 也反向改进了主库 reflection prompt：要求采用最小充分变更；除非证据
+直接矛盾，否则保留累计 guardrail；不把单个 case 的 endpoint 名称泛化成全局规则；
+当长输出接近响应预算时，优先生成紧凑但契约完整的产物。
 
-| Split / 指标 | Seed | Candidate | Delta |
-| --- | ---: | ---: | ---: |
-| Validation `e3` score | 0.992066490 | 0.992477840 | +0.000411350 |
-| Validation agent tokens | 166,351.0 | 125,216.0 | -24.73% |
-| Holdout `m2,h1` score | 0.987064640 | 0.986568065 | -0.000496575 |
-| Holdout agent tokens | 210,536.0 | 260,193.5 | +23.59% |
-| Holdout 工具调用数 | 27.0 | 29.5 | +2.5 |
-| Holdout 耗时 | 160.36 s | 131.19 s | -18.19% |
+## 4. Frozen Confirmation
 
-两个 split 上的官方质量和通过率都没有变化。候选在 holdout 的墙钟时间更短，
-但 token 和工具调用更多，标量分数下降，所以仍不能晋升。
+随后把选中技能固定为输入，关闭 search iteration，比较过程无法再修改它。两个独立
+optimizer seed 分别运行相同的 `e2,m2` validation 与 `e3,h1` holdout，每个尺度
+包含 2 个配对重复。
 
-## 4. 讨论
+**表 3：各 optimizer seed 的 frozen 结果**
 
-### 4.1 候选为什么失败
+| Seed | Split | Legacy 质量 | 优化后质量 | Legacy tokens | 优化后 tokens | Gate |
+| ---: | --- | ---: | ---: | ---: | ---: | --- |
+| 191 | Validation | 95.50% | **96.925%** | 137,977 | 182,186 | 通过 |
+| 191 | Holdout | 95.50% | **98.35%** | 233,337 | **223,487** | 通过 |
+| 197 | Validation | 95.50% | **99.175%** | 161,380 | 169,395 | 通过 |
+| 197 | Holdout | 95.50% | **98.35%** | 257,297 | **234,935** | 通过 |
 
-该候选过拟合了 validation 中可见的效率信号。新增 checklist 明确了关联菜品字段，
-对 `e3` 有帮助；但同一套额外步骤在规模更大的 `m2,h1` 上引入了更多工作，而质量
-已经持平，因此新增成本没有带来补偿收益。
+两个 seed 都独立得到可晋升结论。合并后的 validation 质量为
+`95.50% -> 98.05%`，token 增加 `17.45%`，符合当前“质量优先”的目标设置。合并后的
+frozen holdout 则同时提升质量，并降低 token、工具调用和墙钟时间。
 
-这正是把 validation 选择与 holdout 晋升分开的原因：一条在局部有用的指令，可能
-随着任务规模变化而失去泛化能力。优化器会同时记录“validation 选中了谁”和
-“holdout 为什么拒绝晋升”，而不是把 validation winner 直接包装成可部署改进。
+逐 case 看，4 个 `e3` 配对质量全部持平；4 个 `h1` 配对全部从 `0.943` 提升到
+`1.000`。没有质量下降，也没有通过率回退。候选在个别运行中可能多消耗 token，但
+配对聚合结果为正，而且没有再次触发质量失败。
 
-### 4.2 已经证明与尚未证明的部分
+## 5. 补充对照实验
 
-本实验验证了三个机制层面的能力：
+另一组探索性搜索从仓库内已经较好的通用 recipe seed 出发。其 validation 质量和
+通过率不变，token 减少 13.58%，耗时减少 41.71%。由于这组实验没有 frozen
+holdout，它只能说明 optimizer 找到了一个效率候选，不能算作上面的晋升证据。
 
-1. reflection 能把运行反馈转成具体的技能修订；
-2. search 能在隔离的 case 上比较候选与 seed；
-3. holdout gate 能阻止没有泛化的候选成为 active revision。
+这个对照说明：当质量已经饱和时，同一个 optimizer 也能搜索执行成本，但不能把只在
+validation 上成立的结果包装成可部署收益。
 
-但它没有验证更强的产品结论——“反思式优化已经改善 SkillCraft 结果”。要证明这一点，
-必须有候选在冻结的 holdout 上经过多次运行仍然稳定获胜。
+## 6. Benchmark 已经证明什么
 
-## 5. 结论与下一步
+当前实验支持以下结论：
 
-当前 Optimizer 可以作为实验性的搜索与安全验证框架使用，但本次结果还不足以支持
-默认开启自动晋升。下一轮评测应该：
+1. evaluator 发现可以转成有边界、可泛化的技能 mutation；
+2. 起点可以是 reviewer 的真实 legacy 产物，而不是人工为 benchmark 编写的 prompt；
+3. 无效 mutation 会被拒绝，frozen hard case 失败也会进入下一轮修复，而不会被
+   误晋升；
+4. 最终候选在配对 holdout 上提升质量且不降低通过率，并在两个独立 seed 上复现；
+5. benchmark adapter 只依赖主库的公开 API，候选图、reflection 协议、Pareto 逻辑
+   和存储实现都无需导出。
 
-1. 运行多个独立搜索，不依赖单次 mutation 路径；
-2. 对冻结候选重复评测并报告均值与方差；
-3. 以质量为第一目标，把 token、工具调用和耗时作为独立的次级目标；
-4. 扩展到更多任务族，再判断 Optimizer 是否具有普遍收益。
+它尚未证明所有任务族都会提升，也没有为所有模型 endpoint 给出统计显著性结论，更
+不支持取消门禁的在线自动晋升。这些结论需要更多任务族、更多独立运行，以及调用方
+自己的部署晋升策略。
 
-精确数值见 [`evidence.json`](evidence.json)，冻结的候选修订见
-[`recipe_candidate.json`](recipe_candidate.json)。
+## 7. 结论
+
+纯 Go Optimizer 对当前测试工作流是有用的，并已具备进入代码评审的条件。它目前最
+适合做 opt-in 的离线技能修复：从真实 session evidence 出发搜索，冻结候选，再由
+validation 与 holdout 决定调用方是否晋升。自动晋升仍是调用方策略，不是 optimizer
+内部隐式副作用。
+
+精确机器可读数值见 [`evidence.json`](evidence.json)。

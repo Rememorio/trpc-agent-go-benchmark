@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"strconv"
 	"time"
@@ -26,19 +27,22 @@ import (
 
 const datasetID = "skillcraft-reflective-optimization"
 
-// Config controls one reflective search experiment.
+// Config controls one reflective search or frozen comparison experiment.
 type Config struct {
-	SeedSpecPath     string
-	FeedbackScales   []string
-	ValidationScales []string
-	HoldoutScales    []string
-	Repeats          int
-	MaxIterations    int
-	ReflectionBatch  int
-	MaxMetricCalls   int
-	RandomSeed       int64
-	TimeLimit        time.Duration
-	TokenBudget      int
+	SeedSpecPath          string
+	CandidateSpecPath     string
+	FeedbackScales        []string
+	ValidationScales      []string
+	HoldoutScales         []string
+	CriticalScales        []string
+	Repeats               int
+	MaxIterations         int
+	ReflectionBatch       int
+	MaxMetricCalls        int
+	RandomSeed            int64
+	EvaluationTemperature float64
+	TimeLimit             time.Duration
+	TokenBudget           int
 }
 
 // Validate checks search invariants that do not depend on the task catalog.
@@ -55,11 +59,19 @@ func (c Config) Validate() error {
 	if c.MaxMetricCalls < 0 {
 		return errors.New("max metric calls must not be negative")
 	}
+	if math.IsNaN(c.EvaluationTemperature) ||
+		math.IsInf(c.EvaluationTemperature, 0) ||
+		c.EvaluationTemperature < 0 || c.EvaluationTemperature > 2 {
+		return errors.New("evaluation temperature must be between 0 and 2")
+	}
 	if c.TokenBudget <= 0 {
 		return errors.New("token budget must be positive")
 	}
-	if len(c.FeedbackScales) == 0 || len(c.ValidationScales) == 0 || len(c.HoldoutScales) == 0 {
-		return errors.New("all scale splits must be non-empty")
+	if len(c.FeedbackScales) == 0 || len(c.ValidationScales) == 0 {
+		return errors.New("feedback and validation scale splits must be non-empty")
+	}
+	if c.CandidateSpecPath != "" && len(c.HoldoutScales) == 0 {
+		return errors.New("frozen candidate comparison requires holdout scales")
 	}
 	seen := make(map[string]string)
 	for split, scales := range map[string][]string{
@@ -72,6 +84,15 @@ func (c Config) Validate() error {
 				return fmt.Errorf("scale %q appears in both %s and %s", scale, previous, split)
 			}
 			seen[scale] = split
+		}
+	}
+	holdout := make(map[string]bool, len(c.HoldoutScales))
+	for _, scale := range c.HoldoutScales {
+		holdout[scale] = true
+	}
+	for _, scale := range c.CriticalScales {
+		if !holdout[scale] {
+			return fmt.Errorf("critical scale %q is not in the holdout split", scale)
 		}
 	}
 	return nil
@@ -106,7 +127,11 @@ func BuildDataset(tasks []Task, cfg Config) (framework.Dataset, error) {
 		}
 		tasksByScale[task.Scale] = task
 	}
-	makeCases := func(split string, scales []string, critical bool) ([]framework.Case, error) {
+	criticalScales := make(map[string]bool, len(cfg.CriticalScales))
+	for _, scale := range cfg.CriticalScales {
+		criticalScales[scale] = true
+	}
+	makeCases := func(split string, scales []string) ([]framework.Case, error) {
 		cases := make([]framework.Case, 0, len(scales)*cfg.Repeats)
 		for _, scale := range scales {
 			task, ok := tasksByScale[scale]
@@ -118,7 +143,7 @@ func BuildDataset(tasks []Task, cfg Config) (framework.Dataset, error) {
 					ID:       fmt.Sprintf("%s/%s/r%d", split, task.ID, repeat),
 					Input:    task.Input,
 					Expected: task.Expectation,
-					Critical: critical,
+					Critical: split == "holdout" && criticalScales[scale],
 					Metadata: map[string]string{
 						"task_id": task.ID,
 						"repeat":  strconv.Itoa(repeat),
@@ -129,15 +154,15 @@ func BuildDataset(tasks []Task, cfg Config) (framework.Dataset, error) {
 		}
 		return cases, nil
 	}
-	feedback, err := makeCases("feedback", cfg.FeedbackScales, false)
+	feedback, err := makeCases("feedback", cfg.FeedbackScales)
 	if err != nil {
 		return framework.Dataset{}, err
 	}
-	validation, err := makeCases("validation", cfg.ValidationScales, false)
+	validation, err := makeCases("validation", cfg.ValidationScales)
 	if err != nil {
 		return framework.Dataset{}, err
 	}
-	holdout, err := makeCases("holdout", cfg.HoldoutScales, true)
+	holdout, err := makeCases("holdout", cfg.HoldoutScales)
 	if err != nil {
 		return framework.Dataset{}, err
 	}
@@ -150,25 +175,25 @@ func BuildDataset(tasks []Task, cfg Config) (framework.Dataset, error) {
 	}, nil
 }
 
-// LoadSeed decodes one strict SkillSpec JSON document.
-func LoadSeed(path string) (*evolution.SkillSpec, error) {
+// LoadSpec decodes one strict SkillSpec JSON document.
+func LoadSpec(path string) (*evolution.SkillSpec, error) {
 	file, err := os.Open(path)
 	if err != nil {
-		return nil, fmt.Errorf("open seed spec: %w", err)
+		return nil, fmt.Errorf("open skill spec: %w", err)
 	}
 	defer file.Close()
 	decoder := json.NewDecoder(file)
 	decoder.DisallowUnknownFields()
 	var spec evolution.SkillSpec
 	if err := decoder.Decode(&spec); err != nil {
-		return nil, fmt.Errorf("decode seed spec: %w", err)
+		return nil, fmt.Errorf("decode skill spec: %w", err)
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
 		if err == nil {
-			return nil, errors.New("seed spec contains trailing JSON values")
+			return nil, errors.New("skill spec contains trailing JSON values")
 		}
-		return nil, fmt.Errorf("decode seed spec trailer: %w", err)
+		return nil, fmt.Errorf("decode skill spec trailer: %w", err)
 	}
 	return &spec, nil
 }

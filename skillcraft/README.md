@@ -128,11 +128,9 @@ reproduce the three-run batch. The warm-start seed used by all runs
 lives at [`results/tools/seed_skills`](results/tools/seed_skills)
 (9 generic-parent-only skills covering all 5 task families).
 
-The benchmark impl's `go.mod` uses
-`replace trpc.group/trpc-go/trpc-agent-go => /workspace/github/my-trpc-agent-go`
-so library-side changes (the top-skill hint in
-`internal/flow/processor/skills.go`, the Phase A + B revision store
-and gates in `evolution/`) are picked up directly.
+The benchmark implementation pins the framework revision in its `go.mod`.
+During local framework development, point that module at the framework checkout
+with a temporary `go.work` file; do not commit a machine-specific replacement.
 
 ## What It Does
 
@@ -152,10 +150,10 @@ for the final deliverable.
 
 ## Reflective Skill Optimization
 
-`-mode optimize` evaluates one existing skill with the pure-Go
+`-mode optimize` evaluates existing skills with the pure-Go
 `evolution/optimization` package. Unlike the asynchronous `evolution` mode,
-it does not learn from tasks in sequence. It uses the same benchmark result and
-report pipeline as every other mode, but runs an explicit offline search:
+it does not learn from tasks in sequence. Without an explicit candidate it runs
+an offline search:
 
 1. evaluate the seed skill on validation tasks;
 2. run paired parent/child feedback tasks and ask the reflection model to
@@ -178,6 +176,12 @@ SKILL.md parser.
 unhelpful rewrites are rejected instead of being promoted merely because they
 are different.
 
+`recipe_session_legacy.json` preserves a task-specific skill learned by the
+existing session reviewer in the checked-in multi-family benchmark. Its fixed
+dish count and endpoint set make it a realistic recovery target for testing
+whether offline optimization can turn an overfit online-learning artifact into
+a reusable skill; it is not a hand-written degraded control.
+
 ```bash
 go run . \
   -skillcraft-root "$SKILLCRAFT_ROOT" \
@@ -194,6 +198,51 @@ go run . \
   -max-tool-iterations 24 \
   -output ../results/gepa_weather
 ```
+
+After search selects a candidate, freeze it and repeat the comparison without
+reflection by passing `-optimization-candidate-spec`. Each seed/candidate case
+pair receives the same evaluator pairing seed. The adapter derives its
+OpenAI-compatible model sampling seed from that pairing seed and the case ID,
+so repeated cases are independent while the same case remains paired between
+parent and child. Arm order alternates from a seeded starting point to reduce
+order bias. Per-case measurements are retained in `results.json`. Optimization
+evaluation defaults to temperature zero.
+Provider-side seed and temperature handling are still best effort, so use
+multiple repeats for promotion evidence.
+
+SkillCraft does not label any scaled task as safety-critical, so per-case
+critical gates are disabled by default and promotion uses aggregate validation
+and holdout non-regression. Use `-optimization-critical-scales` only for
+holdout scales whose individual score must never regress; ordinary stochastic
+repeats should not be marked critical merely because they are in holdout.
+
+For strict two-stage experiments, set `-optimization-holdout-scales ""` during
+search. That run can select a validation winner but cannot make a promotion
+decision or consume holdout cases. Supply the holdout scales only in the later
+frozen comparison.
+
+```bash
+go run . \
+  -skillcraft-root "$SKILLCRAFT_ROOT" \
+  -base-task recipe-cookbook-builder \
+  -scales e1,e2,e3,m1,m2,h1 \
+  -mode optimize \
+  -model "$MODEL_NAME" \
+  -optimization-seed-spec ../seeds/recipe_multi_dish.json \
+  -optimization-candidate-spec ../results/gepa_reflective_optimization/recipe_candidate.json \
+  -optimization-repeats 3 \
+  -max-tool-iterations 80 \
+  -output ../results/recipe_frozen_comparison
+```
+
+The frozen comparison still uses validation as a non-regression check and
+holdout for the final promotion decision. A validation regression stops the run
+before holdout, saving evaluation cost and leaving that split unconsumed. The
+comparison never invokes the reflection model or mutates either input spec. Set
+the tool-iteration budget high enough for the largest case;
+`recipe-cookbook-builder/h1` alone declares 25 domain calls before skill loading,
+artifact writing, validation, and completion, and its task configuration allows
+up to 80 model turns for retries.
 
 The search score preserves a hard pass/fail boundary. Among passing runs,
 official SkillCraft quality dominates and normalized agent-token efficiency
@@ -227,10 +276,13 @@ A sanitized GLM-5.2 search record is kept under
 with full reports in
 [`REPORT.md`](results/gepa_reflective_optimization/REPORT.md) and
 [`REPORT.zh_CN.md`](results/gepa_reflective_optimization/REPORT.zh_CN.md).
-It intentionally reports a non-promotable result: the reflected recipe skill
-improved validation efficiency but regressed on holdout cost. The evidence is
-useful for verifying the holdout gate, not for claiming a recipe-skill quality
-gain.
+It starts from a reviewer-generated legacy skill and records the complete
+failure-and-repair cycle. The final frozen candidate passed two independent
+validation/holdout comparisons: across 8 holdout pairs it produced 4 quality
+wins, 4 ties, no losses, and no pass-rate regressions. Pooled holdout quality
+improved from 95.50% to 98.35%, while agent tokens decreased 6.57%. The report
+also identifies which scale remained untouched and which hard scale became a
+regression set after exposing a development failure.
 
 ## Key Flags
 
@@ -251,10 +303,13 @@ gain.
 | `-enable-approval-gate` | Route reviewer output through the Phase A revision store + Phase B deterministic SpecGate / SafetyGate; writes immutable revisions and an audit log under `<output>/managed_skills_revisions/` |
 | `-approval-gate-shadow` | Run the quality gate in shadow mode: still publish even when gates reject, for comparison only |
 | `-optimization-seed-spec` | Seed `SkillSpec` JSON used by `-mode optimize` |
+| `-optimization-candidate-spec` | Optional frozen candidate for paired A/B without reflective search |
 | `-optimization-*-scales` | Disjoint feedback, validation, and holdout scale lists |
+| `-optimization-critical-scales` | Optional holdout scales requiring per-case score non-regression |
 | `-optimization-repeats` | Independent runs per task in every split |
 | `-optimization-max-iterations` | Reflective mutation attempt limit |
 | `-optimization-max-metric-calls` | Evaluated-case budget, including validation and holdout |
+| `-optimization-evaluation-temperature` | Agent sampling temperature during optimization evaluation (default `0`) |
 
 ## Output Layout
 

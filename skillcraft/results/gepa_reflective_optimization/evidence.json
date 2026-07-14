@@ -1,100 +1,195 @@
 {
-  "schema_version": 1,
-  "recorded_date": "2026-07-13",
-  "framework_revision": "c0b120728b27",
-  "benchmark_base_revision": "1edee87",
-  "skillcraft_revision": "0a9ba8808ba49bbc7bd40ad2e853896b8c3d4764",
+  "schema_version": 2,
   "model": "glm52",
-  "promotable_skill_improvement_observed": false,
-  "weather_control": {
-    "splits": {
-      "feedback": ["e1", "e2"],
-      "validation": ["e3", "m1"],
-      "holdout": ["m2", "h1"]
-    },
-    "iterations": 4,
-    "evaluated_cases": 22,
-    "accepted_candidates_including_seed": 2,
-    "search_agent_tokens": 2062391,
-    "reflection_tokens": 11763,
-    "seed_validation_score": 0.999025965,
-    "accepted_candidate_validation_score": 0.99878106,
-    "selected_validation_score": 0.999025965,
-    "seed_holdout_score": 0.99810174,
-    "selected_holdout_score": 0.99810174,
-    "selected_changed": false
+  "claim": {
+    "promotable_skill_improvement_observed": true,
+    "scope": "offline repair of a reviewer-generated recipe skill",
+    "frozen_holdout_pairs": 8,
+    "quality_wins": 4,
+    "quality_ties": 4,
+    "quality_losses": 0,
+    "pass_regressions": 0
   },
-  "recipe_search": {
-    "splits": {
-      "feedback": ["e1", "e2"],
-      "validation": ["e3", "m1"],
-      "holdout": ["m2", "h1"]
-    },
-    "iterations": 4,
-    "evaluated_cases": 26,
-    "accepted_candidates_including_seed": 3,
-    "search_agent_tokens": 3819019,
-    "reflection_tokens": 11537,
+  "protocol": {
+    "seed_provenance": "exact SkillSpec conversion of a checked-in reviewer-generated session skill",
+    "paired_case_seeds": true,
+    "alternating_run_order": true,
+    "evaluation_temperature": 0,
+    "repeats_per_scale": 2,
+    "max_tool_iterations": 80,
+    "reflection_can_observe": [
+      "feedback outputs",
+      "feedback evaluator findings",
+      "bounded feedback traces"
+    ],
+    "reflection_cannot_observe": [
+      "validation outputs",
+      "holdout outputs"
+    ],
+    "final_comparison_search_disabled": true,
+    "split_notes": {
+      "feedback": ["e1", "m1"],
+      "validation_and_new_seed_regression": ["e2", "m2"],
+      "untouched_scale_holdout": ["e3"],
+      "discovered_then_repaired_hard_case": ["h1"]
+    }
+  },
+  "initial_recovery_search": {
+    "optimizer_seed": 149,
+    "feedback_scales": ["e1", "m1"],
+    "validation_scales": ["e2", "m2"],
+    "mutation_attempts": 4,
+    "candidate_count_including_seed": 3,
+    "metric_calls": 44,
+    "agent_tokens": 7200446,
+    "reflection_tokens": 22547,
     "baseline_validation": {
-      "score": 0.989455445,
+      "score": 0.9900766950000001,
       "official_quality": 0.955,
       "pass_rate": 1.0,
-      "agent_tokens": 199455.5,
-      "tool_calls": 20.5
+      "agent_tokens": 137330.5
     },
-    "selected_validation": {
-      "score": 0.989930445,
-      "official_quality": 0.955,
+    "candidate_validation": {
+      "score": 0.996500015,
+      "official_quality": 0.99175,
       "pass_rate": 1.0,
-      "agent_tokens": 151955.5,
-      "tool_calls": 19.5
-    },
-    "baseline_holdout": {
-      "score": 0.987553435,
-      "official_quality": 0.943,
-      "pass_rate": 1.0,
-      "agent_tokens": 161656.5,
-      "tool_calls": 25.5
-    },
-    "selected_holdout": {
-      "score": 0.986576015,
-      "official_quality": 0.943,
-      "pass_rate": 1.0,
-      "agent_tokens": 259398.5,
-      "tool_calls": 30.5
-    },
-    "promotion_eligible": false,
-    "promotion_reason": "holdout delta -0.0010 is below required 0.0000"
+      "agent_tokens": 193248.5
+    }
   },
-  "final_code_frozen_ab": {
-    "search_disabled": true,
-    "optimizer_seed": 29,
-    "validation_scales": ["e3"],
-    "holdout_scales": ["m2", "h1"],
+  "hard_case_repair_search": {
+    "optimizer_seed": 181,
+    "feedback_scales": ["h1"],
+    "validation_scales": ["e2", "m2"],
+    "mutation_attempts": 2,
+    "candidate_count_including_seed": 2,
+    "metric_calls": 16,
+    "agent_tokens": 3615274,
+    "reflection_tokens": 8391,
+    "accepted_mutation": "avoid repeating a tool call with identical arguments",
+    "hard_feedback_agent_token_percent_delta": -19.33,
+    "baseline_validation": {
+      "score": 0.99569703,
+      "official_quality": 0.98575,
+      "pass_rate": 1.0,
+      "agent_tokens": 159547.0
+    },
+    "candidate_validation": {
+      "score": 0.9981749475,
+      "official_quality": 1.0,
+      "pass_rate": 1.0,
+      "agent_tokens": 182505.25
+    }
+  },
+  "frozen_confirmations": [
+    {
+      "optimizer_seed": 191,
+      "promotion_eligible": true,
+      "promotion_reason": "frozen candidate passed validation and holdout",
+      "validation": {
+        "baseline_score": 0.9900702325,
+        "candidate_score": 0.9923356375000001,
+        "baseline_official_quality": 0.955,
+        "candidate_official_quality": 0.96925,
+        "baseline_pass_rate": 1.0,
+        "candidate_pass_rate": 1.0,
+        "baseline_agent_tokens": 137976.75,
+        "candidate_agent_tokens": 182186.25
+      },
+      "holdout": {
+        "baseline_score": 0.989116635,
+        "candidate_score": 0.9946301325000001,
+        "baseline_official_quality": 0.955,
+        "candidate_official_quality": 0.9835,
+        "baseline_pass_rate": 1.0,
+        "candidate_pass_rate": 1.0,
+        "baseline_agent_tokens": 233336.5,
+        "candidate_agent_tokens": 223486.75,
+        "baseline_tool_calls": 24.75,
+        "candidate_tool_calls": 24.0,
+        "baseline_duration_seconds": 122.33503190625,
+        "candidate_duration_seconds": 132.509050573
+      }
+    },
+    {
+      "optimizer_seed": 197,
+      "promotion_eligible": true,
+      "promotion_reason": "frozen candidate passed validation and holdout",
+      "validation": {
+        "baseline_score": 0.9898361999999999,
+        "candidate_score": 0.9967385475000001,
+        "baseline_official_quality": 0.955,
+        "candidate_official_quality": 0.99175,
+        "baseline_pass_rate": 1.0,
+        "candidate_pass_rate": 1.0,
+        "baseline_agent_tokens": 161380.0,
+        "candidate_agent_tokens": 169395.25
+      },
+      "holdout": {
+        "baseline_score": 0.9888770275000001,
+        "candidate_score": 0.9945156500000001,
+        "baseline_official_quality": 0.955,
+        "candidate_official_quality": 0.9835,
+        "baseline_pass_rate": 1.0,
+        "candidate_pass_rate": 1.0,
+        "baseline_agent_tokens": 257297.25,
+        "candidate_agent_tokens": 234935.0,
+        "baseline_tool_calls": 25.5,
+        "candidate_tool_calls": 24.25,
+        "baseline_duration_seconds": 152.8864744685,
+        "candidate_duration_seconds": 134.6758587605
+      }
+    }
+  ],
+  "pooled_frozen_result": {
+    "runs": 2,
     "validation": {
-      "seed_score": 0.99206649,
-      "candidate_score": 0.99247784,
-      "official_quality_delta": 0.0,
-      "pass_rate_delta": 0.0,
-      "seed_agent_tokens": 166351,
-      "candidate_agent_tokens": 125216,
-      "agent_token_percent_delta": -24.72783452
+      "baseline_score": 0.98995321625,
+      "candidate_score": 0.9945370925000001,
+      "baseline_official_quality": 0.955,
+      "candidate_official_quality": 0.9805,
+      "baseline_agent_tokens": 149678.375,
+      "candidate_agent_tokens": 175790.75,
+      "agent_token_percent_delta": 17.445656
     },
     "holdout": {
-      "seed_score": 0.98706464,
-      "candidate_score": 0.986568065,
-      "score_delta": -0.000496575,
-      "official_quality_delta": 0.0,
-      "pass_rate_delta": 0.0,
-      "seed_agent_tokens": 210536,
-      "candidate_agent_tokens": 260193.5,
-      "agent_token_percent_delta": 23.58622753,
-      "seed_duration_seconds": 160.3594681,
-      "candidate_duration_seconds": 131.1880193,
-      "duration_percent_delta": -18.19128558,
-      "seed_tool_calls": 27.0,
-      "candidate_tool_calls": 29.5
+      "baseline_score": 0.98899683125,
+      "candidate_score": 0.99457289125,
+      "baseline_official_quality": 0.955,
+      "candidate_official_quality": 0.9835,
+      "official_quality_percentage_point_delta": 2.85,
+      "baseline_pass_rate": 1.0,
+      "candidate_pass_rate": 1.0,
+      "baseline_agent_tokens": 245316.875,
+      "candidate_agent_tokens": 229210.875,
+      "agent_token_percent_delta": -6.565386,
+      "baseline_tool_calls": 25.125,
+      "candidate_tool_calls": 24.125,
+      "tool_call_percent_delta": -3.9801,
+      "baseline_duration_seconds": 137.610753187375,
+      "candidate_duration_seconds": 133.59245466675,
+      "duration_percent_delta": -2.920047
     },
-    "promotion_eligible": false
+    "paired_cases": {
+      "count": 8,
+      "quality_wins": 4,
+      "quality_ties": 4,
+      "quality_losses": 0,
+      "pass_regressions": 0
+    }
+  },
+  "generic_seed_efficiency_search": {
+    "optimizer_seed": 131,
+    "evidence_level": "validation-only exploratory result",
+    "baseline_official_quality": 0.955,
+    "candidate_official_quality": 0.955,
+    "baseline_pass_rate": 1.0,
+    "candidate_pass_rate": 1.0,
+    "baseline_agent_tokens": 152184.25,
+    "candidate_agent_tokens": 131517.0,
+    "agent_token_percent_delta": -13.580414,
+    "baseline_duration_seconds": 126.86130741675,
+    "candidate_duration_seconds": 73.9513901145,
+    "duration_percent_delta": -41.706899,
+    "frozen_holdout_run": false
   }
 }

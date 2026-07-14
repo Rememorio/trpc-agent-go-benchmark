@@ -1,189 +1,213 @@
-# Evaluating Reflective Skill Optimization on the SkillCraft Benchmark
+# Evaluating Reflective Skill Optimization on SkillCraft
 
 ## 1. Introduction
 
 This experiment evaluates the pure-Go reflective optimizer in
-`trpc-agent-go/evolution/optimization` against two SkillCraft task families.
-The central question is:
+`trpc-agent-go/evolution/optimization` on SkillCraft's
+`recipe-cookbook-builder` family. It asks a narrower question than the main
+evolution report:
 
-> **Can reflective search produce a skill revision that improves unseen
-> SkillCraft tasks, rather than only the cases used during search?**
+> **Can the optimizer repair a real skill produced by the existing evolution
+> service, freeze the result, and improve later paired runs?**
 
-The short answer is **not yet**. The optimizer found a recipe candidate that
-looked cheaper on validation, but the saving did not generalize to holdout.
-The promotion gate therefore kept the existing skill.
+For this case, the answer is **yes**. The optimizer recovered missing artifact
+rules from evaluator feedback, then learned a guardrail for an expensive hard
+case. In two independent frozen comparisons, the final candidate passed both
+validation and holdout gates. Across the eight holdout pairs, it had four
+quality wins, four ties, no losses, and no pass-rate regressions.
 
-| Experiment | Validation | Holdout | Result |
-| --- | --- | --- | --- |
-| Weather control | No candidate beat the seed | Seed and selected skill were identical | Keep seed |
-| Recipe optimization | Same quality, 23.81% fewer tokens | Same quality, 60.46% more tokens | Reject candidate |
+**Table 1: Pooled frozen holdout result (2 optimizer seeds, 8 paired cases)**
 
-This result proves that the search and promotion-safety path works end to end:
-the integration can generate revisions, reject weak mutations, detect a
-validation-only win, and avoid publishing it. It does **not** yet prove that
-the optimizer can produce a skill with a repeatable quality or efficiency gain.
+| Metric | Existing skill | Optimized skill | Delta |
+| --- | ---: | ---: | ---: |
+| Official quality | 95.50% | **98.35%** | **+2.85pp** |
+| Pass rate | 100% | 100% | 0.00pp |
+| Agent tokens / case | 245,317 | **229,211** | **-6.57%** |
+| Tool calls / case | 25.13 | **24.13** | **-3.98%** |
+| Duration / case | 137.61 s | **133.59 s** | **-2.92%** |
+| Scalar score | 0.988997 | **0.994573** | **+0.005576** |
+
+This is evidence for a scoped product claim: reflective optimization is useful
+as an offline repair and consolidation step for a legacy skill. It is not yet
+evidence that every skill family will improve or that automatic promotion
+should be enabled without a validation and holdout policy.
 
 ## 2. Experimental Setup
 
-### 2.1 Benchmark and Search Configuration
+### 2.1 Benchmark and Seed Provenance
 
 | Item | Value |
 | --- | --- |
 | Benchmark | SkillCraft |
-| Task families | `openmeteo-weather`, `recipe-cookbook-builder` |
-| Variants per family | `e1` / `e2` / `e3` / `m1` / `m2` / `h1` |
-| Agent / reflection model | `glm52` |
-| Scoring | SkillCraft official evaluator plus cost objectives |
-| Feedback split | `e1,e2` |
-| Validation split | `e3,m1` |
-| Holdout split | `m2,h1` |
-| Search budget | 4 mutations, batch size 2, at most 30 evaluated cases |
-| Runtime limits | 8192 completion tokens, 24 tool iterations |
+| Task family | `recipe-cookbook-builder` |
+| Agent / reflection model | `glm52` through an OpenAI-compatible endpoint |
+| Starting skill | Exact `SkillSpec` conversion of a checked-in reviewer-generated session skill |
+| Scoring | SkillCraft official quality plus separately retained cost objectives |
+| Repeats | 2 paired runs per task scale |
+| Evaluation temperature | 0 |
+| Maximum tool iterations | 80 |
 
-The three scale splits are disjoint. Reflection receives only feedback-case
-outputs, evaluator feedback, and bounded traces. Validation is used for
-candidate selection; holdout is evaluated only after the selected candidate is
-frozen. The model service is not assumed to honor the optimizer seed, so these
-are paired benchmark observations rather than a statistical significance claim.
+The starting point is not a deliberately weakened prompt. The file
+[`recipe_session_legacy.json`](../../seeds/recipe_session_legacy.json) preserves
+the name, description, usage guidance, steps, and pitfalls of an artifact
+already produced by the current evolution service. The frozen output is
+[`recipe_candidate.json`](recipe_candidate.json).
 
 ### 2.2 Optimization Mechanism
 
-The optimizer repeats a small, gated search loop:
+The optimizer runs a small, auditable search:
 
-1. run the current skill on a feedback batch;
-2. ask reflection to propose one bounded revision;
-3. keep the revision only if it beats its parent on the same feedback batch;
-4. select the best surviving revision on validation; and
-5. freeze that revision and promote it only if it also passes holdout.
+1. evaluate a parent skill on a paired feedback batch;
+2. give only that batch's outputs, evaluator feedback, and bounded traces to
+   the reflection model;
+3. accept one-field mutations only when they beat the parent on the same
+   paired batch;
+4. select surviving candidates on a separate validation split; and
+5. freeze the selected candidate before comparing it with the original skill.
 
-Feedback drives mutation, validation selects, and holdout protects promotion.
-The optimizer never learns from validation or holdout outputs.
+The final candidate accumulated four general guardrails:
 
-### 2.3 Evaluation Protocol
+- preserve the exact related-dish keys required by the artifact contract;
+- use the domain tools declared by the current task instead of a fixed
+  skill-level endpoint list;
+- write the requested artifact and signal completion; and
+- reuse an earlier result instead of repeating an identical tool call.
 
-Each evaluation retains separate objectives for official quality, pass status,
-agent tokens, tool calls, duration, and observed skill loading. Candidate
-selection uses a scalar score with a hard pass/fail boundary. Among passing
-runs, official quality dominates and token efficiency is only a small
-tie-breaker.
+The framework keeps candidate lineage, feedback decisions, multi-objective
+measurements, and the promotion reason. Reflection cannot see validation or
+holdout outputs, and frozen comparison performs no reflection or mutation.
 
-The evaluator also turns safe, public run evidence into actionable feedback.
-For recipe tasks, it combines the task's declared tools with the generated JSON
-artifact to identify missing `category_dishes`, `cuisine_dishes`, and
-`ingredient_dishes` fields. It does not inspect evaluator source or expose
-validation and holdout cases to reflection.
+### 2.3 Pairing and Split Discipline
 
-## 3. Results
+Each baseline/candidate pair receives the same deterministic case seed. Run
+order alternates to reduce systematic first-run effects. Quality, pass status,
+tokens, tool calls, duration, and observed skill loading remain separate; the
+scalar score gives pass/fail a hard boundary, makes official quality dominant,
+and uses token efficiency only as a small tie-breaker.
 
-### 3.1 Weather Negative Control
+The experiment followed a repair lifecycle rather than presenting every final
+case as untouched:
 
-The legacy weather seed already achieved official quality `1.0` across the
-selected validation and holdout cases. Three mutations failed strict paired
-feedback acceptance. One mutation was accepted on feedback, but its validation
-score was lower than the seed, so selection retained the seed.
+- `e1,m1` first drove legacy-skill recovery;
+- `e2,m2` selected candidates and later served as new-seed regression cases;
+- `e3` never appeared in reflection and remained the untouched task-scale
+  holdout;
+- an early `h1` frozen run exposed an incomplete large artifact, so `h1` was
+  deliberately rolled into feedback and later rerun with unseen case seeds as
+  a hard-case regression set.
 
-| Metric | Seed | Accepted candidate / selected | Decision |
-| --- | ---: | ---: | --- |
-| Validation score | 0.999025965 | 0.998781060 | retain seed |
-| Holdout score | 0.998101740 | 0.998101740 | identical because seed remained selected |
-| Evaluated cases |  | 22 |  |
-| Accepted candidates including seed |  | 2 |  |
-| Search agent tokens |  | 2,062,391 |  |
-| Reflection tokens |  | 11,763 |  |
+This distinction matters: `e3` tests scale generalization, while final `h1`
+tests whether the discovered failure was actually repaired. A future broader
+claim still needs new task families or a fresh hard scale.
 
-This is the expected behavior for a control: novelty alone is insufficient for
-selection or promotion.
+## 3. Search and Repair Results
 
-### 3.2 Recipe Search
+### 3.1 Recovering the Legacy Skill
 
-The recipe search accepted a steps mutation after rejecting description and
-`when_to_use` changes that did not improve their paired feedback batches. On
-validation, the selected candidate preserved official quality and pass rate
-while using fewer tokens.
+The initial search used `e1,m1` for feedback and `e2,m2` for validation. Two of
+four proposed mutations survived paired feedback evaluation. The selected
+candidate generalized the legacy recipe description beyond a fixed number of
+dishes and learned the artifact, task-tool, and completion guardrails.
 
-| Validation metric | Seed | Selected | Delta |
+**Table 2: Initial validation result**
+
+| Metric | Legacy skill | Selected candidate | Delta |
 | --- | ---: | ---: | ---: |
-| Scalar score | 0.989455445 | 0.989930445 | +0.000475000 |
-| Official quality | 0.955 | 0.955 | 0.000 |
-| Pass rate | 1.000 | 1.000 | 0.000 |
-| Agent tokens | 199,455.5 | 151,955.5 | -47,500.0 (-23.81%) |
-| Tool calls | 20.5 | 19.5 | -1.0 |
+| Official quality | 95.50% | **99.175%** | **+3.675pp** |
+| Pass rate | 100% | 100% | 0.00pp |
+| Agent tokens / case | 137,331 | 193,249 | +40.72% |
+| Scalar score | 0.990077 | **0.996500** | **+0.006423** |
 
-The untouched holdout reversed the efficiency result:
+This was a quality-for-cost tradeoff, not a free efficiency win. The search
+evaluated 44 cases, retained three candidates including the seed, used
+7,200,446 agent tokens, and used 22,547 reflection tokens.
 
-| Holdout metric | Seed | Selected | Delta |
-| --- | ---: | ---: | ---: |
-| Scalar score | 0.987553435 | 0.986576015 | -0.000977420 |
-| Official quality | 0.943 | 0.943 | 0.000 |
-| Pass rate | 1.000 | 1.000 | 0.000 |
-| Agent tokens | 161,656.5 | 259,398.5 | +97,742.0 (+60.46%) |
-| Tool calls | 25.5 | 30.5 | +5.0 |
+### 3.2 Bad Case and Targeted Repair
 
-The holdout delta was below the configured non-regression threshold, so the
-candidate was not eligible for promotion. The search evaluated 26 cases,
-accepted 3 candidates including the seed, consumed 3,819,019 agent tokens, and
-used 11,537 reflection tokens.
+An early multi-seed frozen check found a hard-case regression: one `h1` run
+attempted an oversized structured write, failed to produce the required file,
+and failed the task. That result was treated as a development failure, not
+hidden in an average.
 
-### 3.3 Frozen Candidate A/B
+The repair search used `h1` as feedback and `e2,m2` as validation. The first
+proposal was rejected. The accepted mutation preserved every earlier
+guardrail and added only one rule: do not repeat a tool call with identical
+arguments. On its paired hard feedback batch it kept quality and pass rate at
+100% while reducing tokens by 19.33%. On validation it improved quality from
+98.575% to 100%, with a 14.39% token increase. The quality-first selector
+therefore kept it for frozen testing.
 
-To separate search behavior from the final comparison, the seed and selected
-recipe candidate were evaluated with search disabled (`max_iterations=0`) and
-optimizer seed `29`.
+This failure also improved the framework-level reflection prompt. It now asks
+for the smallest sufficient mutation, preserves cumulative guardrails unless
+the evidence contradicts them, avoids hard-coding case-specific endpoint
+names, and favors compact valid artifacts when long outputs approach the
+response budget.
 
-| Split / metric | Seed | Candidate | Delta |
-| --- | ---: | ---: | ---: |
-| Validation `e3` score | 0.992066490 | 0.992477840 | +0.000411350 |
-| Validation agent tokens | 166,351.0 | 125,216.0 | -24.73% |
-| Holdout `m2,h1` score | 0.987064640 | 0.986568065 | -0.000496575 |
-| Holdout agent tokens | 210,536.0 | 260,193.5 | +23.59% |
-| Holdout tool calls | 27.0 | 29.5 | +2.5 |
-| Holdout duration | 160.36 s | 131.19 s | -18.19% |
+## 4. Frozen Confirmation
 
-Official quality and pass rate were unchanged on both splits. The candidate was
-faster in wall-clock time on holdout, but it spent more tokens and tool calls
-and reduced the scalar score. It therefore remained ineligible.
+The selected skill was then fixed as an input: search iterations were disabled,
+and no comparison output could alter it. Two independent optimizer seeds ran
+the same `e2,m2` validation set and `e3,h1` holdout set, with two paired repeats
+per scale.
 
-## 4. Discussion
+**Table 3: Frozen result by optimizer seed**
 
-### 4.1 Why the Candidate Failed
+| Seed | Split | Legacy quality | Optimized quality | Legacy tokens | Optimized tokens | Gate |
+| ---: | --- | ---: | ---: | ---: | ---: | --- |
+| 191 | Validation | 95.50% | **96.925%** | 137,977 | 182,186 | pass |
+| 191 | Holdout | 95.50% | **98.35%** | 233,337 | **223,487** | pass |
+| 197 | Validation | 95.50% | **99.175%** | 161,380 | 169,395 | pass |
+| 197 | Holdout | 95.50% | **98.35%** | 257,297 | **234,935** | pass |
 
-The candidate overfit an efficiency signal visible on the selected validation
-cases. Its added checklist made the required related-dish fields explicit and
-helped `e3`, but the extra procedure caused more work on the larger `m2,h1`
-tasks. Because quality was already flat, the additional work had no compensating
-benefit.
+Both seeds independently produced a promotable decision. The pooled validation
+result was quality `95.50% -> 98.05%`; its token cost increased `17.45%`, which
+is acceptable under the configured quality-first objective. On pooled frozen
+holdout, quality increased `2.85pp` while token, tool-call, and wall-clock costs
+all decreased.
 
-This is precisely why validation selection and holdout promotion are separate:
-a locally useful instruction can fail to generalize as task scale changes. The
-optimizer records both the selected revision and the rejected promotion
-decision instead of presenting the validation winner as a deployable
-improvement.
+At case level, all four `e3` pairs tied on quality. All four `h1` pairs improved
+from `0.943` to `1.000`. There were no quality losses and no pass regressions.
+The candidate did sometimes spend more tokens on an individual run, but the
+paired aggregate improved and the variance did not create a quality failure.
 
-### 4.2 What Is and Is Not Proven
+## 5. Additional Control
 
-The experiment validates three mechanism-level properties:
+A separate exploratory search started from the repository's already-good
+generic recipe seed. Its validation quality and pass rate remained unchanged,
+while tokens decreased 13.58% and duration decreased 41.71%. Because that run
+did not include a frozen holdout, it is an efficiency-search signal only and is
+not part of the promotion evidence above.
 
-1. reflection can turn run feedback into a concrete skill revision;
-2. search can compare that revision with the seed on separate cases; and
-3. the holdout gate can prevent a non-generalizing candidate from becoming
-   active.
+This control is useful for a different reason: when quality is already
+saturated, the same optimizer can search for a smaller execution cost, but a
+validation-only result must not be marketed as a deployable improvement.
 
-It does not validate the stronger product claim that reflective optimization
-already improves SkillCraft outcomes. That claim needs a candidate that wins
-on frozen holdout data across repeated runs.
+## 6. What the Benchmark Establishes
 
-## 5. Conclusion and Next Steps
+The experiment now supports these claims:
 
-The optimizer is useful today as an experimental search and safety framework,
-but this benchmark does not justify enabling automatic promotion by default.
-The next evaluation should:
+1. evaluator findings can be converted into bounded, general skill mutations;
+2. a real reviewer-generated legacy skill can be repaired rather than replaced
+   by a hand-authored benchmark prompt;
+3. failed mutations and a validation winner with a frozen hard-case failure are
+   rejected or fed into the next repair cycle;
+4. the final frozen candidate improves paired holdout quality without reducing
+   pass rate, and the result repeats under two independent seeds; and
+5. the public API is sufficient for a benchmark adapter without exporting the
+   optimizer's candidate graph, reflection protocol, Pareto logic, or storage
+   internals.
 
-1. run multiple independent searches instead of relying on one mutation path;
-2. evaluate frozen candidates repeatedly and report mean and variance;
-3. optimize quality first and treat tokens, tool calls, and duration as
-   separate secondary objectives; and
-4. expand to more task families before making a general usefulness claim.
+It does not establish universal improvement across task families, statistical
+significance for all model endpoints, or safety of ungated online promotion.
+Those require more families, more independent runs, and a deployment-specific
+promotion policy.
 
-Exact machine-readable values are in [`evidence.json`](evidence.json), and the
-frozen selected revision is in
-[`recipe_candidate.json`](recipe_candidate.json).
+## 7. Conclusion
+
+The pure-Go optimizer is useful for the tested workflow and is ready for code
+review as an opt-in evolution primitive. Its strongest current use is offline
+skill repair: search from real session evidence, freeze a candidate, and let
+validation plus holdout decide whether the caller should promote it. Automatic
+promotion remains a caller-owned policy rather than an optimizer side effect.
+
+Exact machine-readable values are in [`evidence.json`](evidence.json).

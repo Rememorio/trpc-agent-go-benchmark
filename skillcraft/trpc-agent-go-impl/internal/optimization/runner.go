@@ -34,16 +34,24 @@ type Request struct {
 	Evaluator       framework.Evaluator
 	Config          Config
 	Seed            *evolution.SkillSpec
+	Candidate       *evolution.SkillSpec
 	Dataset         framework.Dataset
 	StoreDir        string
 }
 
-// Run executes reflective search with the configured budgets and experiment
-// store. The caller owns model usage tracking and benchmark-specific outputs.
+// Outcome contains the common optimizer result and optional per-case frozen
+// comparison evidence.
+type Outcome struct {
+	Search     *framework.Result
+	Comparison *Comparison
+}
+
+// Run executes reflective search or a frozen candidate comparison. The caller
+// owns model usage tracking and benchmark-specific outputs.
 func Run(
 	ctx context.Context,
 	request Request,
-) (*framework.Result, error) {
+) (*Outcome, error) {
 	return run(ctx, request, newRunner)
 }
 
@@ -59,7 +67,10 @@ func run(
 	ctx context.Context,
 	request Request,
 	newRunner runnerFactory,
-) (*framework.Result, error) {
+) (*Outcome, error) {
+	if request.Candidate != nil {
+		return runComparison(ctx, request)
+	}
 	opts := []framework.Option{
 		framework.WithMaxIterations(request.Config.MaxIterations),
 		framework.WithReflectionBatchSize(request.Config.ReflectionBatch),
@@ -74,8 +85,12 @@ func run(
 	if err != nil {
 		return nil, fmt.Errorf("create optimizer: %w", err)
 	}
-	return optimizer.Optimize(ctx, framework.Request{
+	result, err := optimizer.Optimize(ctx, framework.Request{
 		Seed:    request.Seed,
 		Dataset: request.Dataset,
 	})
+	if err != nil {
+		return nil, err
+	}
+	return &Outcome{Search: result}, nil
 }

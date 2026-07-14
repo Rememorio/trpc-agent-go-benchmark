@@ -232,6 +232,8 @@ type benchmarkConfig struct {
 	ApprovalGateShadow     bool
 	EffectivenessGate      bool
 	Optimization           *skilloptimization.Config
+	EvaluationSeed         *int64
+	EvaluationTemperature  *float64
 }
 
 type rawTaskConfig struct {
@@ -1304,7 +1306,13 @@ func executeTaskWithContext(
 	if parentCtx == nil {
 		parentCtx = context.Background()
 	}
-	modelInstance := newOpenAIModel(cfg.ModelName, cfg.Variant)
+	modelOptions := make([]openai.Option, 0, 1)
+	if cfg.EvaluationSeed != nil {
+		modelOptions = append(modelOptions, openai.WithExtraFields(map[string]any{
+			"seed": *cfg.EvaluationSeed,
+		}))
+	}
+	modelInstance := newOpenAIModel(cfg.ModelName, cfg.Variant, modelOptions...)
 	stats := &runStats{}
 	var availableSkills []string
 
@@ -1328,6 +1336,9 @@ func executeTaskWithContext(
 	genConfig := model.GenerationConfig{
 		MaxTokens: intPtr(maxTokens),
 		Stream:    false,
+	}
+	if cfg.EvaluationTemperature != nil {
+		genConfig.Temperature = cfg.EvaluationTemperature
 	}
 
 	agentOpts := []llmagent.Option{
@@ -2460,11 +2471,16 @@ func summarizeTasks(tasks []*taskDefinition) []*taskSummary {
 	return out
 }
 
-func newOpenAIModel(name, variant string) model.Model {
+func newOpenAIModel(
+	name string,
+	variant string,
+	additionalOptions ...openai.Option,
+) model.Model {
 	opts := []openai.Option{
 		openai.WithEnableTokenTailoring(true),
 		openai.WithMaxInputTokens(120000),
 	}
+	opts = append(opts, additionalOptions...)
 	if strings.TrimSpace(variant) != "" {
 		opts = append(opts, openai.WithVariant(openai.Variant(variant)))
 	}

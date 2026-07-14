@@ -31,28 +31,50 @@ func TestBuildOptimizeConfig(t *testing.T) {
 	require.NoError(t, os.WriteFile(seedPath, []byte(`{}`), 0o644))
 	setOptimizationFlagsForTest(t)
 	*flagOptimizationSeedSpec = seedPath
+	candidatePath := filepath.Join(t.TempDir(), "candidate.json")
+	require.NoError(t, os.WriteFile(candidatePath, []byte(`{}`), 0o644))
+	*flagOptimizationCandidateSpec = candidatePath
 	*flagOptimizationFeedbackScales = " e1, e2 "
 	*flagOptimizationValidationScales = "e3,m1"
 	*flagOptimizationHoldoutScales = "m2,h1"
+	*flagOptimizationCriticalScales = "h1"
 	*flagOptimizationRepeats = 2
 	*flagOptimizationMaxIterations = 3
 	*flagOptimizationReflectionBatch = 2
 	*flagOptimizationMaxMetricCalls = 40
 	*flagOptimizationRandomSeed = 17
+	*flagOptimizationEvaluationTemperature = 0.25
 	*flagOptimizationTimeLimitSeconds = 9
 	*flagOptimizationTokenBudget = 2000
 
 	cfg, err := buildOptimizeConfig()
 	require.NoError(t, err)
 	require.Equal(t, []string{"e1", "e2"}, cfg.FeedbackScales)
+	require.Equal(t, []string{"h1"}, cfg.CriticalScales)
 	require.Equal(t, 2, cfg.Repeats)
 	require.Equal(t, int64(17), cfg.RandomSeed)
+	require.Equal(t, 0.25, cfg.EvaluationTemperature)
 	require.Equal(t, 9*time.Second, cfg.TimeLimit)
 	require.Equal(t, 2000, cfg.TokenBudget)
+	require.Equal(t, candidatePath, cfg.CandidateSpecPath)
 
 	*flagOptimizationHoldoutScales = "e2"
 	_, err = buildOptimizeConfig()
 	require.ErrorContains(t, err, "appears in both")
+
+	*flagOptimizationHoldoutScales = "m2,h1"
+	*flagOptimizationCriticalScales = "e3"
+	_, err = buildOptimizeConfig()
+	require.ErrorContains(t, err, "not in the holdout")
+	*flagOptimizationCriticalScales = ""
+
+	*flagOptimizationHoldoutScales = ""
+	_, err = buildOptimizeConfig()
+	require.ErrorContains(t, err, "requires holdout scales")
+	*flagOptimizationCandidateSpec = ""
+	cfg, err = buildOptimizeConfig()
+	require.NoError(t, err)
+	require.Empty(t, cfg.HoldoutScales)
 }
 
 func TestBuildOptimizeConfigRejectsInvalidSeed(t *testing.T) {
@@ -64,31 +86,44 @@ func TestBuildOptimizeConfigRejectsInvalidSeed(t *testing.T) {
 	*flagOptimizationSeedSpec = t.TempDir()
 	_, err = buildOptimizeConfig()
 	require.ErrorContains(t, err, "invalid optimization seed spec")
+
+	seedPath := filepath.Join(t.TempDir(), "seed.json")
+	require.NoError(t, os.WriteFile(seedPath, []byte(`{}`), 0o644))
+	*flagOptimizationSeedSpec = seedPath
+	*flagOptimizationCandidateSpec = t.TempDir()
+	_, err = buildOptimizeConfig()
+	require.ErrorContains(t, err, "invalid optimization candidate spec")
 }
 
 func setOptimizationFlagsForTest(t *testing.T) {
 	t.Helper()
 	seedSpec := *flagOptimizationSeedSpec
+	candidateSpec := *flagOptimizationCandidateSpec
 	feedback := *flagOptimizationFeedbackScales
 	validation := *flagOptimizationValidationScales
 	holdout := *flagOptimizationHoldoutScales
+	critical := *flagOptimizationCriticalScales
 	repeats := *flagOptimizationRepeats
 	iterations := *flagOptimizationMaxIterations
 	batch := *flagOptimizationReflectionBatch
 	metricCalls := *flagOptimizationMaxMetricCalls
 	randomSeed := *flagOptimizationRandomSeed
+	evaluationTemperature := *flagOptimizationEvaluationTemperature
 	timeLimit := *flagOptimizationTimeLimitSeconds
 	tokenBudget := *flagOptimizationTokenBudget
 	t.Cleanup(func() {
 		*flagOptimizationSeedSpec = seedSpec
+		*flagOptimizationCandidateSpec = candidateSpec
 		*flagOptimizationFeedbackScales = feedback
 		*flagOptimizationValidationScales = validation
 		*flagOptimizationHoldoutScales = holdout
+		*flagOptimizationCriticalScales = critical
 		*flagOptimizationRepeats = repeats
 		*flagOptimizationMaxIterations = iterations
 		*flagOptimizationReflectionBatch = batch
 		*flagOptimizationMaxMetricCalls = metricCalls
 		*flagOptimizationRandomSeed = randomSeed
+		*flagOptimizationEvaluationTemperature = evaluationTemperature
 		*flagOptimizationTimeLimitSeconds = timeLimit
 		*flagOptimizationTokenBudget = tokenBudget
 	})
@@ -99,7 +134,7 @@ func TestSkillCraftBatchRunner(t *testing.T) {
 	runner := newSkillCraftBatchRunner(&benchmarkConfig{OutputDir: t.TempDir()}, []*taskDefinition{task})
 	runner.execute = func(
 		ctx context.Context,
-		_ *benchmarkConfig,
+		cfg *benchmarkConfig,
 		gotTask *taskDefinition,
 		mode runMode,
 		_ string,
@@ -108,6 +143,14 @@ func TestSkillCraftBatchRunner(t *testing.T) {
 		_, _, _ string,
 	) (*runStats, error) {
 		require.NoError(t, ctx.Err())
+		require.NotNil(t, cfg.EvaluationSeed)
+		require.Equal(
+			t,
+			deriveEvaluationSeed(7, "feedback/weather/e1/r1"),
+			*cfg.EvaluationSeed,
+		)
+		require.NotNil(t, cfg.EvaluationTemperature)
+		require.Zero(t, *cfg.EvaluationTemperature)
 		require.Same(t, task, gotTask)
 		require.Equal(t, modeOptimize, mode)
 		return &runStats{
@@ -148,6 +191,13 @@ func TestSkillCraftBatchRunner(t *testing.T) {
 		Metadata: map[string]string{"task_id": task.ID},
 	}}, 7)
 	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestDeriveEvaluationSeedIsStableAndCaseSpecific(t *testing.T) {
+	first := deriveEvaluationSeed(7, "feedback/weather/e1/r1")
+	require.Equal(t, first, deriveEvaluationSeed(7, "feedback/weather/e1/r1"))
+	require.NotEqual(t, first, deriveEvaluationSeed(7, "feedback/weather/e1/r2"))
+	require.NotEqual(t, first, deriveEvaluationSeed(8, "feedback/weather/e1/r1"))
 }
 
 func TestSkillCraftBatchRunnerFailurePaths(t *testing.T) {
@@ -261,6 +311,8 @@ func TestArtifactFeedbackNamesMissingRecipeFields(t *testing.T) {
 	require.Contains(t, feedback, "category_dishes is missing from 1/2 recipes")
 	require.Contains(t, feedback, "cuisine_dishes is missing from 2/2 recipes")
 	require.Contains(t, feedback, "ingredient_dishes is missing from 2/2 recipes")
+	require.Contains(t, feedback, "exact keys on each recipe object")
+	require.Contains(t, feedback, "nested or renamed equivalents")
 	require.True(t, hasPartialScore(official, "completeness"))
 	require.False(t, hasPartialScore(nil, "completeness"))
 	require.Equal(t,
@@ -293,6 +345,61 @@ func TestArtifactFeedbackNamesMissingRecipeFields(t *testing.T) {
 	require.Empty(t, artifactFeedback(nil, workspace, official))
 }
 
+func TestToolContractFeedback(t *testing.T) {
+	task := &taskDefinition{ToolsUsed: []string{
+		"meal_details", "meal_by_area", "meal_by_ingredient", "claim_done",
+	}}
+	stats := &runStats{ToolCalls: []string{
+		"skill_load",
+		"mcp_local-meal_search",
+		"mcp_local-meal_search",
+		"mcp_local-meal_details",
+		"mcp_local-meal_by_ingredient",
+		"mcp_local-write_final_json",
+		"mcp_local-claim_done",
+	}}
+	feedback := toolContractFeedback(task, stats)
+	require.Contains(t, feedback, "missing required domain tools: meal_by_area")
+	require.Contains(t, feedback, "task did not require: meal_search (2 calls)")
+	require.Contains(t, feedback, "specific to the current case")
+	require.Contains(t, feedback, "instead of banning endpoint names")
+
+	stats.ToolCalls = []string{
+		"mcp_local-meal_details",
+		"mcp_local-meal_by_area",
+		"mcp_local-meal_by_ingredient",
+		"mcp_local-write_final_json",
+	}
+	require.Empty(t, toolContractFeedback(task, stats))
+	require.Empty(t, toolContractFeedback(nil, stats))
+	require.Empty(t, toolContractFeedback(task, nil))
+}
+
+func TestAdditionalFeedbackCombinesPublicSignals(t *testing.T) {
+	workspace := t.TempDir()
+	require.NoError(t, os.WriteFile(
+		filepath.Join(workspace, "recipe_cookbook.json"),
+		[]byte(`{"recipes":[{"name":"one"}]}`),
+		0o644,
+	))
+	task := &taskDefinition{
+		BaseTask:  "recipe-cookbook-builder",
+		TaskDoc:   "Save results to `recipe_cookbook.json`:",
+		ToolsUsed: []string{"meal_details", "meal_by_area"},
+	}
+	official := &officialEval{Items: []scoreItem{{
+		Name: "completeness", Score: 15, MaxScore: 20, Status: "partial",
+	}}}
+	feedback := additionalFeedback(
+		task,
+		&runStats{ToolCalls: []string{"mcp_local-meal_search"}},
+		workspace,
+		official,
+	)
+	require.Contains(t, feedback, "Task tool contract")
+	require.Contains(t, feedback, "Artifact completeness")
+}
+
 func TestOptimizationOutputs(t *testing.T) {
 	spec := validOptimizationSpec()
 	result := &skilloptimization.Result{
@@ -301,6 +408,7 @@ func TestOptimizationOutputs(t *testing.T) {
 		ValidationScales: []string{"e2"},
 		HoldoutScales:    []string{"e3"},
 		Repeats:          1,
+		RandomSeed:       17,
 		Search: &framework.Result{
 			Spec:                spec,
 			CandidateCount:      2,
@@ -308,14 +416,16 @@ func TestOptimizationOutputs(t *testing.T) {
 			StopReason:          "max_iterations",
 			PromotionEligible:   true,
 			PromotionReason:     "holdout requirements satisfied",
-			BaselineValidation:  framework.Summary{Score: 0.8},
-			CandidateValidation: framework.Summary{Score: 0.9},
+			BaselineValidation:  framework.Summary{Score: 0.8, Cases: 1},
+			CandidateValidation: framework.Summary{Score: 0.9, Cases: 1},
 			BaselineHoldout: framework.Summary{
 				Score:      0.7,
+				Cases:      1,
 				Objectives: map[string]float64{"official_quality": 0.8},
 			},
 			CandidateHoldout: framework.Summary{
 				Score:      0.9,
+				Cases:      1,
 				Objectives: map[string]float64{"official_quality": 1},
 			},
 		},
