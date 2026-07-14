@@ -195,6 +195,9 @@ usage, timings, evidence recall, and build provenance for the benchmark and
 memory modules. This separates extraction, persistence, retrieval, and answer
 failures.
 
+See the [LongMemEval evaluation report](results/LONGMEMEVAL_REPORT.md) for the
+current pgvector and self-hosted mem0 comparison.
+
 ```bash
 export PGVECTOR_DSN="postgres://user:password@localhost:5432/vectordb?sslmode=disable"
 export MEM0_HOST="http://localhost:8888"

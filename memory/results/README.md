@@ -8,6 +8,7 @@ This directory stores memory benchmark evaluation results.
 |------|-------------|
 | [REPORT.md](REPORT.md) | Full evaluation report (English) |
 | [REPORT.zh_CN.md](REPORT.zh_CN.md) | Full evaluation report (Chinese) |
+| [LONGMEMEVAL_REPORT.md](LONGMEMEVAL_REPORT.md) | LongMemEval pgvector vs self-hosted mem0 report |
 
 ## LoCoMo Benchmark Evaluation Summary
 
