@@ -19,24 +19,29 @@ import (
 )
 
 type lmeAnalysisRow struct {
-	QuestionID   string
-	QuestionType string
-	Backend      string
-	Stage        string
-	ExactMatch   bool
-	F1           float64
-	BLEU         float64
-	Evidence     string
-	Error        string
-	Answer       string
-	Reference    string
-	Question     string
-	Diagnosis    string
+	QuestionID       string
+	QuestionType     string
+	Backend          string
+	Stage            string
+	ExactMatch       bool
+	JudgeAvailable   bool
+	JudgeCorrect     bool
+	EvaluatedCorrect bool
+	F1               float64
+	BLEU             float64
+	Evidence         string
+	Error            string
+	Answer           string
+	Reference        string
+	Question         string
+	Diagnosis        string
 }
 
 type lmeBackendAnalysis struct {
 	Cases          int
 	ExactMatches   int
+	JudgedCases    int
+	JudgeCorrect   int
 	TotalF1        float64
 	TotalBLEU      float64
 	StageCounts    map[string]int
@@ -45,36 +50,42 @@ type lmeBackendAnalysis struct {
 }
 
 type lmeCompareRow struct {
-	QuestionID      string
-	QuestionType    string
-	Backend         string
-	BaselineStage   string
-	CandidateStage  string
-	BaselineEM      bool
-	CandidateEM     bool
-	BaselineF1      float64
-	CandidateF1     float64
-	DeltaF1         float64
-	BaselineBLEU    float64
-	CandidateBLEU   float64
-	DeltaBLEU       float64
-	BaselineError   string
-	CandidateError  string
-	Diagnosis       string
-	BaselineAnswer  string
-	CandidateAnswer string
-	Reference       string
-	Question        string
+	QuestionID              string
+	QuestionType            string
+	Backend                 string
+	BaselineStage           string
+	CandidateStage          string
+	BaselineCorrect         bool
+	CandidateCorrect        bool
+	BaselineJudgeAvailable  bool
+	CandidateJudgeAvailable bool
+	BaselineEM              bool
+	CandidateEM             bool
+	BaselineF1              float64
+	CandidateF1             float64
+	DeltaF1                 float64
+	BaselineBLEU            float64
+	CandidateBLEU           float64
+	DeltaBLEU               float64
+	BaselineError           string
+	CandidateError          string
+	Diagnosis               string
+	BaselineAnswer          string
+	CandidateAnswer         string
+	Reference               string
+	Question                string
 }
 
 type lmeCompareBackendSummary struct {
-	Cases        int
-	BaselineEM   int
-	CandidateEM  int
-	TotalDeltaF1 float64
-	Improved     int
-	Regressed    int
-	Unchanged    int
+	Cases            int
+	BaselineCorrect  int
+	CandidateCorrect int
+	BaselineEM       int
+	CandidateEM      int
+	TotalDeltaF1     float64
+	Improved         int
+	Regressed        int
+	Unchanged        int
 }
 
 func analyzeLongMemEvalResults(path, outputDir string) error {
@@ -184,20 +195,28 @@ func longMemEvalAnalysisRows(result *runResult) []lmeAnalysisRow {
 			if br == nil {
 				continue
 			}
+			judgeCorrect, judgeAvailable := longMemEvalJudgeCorrect(br)
+			evaluatedCorrect := br.ExactMatch
+			if judgeAvailable {
+				evaluatedCorrect = judgeCorrect
+			}
 			rows = append(rows, lmeAnalysisRow{
-				QuestionID:   cr.QuestionID,
-				QuestionType: cr.QuestionType,
-				Backend:      backend,
-				Stage:        normalizedFailureStage(br),
-				ExactMatch:   br.ExactMatch,
-				F1:           br.F1,
-				BLEU:         br.BLEU,
-				Evidence:     evidenceStatus(br.Evidence),
-				Error:        br.Error,
-				Answer:       br.Answer,
-				Reference:    cr.Answer,
-				Question:     cr.Question,
-				Diagnosis:    answerGapDiagnosis(cr.QuestionType, br.Answer, cr.Answer),
+				QuestionID:       cr.QuestionID,
+				QuestionType:     cr.QuestionType,
+				Backend:          backend,
+				Stage:            normalizedFailureStage(br),
+				ExactMatch:       br.ExactMatch,
+				JudgeAvailable:   judgeAvailable,
+				JudgeCorrect:     judgeCorrect,
+				EvaluatedCorrect: evaluatedCorrect,
+				F1:               br.F1,
+				BLEU:             br.BLEU,
+				Evidence:         evidenceStatus(br.Evidence),
+				Error:            br.Error,
+				Answer:           br.Answer,
+				Reference:        cr.Answer,
+				Question:         cr.Question,
+				Diagnosis:        answerGapDiagnosis(cr.QuestionType, br.Answer, cr.Answer),
 			})
 		}
 	}
@@ -228,6 +247,8 @@ func compareLongMemEvalRows(baselineRows, candidateRows []lmeAnalysisRow) []lmeC
 			row.QuestionType = cand.QuestionType
 			row.Backend = cand.Backend
 			row.CandidateStage = cand.Stage
+			row.CandidateCorrect = cand.EvaluatedCorrect
+			row.CandidateJudgeAvailable = cand.JudgeAvailable
 			row.CandidateEM = cand.ExactMatch
 			row.CandidateF1 = cand.F1
 			row.CandidateBLEU = cand.BLEU
@@ -246,6 +267,8 @@ func compareLongMemEvalRows(baselineRows, candidateRows []lmeAnalysisRow) []lmeC
 				row.Question = base.Question
 			}
 			row.BaselineStage = base.Stage
+			row.BaselineCorrect = base.EvaluatedCorrect
+			row.BaselineJudgeAvailable = base.JudgeAvailable
 			row.BaselineEM = base.ExactMatch
 			row.BaselineF1 = base.F1
 			row.BaselineBLEU = base.BLEU
@@ -285,6 +308,12 @@ func summarizeLongMemEvalRows(rows []lmeAnalysisRow) map[string]*lmeBackendAnaly
 		if row.ExactMatch {
 			a.ExactMatches++
 		}
+		if row.JudgeAvailable {
+			a.JudgedCases++
+			if row.JudgeCorrect {
+				a.JudgeCorrect++
+			}
+		}
 		a.TotalF1 += row.F1
 		a.TotalBLEU += row.BLEU
 		a.StageCounts[row.Stage]++
@@ -308,6 +337,13 @@ func normalizedFailureStage(br *backendResult) string {
 		return "unknown"
 	}
 	return stage
+}
+
+func longMemEvalJudgeCorrect(br *backendResult) (bool, bool) {
+	if br == nil || br.Judge == nil || strings.TrimSpace(br.Judge.Error) != "" {
+		return false, false
+	}
+	return br.Judge.Correct, true
 }
 
 func evidenceStatus(ev *evidenceMetrics) string {
@@ -334,17 +370,20 @@ func evidenceStatus(ev *evidenceMetrics) string {
 
 func formatLongMemEvalBadCases(rows []lmeAnalysisRow) string {
 	var b strings.Builder
-	b.WriteString("question_id\tquestion_type\tbackend\tstage\texact_match\tf1\tbleu\tevidence\tdiagnosis\terror\tanswer\treference\tquestion\n")
+	b.WriteString("question_id\tquestion_type\tbackend\tstage\tevaluated_correct\texact_match\tjudge_available\tjudge_correct\tf1\tbleu\tevidence\tdiagnosis\terror\tanswer\treference\tquestion\n")
 	for _, row := range rows {
-		if row.ExactMatch && row.Stage == "ok" {
+		if row.EvaluatedCorrect {
 			continue
 		}
-		fmt.Fprintf(&b, "%s\t%s\t%s\t%s\t%v\t%.4f\t%.4f\t%s\t%s\t%s\t%s\t%s\t%s\n",
+		fmt.Fprintf(&b, "%s\t%s\t%s\t%s\t%v\t%v\t%v\t%v\t%.4f\t%.4f\t%s\t%s\t%s\t%s\t%s\t%s\n",
 			tsvCell(row.QuestionID),
 			tsvCell(row.QuestionType),
 			tsvCell(row.Backend),
 			tsvCell(row.Stage),
+			row.EvaluatedCorrect,
 			row.ExactMatch,
+			row.JudgeAvailable,
+			row.JudgeCorrect,
 			row.F1,
 			row.BLEU,
 			tsvCell(row.Evidence),
@@ -360,14 +399,18 @@ func formatLongMemEvalBadCases(rows []lmeAnalysisRow) string {
 
 func formatLongMemEvalComparisonTSV(rows []lmeCompareRow) string {
 	var b strings.Builder
-	b.WriteString("question_id\tquestion_type\tbackend\tbaseline_stage\tcandidate_stage\tbaseline_em\tcandidate_em\tbaseline_f1\tcandidate_f1\tdelta_f1\tbaseline_bleu\tcandidate_bleu\tdelta_bleu\tdiagnosis\tbaseline_answer\tcandidate_answer\treference\tquestion\n")
+	b.WriteString("question_id\tquestion_type\tbackend\tbaseline_stage\tcandidate_stage\tbaseline_correct\tcandidate_correct\tbaseline_judge_available\tcandidate_judge_available\tbaseline_em\tcandidate_em\tbaseline_f1\tcandidate_f1\tdelta_f1\tbaseline_bleu\tcandidate_bleu\tdelta_bleu\tdiagnosis\tbaseline_answer\tcandidate_answer\treference\tquestion\n")
 	for _, row := range rows {
-		fmt.Fprintf(&b, "%s\t%s\t%s\t%s\t%s\t%v\t%v\t%.4f\t%.4f\t%+.4f\t%.4f\t%.4f\t%+.4f\t%s\t%s\t%s\t%s\t%s\n",
+		fmt.Fprintf(&b, "%s\t%s\t%s\t%s\t%s\t%v\t%v\t%v\t%v\t%v\t%v\t%.4f\t%.4f\t%+.4f\t%.4f\t%.4f\t%+.4f\t%s\t%s\t%s\t%s\t%s\n",
 			tsvCell(row.QuestionID),
 			tsvCell(row.QuestionType),
 			tsvCell(row.Backend),
 			tsvCell(row.BaselineStage),
 			tsvCell(row.CandidateStage),
+			row.BaselineCorrect,
+			row.CandidateCorrect,
+			row.BaselineJudgeAvailable,
+			row.CandidateJudgeAvailable,
 			row.BaselineEM,
 			row.CandidateEM,
 			row.BaselineF1,
@@ -392,19 +435,20 @@ func formatLongMemEvalComparisonMarkdown(baselinePath, candidatePath string, row
 	b.WriteString("# LongMemEval Comparison\n\n")
 	fmt.Fprintf(&b, "- Baseline: `%s`\n", baselinePath)
 	fmt.Fprintf(&b, "- Candidate: `%s`\n", candidatePath)
-	b.WriteString("- Comparison uses saved `results.json`; no model calls are made.\n\n")
+	b.WriteString("- Correctness uses the semantic judge when available and falls back to exact match; no model calls are made.\n\n")
 
 	b.WriteString("## Backend Delta Summary\n\n")
-	b.WriteString("| Backend | Cases | EM Baseline | EM Candidate | Avg Delta F1 | Improved | Regressed | Unchanged |\n")
-	b.WriteString("|---|---:|---:|---:|---:|---:|---:|---:|\n")
+	b.WriteString("| Backend | Cases | Correct Baseline | Correct Candidate | EM Baseline | EM Candidate | Avg Delta F1 | Improved | Regressed | Unchanged |\n")
+	b.WriteString("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n")
 	for _, backend := range sortedCompareBackends(summary) {
 		s := summary[backend]
 		avgDelta := 0.0
 		if s.Cases > 0 {
 			avgDelta = s.TotalDeltaF1 / float64(s.Cases)
 		}
-		fmt.Fprintf(&b, "| %s | %d | %d | %d | %+.4f | %d | %d | %d |\n",
-			mdCell(backend), s.Cases, s.BaselineEM, s.CandidateEM,
+		fmt.Fprintf(&b, "| %s | %d | %d | %d | %d | %d | %+.4f | %d | %d | %d |\n",
+			mdCell(backend), s.Cases, s.BaselineCorrect, s.CandidateCorrect,
+			s.BaselineEM, s.CandidateEM,
 			avgDelta, s.Improved, s.Regressed, s.Unchanged)
 	}
 
@@ -424,6 +468,12 @@ func summarizeLongMemEvalCompareRows(rows []lmeCompareRow) map[string]*lmeCompar
 			out[row.Backend] = s
 		}
 		s.Cases++
+		if row.BaselineCorrect {
+			s.BaselineCorrect++
+		}
+		if row.CandidateCorrect {
+			s.CandidateCorrect++
+		}
 		if row.BaselineEM {
 			s.BaselineEM++
 		}
@@ -432,9 +482,9 @@ func summarizeLongMemEvalCompareRows(rows []lmeCompareRow) map[string]*lmeCompar
 		}
 		s.TotalDeltaF1 += row.DeltaF1
 		switch {
-		case row.DeltaF1 > 0:
+		case !row.BaselineCorrect && row.CandidateCorrect:
 			s.Improved++
-		case row.DeltaF1 < 0:
+		case row.BaselineCorrect && !row.CandidateCorrect:
 			s.Regressed++
 		default:
 			s.Unchanged++
@@ -455,10 +505,11 @@ func sortedCompareBackends(summary map[string]*lmeCompareBackendSummary) []strin
 func topCompareRows(rows []lmeCompareRow, improvements bool, limit int) []lmeCompareRow {
 	filtered := make([]lmeCompareRow, 0, len(rows))
 	for _, row := range rows {
-		if improvements && row.DeltaF1 <= 0 {
-			continue
+		changedAsRequested := !row.BaselineCorrect && row.CandidateCorrect
+		if !improvements {
+			changedAsRequested = row.BaselineCorrect && !row.CandidateCorrect
 		}
-		if !improvements && row.DeltaF1 >= 0 {
+		if !changedAsRequested {
 			continue
 		}
 		filtered = append(filtered, row)
@@ -482,13 +533,15 @@ func topCompareRows(rows []lmeCompareRow, improvements bool, limit int) []lmeCom
 }
 
 func writeCompareRowsTable(b *strings.Builder, rows []lmeCompareRow) {
-	b.WriteString("| Question | Type | Backend | Delta F1 | Baseline | Candidate | Diagnosis |\n")
-	b.WriteString("|---|---|---|---:|---|---|---|\n")
+	b.WriteString("| Question | Type | Backend | Correctness | Delta F1 | Baseline | Candidate | Diagnosis |\n")
+	b.WriteString("|---|---|---|---|---:|---|---|---|\n")
 	for _, row := range rows {
-		fmt.Fprintf(b, "| %s | %s | %s | %+.4f | %s | %s | %s |\n",
+		fmt.Fprintf(b, "| %s | %s | %s | %v -> %v | %+.4f | %s | %s | %s |\n",
 			mdCell(row.QuestionID),
 			mdCell(row.QuestionType),
 			mdCell(row.Backend),
+			row.BaselineCorrect,
+			row.CandidateCorrect,
 			row.DeltaF1,
 			mdCell(compareAnswerCell(row.BaselineStage, row.BaselineF1, row.BaselineAnswer)),
 			mdCell(compareAnswerCell(row.CandidateStage, row.CandidateF1, row.CandidateAnswer)),
@@ -514,8 +567,8 @@ func formatLongMemEvalAnalysisMarkdown(
 	b.WriteString("- Failure stages are computed from saved `results.json`; no model calls are made.\n\n")
 
 	b.WriteString("## Backend Summary\n\n")
-	b.WriteString("| Backend | Cases | EM | Avg F1 | Avg BLEU |\n")
-	b.WriteString("|---|---:|---:|---:|---:|\n")
+	b.WriteString("| Backend | Cases | EM | Judge | Avg F1 | Avg BLEU | LLM Calls | LLM Tokens | Cached | Cache Hit | Embedding Calls | Embedding Tokens | Provider Usage |\n")
+	b.WriteString("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n")
 	for _, backend := range sortedAnalysisBackends(analysis) {
 		a := analysis[backend]
 		avgF1, avgBLEU := 0.0, 0.0
@@ -523,8 +576,25 @@ func formatLongMemEvalAnalysisMarkdown(
 			avgF1 = a.TotalF1 / float64(a.Cases)
 			avgBLEU = a.TotalBLEU / float64(a.Cases)
 		}
-		fmt.Fprintf(&b, "| %s | %d | %d | %.4f | %.4f |\n",
-			backend, a.Cases, a.ExactMatches, avgF1, avgBLEU)
+		judge := "-"
+		if a.JudgedCases > 0 {
+			judge = fmt.Sprintf("%d/%d", a.JudgeCorrect, a.JudgedCases)
+		}
+		var usage backendSummary
+		if result != nil && result.Summary != nil &&
+			result.Summary.BackendSummaries[backend] != nil {
+			usage = *result.Summary.BackendSummaries[backend]
+		}
+		fmt.Fprintf(&b, "| %s | %d | %d | %s | %.4f | %.4f | %d | %d | %d | %.4f | %d | %d | %d/%d |\n",
+			backend, a.Cases, a.ExactMatches, judge, avgF1, avgBLEU,
+			usage.TokenUsage.LLMCalls,
+			usage.TokenUsage.TotalTokens,
+			usage.TokenUsage.CachedTokens,
+			usage.TokenUsage.CacheHitRate,
+			usage.EmbeddingUsage.Calls,
+			usage.EmbeddingUsage.TotalTokens,
+			usage.ProviderUsageCases,
+			a.Cases)
 	}
 
 	b.WriteString("\n## Failure Stages\n\n")
@@ -636,7 +706,7 @@ func longMemEvalBackendDisagreements(result *runResult) []lmeBackendDisagreement
 		}
 		mem0 := cr.BackendResults["mem0"]
 		pgv := cr.BackendResults["pgvector"]
-		if mem0 == nil || pgv == nil || mem0.ExactMatch == pgv.ExactMatch {
+		if mem0 == nil || pgv == nil || evaluatedLongMemEvalCorrect(mem0) == evaluatedLongMemEvalCorrect(pgv) {
 			continue
 		}
 		out = append(out, lmeBackendDisagreement{
@@ -657,13 +727,23 @@ func disagreementCell(br *backendResult) string {
 	if br == nil {
 		return "missing"
 	}
+	if correct, ok := longMemEvalJudgeCorrect(br); ok {
+		return fmt.Sprintf("judge=%v EM=%v stage=%s answer=%s", correct, br.ExactMatch, normalizedFailureStage(br), truncate(br.Answer, 80))
+	}
 	return fmt.Sprintf("EM=%v stage=%s answer=%s", br.ExactMatch, normalizedFailureStage(br), truncate(br.Answer, 80))
+}
+
+func evaluatedLongMemEvalCorrect(br *backendResult) bool {
+	if correct, ok := longMemEvalJudgeCorrect(br); ok {
+		return correct
+	}
+	return br != nil && br.ExactMatch
 }
 
 func lowestF1Rows(rows []lmeAnalysisRow, limit int) []lmeAnalysisRow {
 	filtered := make([]lmeAnalysisRow, 0, len(rows))
 	for _, row := range rows {
-		if row.ExactMatch && row.Stage == "ok" {
+		if row.EvaluatedCorrect {
 			continue
 		}
 		filtered = append(filtered, row)

@@ -187,6 +187,11 @@ var (
 		false,
 		"Use hosted mem0 API semantics instead of self-hosted OSS",
 	)
+	flagMem0LLMTemperature = flag.Float64(
+		"mem0-llm-temperature",
+		-1,
+		"Configure self-hosted mem0 LLM temperature before a run (-1=leave unchanged)",
+	)
 )
 
 const (

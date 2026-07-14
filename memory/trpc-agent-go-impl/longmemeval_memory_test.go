@@ -11,18 +11,35 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	embeddingopenai "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
+
+type lmeExtractorStub struct {
+	extractor.MemoryExtractor
+	ops []*extractor.Operation
+}
+
+func (s *lmeExtractorStub) Extract(
+	context.Context,
+	[]model.Message,
+	[]*memory.Entry,
+) ([]*extractor.Operation, error) {
+	return s.ops, nil
+}
 
 func TestLongMemEvalDateHelpers(t *testing.T) {
 	t.Parallel()
@@ -58,16 +75,92 @@ func TestWithObservationDate(t *testing.T) {
 	}
 }
 
+func TestLatestSessionMessageTimestamp(t *testing.T) {
+	t.Parallel()
+
+	sess := session.NewSession(lmeAppName, "user", "session")
+	appendMessages(sess, []model.Message{
+		{Role: model.RoleUser, Content: "hello"},
+		{Role: model.RoleAssistant, Content: "hi"},
+	}, "source", 0)
+
+	want := sess.GetEvents()[1].Timestamp.UTC()
+	got, ok := latestSessionMessageTimestamp(sess)
+	if !ok {
+		t.Fatal("expected latest message timestamp")
+	}
+	if !got.Equal(want) {
+		t.Fatalf("latest timestamp: got %s want %s", got, want)
+	}
+}
+
+func TestWaitForAutoMemory(t *testing.T) {
+	t.Parallel()
+
+	sess := session.NewSession(lmeAppName, "user", "session")
+	want := time.Now().UTC()
+	go func() {
+		time.Sleep(5 * time.Millisecond)
+		sess.SetState(memory.SessionStateKeyAutoMemoryLastExtractAt,
+			[]byte(want.Format(time.RFC3339Nano)))
+	}()
+
+	if err := waitForAutoMemory(context.Background(), sess, want, time.Second); err != nil {
+		t.Fatalf("wait for auto memory: %v", err)
+	}
+}
+
+func TestWaitForAutoMemoryTimeout(t *testing.T) {
+	t.Parallel()
+
+	sess := session.NewSession(lmeAppName, "user", "session")
+	err := waitForAutoMemory(context.Background(), sess, time.Now().UTC(), time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), "timeout") {
+		t.Fatalf("expected timeout error, got %v", err)
+	}
+}
+
+func TestLMETracingExtractorRecordsOperations(t *testing.T) {
+	t.Parallel()
+
+	eventTime := time.Date(2023, time.May, 22, 0, 0, 0, 0, time.UTC)
+	stub := &lmeExtractorStub{ops: []*extractor.Operation{{
+		Type:       extractor.OperationUpdate,
+		MemoryID:   "memory-1",
+		Memory:     "Prefers Memrise for mnemonic-based study",
+		Topics:     []string{"Memrise", "mnemonics"},
+		MemoryKind: memory.KindFact,
+		EventTime:  &eventTime,
+	}}}
+	tracing := &lmeTracingExtractor{MemoryExtractor: stub}
+	existing := []*memory.Entry{{ID: "memory-1"}}
+
+	if _, err := tracing.Extract(context.Background(), nil, existing); err != nil {
+		t.Fatalf("extract: %v", err)
+	}
+	trace := tracing.Snapshot()
+	if trace == nil || trace.ExistingMemoryCount != 1 || len(trace.Operations) != 1 {
+		t.Fatalf("unexpected extraction trace: %#v", trace)
+	}
+	op := trace.Operations[0]
+	if op.Type != extractor.OperationUpdate || op.MemoryID != "memory-1" {
+		t.Fatalf("unexpected operation: %#v", op)
+	}
+	if op.EventTime != "2023-05-22T00:00:00Z" {
+		t.Fatalf("unexpected event time: %q", op.EventTime)
+	}
+}
+
 func TestMem0OSSIngestRetriesTransientStatus(t *testing.T) {
 	t.Parallel()
 
-	attempts := 0
+	var attempts atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		attempts++
+		attempt := attempts.Add(1)
 		if r.URL.Path != "/memories" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
-		if attempts == 1 {
+		if attempt == 1 {
 			http.Error(w, "busy", http.StatusServiceUnavailable)
 			return
 		}
@@ -89,8 +182,173 @@ func TestMem0OSSIngestRetriesTransientStatus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ingest pair: %v", err)
 	}
-	if attempts != 2 {
-		t.Fatalf("unexpected attempts: got %d want 2", attempts)
+	if got := attempts.Load(); got != 2 {
+		t.Fatalf("unexpected attempts: got %d want 2", got)
+	}
+}
+
+func TestMem0OSSIngestUsesRequestTimeout(t *testing.T) {
+	oldTimeout := *flagLMEModelCallTimeout
+	*flagLMEModelCallTimeout = 20 * time.Millisecond
+	defer func() { *flagLMEModelCallTimeout = oldTimeout }()
+
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		select {
+		case <-r.Context().Done():
+		case <-time.After(150 * time.Millisecond):
+		}
+	}))
+	defer server.Close()
+
+	sess := session.NewSession(lmeAppName, "user", "session")
+	appendMessages(sess, []model.Message{
+		{Role: model.RoleUser, Content: "hello"},
+		{Role: model.RoleAssistant, Content: "hi"},
+	}, "source", 0)
+	backend := &mem0Backend{
+		host:       server.URL,
+		selfHosted: true,
+		httpClient: server.Client(),
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	err := backend.ingestPairOSS(ctx, sess, ingestMeta{SessionID: "source"})
+	if err == nil {
+		t.Fatal("expected timeout error")
+	}
+	if attempts.Load() == 0 {
+		t.Fatal("expected at least one request attempt")
+	}
+	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
+		t.Fatalf("request timeout took too long: %v", elapsed)
+	}
+}
+
+func TestMem0UsageTransportRecordsHeader(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set(lmeMem0UsageHeader, `{
+  "llm":{"prompt_tokens":120,"completion_tokens":8,"total_tokens":128,"cached_tokens":32,"llm_calls":2},
+  "embedding":{"prompt_tokens":16,"total_tokens":16,"calls":3}
+}`)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	tracker := &lmeProviderUsageTracker{}
+	client := &http.Client{Transport: &lmeMem0UsageTransport{
+		base:    http.DefaultTransport,
+		tracker: tracker,
+	}}
+	resp, err := client.Get(server.URL)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	resp.Body.Close()
+
+	usage := tracker.Snapshot()
+	if !usage.Reported || usage.LLM.TotalTokens != 128 || usage.LLM.CachedTokens != 32 {
+		t.Fatalf("unexpected LLM usage: %#v", usage)
+	}
+	if usage.Embedding.TotalTokens != 16 || usage.Embedding.Calls != 3 {
+		t.Fatalf("unexpected embedding usage: %#v", usage)
+	}
+}
+
+func TestLongMemEvalTrackingEmbedderRecordsUsage(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+  "object":"list",
+  "data":[{"object":"embedding","embedding":[0.1,0.2],"index":0}],
+  "model":"text-embedding-3-small",
+  "usage":{"prompt_tokens":7,"total_tokens":7}
+}`))
+	}))
+	defer server.Close()
+
+	base := embeddingopenai.New(
+		embeddingopenai.WithAPIKey("test"),
+		embeddingopenai.WithBaseURL(server.URL),
+		embeddingopenai.WithModel("text-embedding-3-small"),
+		embeddingopenai.WithDimensions(2),
+	)
+	tracker := newLongMemEvalTrackingEmbedder(base)
+	got, err := tracker.GetEmbedding(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("get embedding: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("embedding length = %d, want 2", len(got))
+	}
+	usage := tracker.Snapshot()
+	if usage.PromptTokens != 7 || usage.TotalTokens != 7 || usage.Calls != 1 {
+		t.Fatalf("unexpected embedding usage: %#v", usage)
+	}
+}
+
+func TestPrepareLongMemEvalMem0ConfiguresAndSanitizesRuntime(t *testing.T) {
+	oldHost := *flagMem0Host
+	oldCloud := *flagMem0Cloud
+	oldTemperature := *flagMem0LLMTemperature
+	defer func() {
+		*flagMem0Host = oldHost
+		*flagMem0Cloud = oldCloud
+		*flagMem0LLMTemperature = oldTemperature
+	}()
+
+	configured := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost:
+			configured = true
+			w.WriteHeader(http.StatusOK)
+		case http.MethodGet:
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{
+  "version":"v1.1",
+  "llm":{"provider":"openai","config":{"api_key":"secret","model":"glm52","temperature":0}},
+  "embedder":{"provider":"openai","config":{"api_key":"secret","model":"text-embedding-3-small"}},
+  "vector_store":{"provider":"pgvector","config":{"password":"secret","embedding_model_dims":1536}}
+}`))
+		default:
+			t.Fatalf("unexpected method: %s", r.Method)
+		}
+	}))
+	defer server.Close()
+
+	*flagMem0Host = server.URL
+	*flagMem0Cloud = false
+	*flagMem0LLMTemperature = -1
+	config, err := prepareLongMemEvalMem0(context.Background(), []string{"mem0"})
+	if err != nil || config != nil || configured {
+		t.Fatalf("disabled runtime configuration should be a no-op: config=%#v err=%v", config, err)
+	}
+
+	*flagMem0LLMTemperature = 0
+	config, err = prepareLongMemEvalMem0(context.Background(), []string{"pgvector", "mem0"})
+	if err != nil {
+		t.Fatalf("prepare mem0: %v", err)
+	}
+	if !configured {
+		t.Fatal("expected mem0 temperature configuration request")
+	}
+	if config == nil || config.LLMModel != "glm52" || config.EmbeddingDimensions != 1536 {
+		t.Fatalf("unexpected runtime configuration: %#v", config)
+	}
+	encoded, err := json.Marshal(config)
+	if err != nil {
+		t.Fatalf("marshal runtime configuration: %v", err)
+	}
+	if strings.Contains(string(encoded), "secret") {
+		t.Fatalf("runtime configuration leaked credentials: %s", encoded)
 	}
 }
 
@@ -169,8 +427,8 @@ func TestBuildLongMemEvalAnswerPromptPreferenceGuidance(t *testing.T) {
 	if !strings.Contains(prompt, "Question type: single-session-preference") {
 		t.Fatalf("missing question type: %s", prompt)
 	}
-	if !strings.Contains(prompt, "LongMemEval expects the user's preference profile") {
-		t.Fatalf("missing preference guidance: %s", prompt)
+	if !strings.Contains(prompt, "answer the user's question directly") {
+		t.Fatalf("missing direct-answer guidance: %s", prompt)
 	}
 	if !strings.Contains(prompt, "do not say\n\"I don't know\"") {
 		t.Fatalf("missing unknown-answer guard: %s", prompt)
@@ -178,17 +436,14 @@ func TestBuildLongMemEvalAnswerPromptPreferenceGuidance(t *testing.T) {
 	if !strings.Contains(prompt, "When any retrieved memory is relevant to the preference topic") {
 		t.Fatalf("missing relevant-memory guard: %s", prompt)
 	}
-	if !strings.Contains(prompt, "not a recommendation list") {
-		t.Fatalf("missing recommendation-list guard: %s", prompt)
+	if !strings.Contains(prompt, "Do not describe\nthe user in the third person") {
+		t.Fatalf("missing third-person guard: %s", prompt)
 	}
-	if !strings.Contains(prompt, "Start\nwith \"The user would prefer\"") {
-		t.Fatalf("missing preference start constraint: %s", prompt)
+	if !strings.Contains(prompt, "give actionable advice") {
+		t.Fatalf("missing actionable-advice guidance: %s", prompt)
 	}
-	if !strings.Contains(prompt, "compatibility, quality") {
-		t.Fatalf("missing concrete preference dimensions: %s", prompt)
-	}
-	if !strings.Contains(prompt, "The user would prefer") {
-		t.Fatalf("missing preference answer shape: %s", prompt)
+	if !strings.Contains(prompt, "do not invent missing personal context") {
+		t.Fatalf("missing unsupported-context guard: %s", prompt)
 	}
 	if !strings.Contains(prompt, "[kind=episode; event_time=2023-05-20; participants=Alice; location=Community Center]") {
 		t.Fatalf("missing memory metadata: %s", prompt)
@@ -204,7 +459,7 @@ func TestBuildLongMemEvalAnswerPromptNonPreference(t *testing.T) {
 	prompt := buildLongMemEvalAnswerPrompt(inst, nil)
 	normalizedPrompt := strings.Join(strings.Fields(prompt), " ")
 
-	if strings.Contains(prompt, "preference profile") {
+	if strings.Contains(prompt, "answer the user's question directly") {
 		t.Fatalf("unexpected preference guidance: %s", prompt)
 	}
 	if !strings.Contains(prompt, "(no memories retrieved)") {
@@ -243,6 +498,30 @@ func TestBuildLongMemEvalAnswerPromptNonPreference(t *testing.T) {
 	}
 	if !strings.Contains(normalizedPrompt, "not include markdown") {
 		t.Fatalf("missing markdown/explanation guard: %s", prompt)
+	}
+}
+
+func TestBuildLongMemEvalAnswerPromptKnowledgeUpdateTimeline(t *testing.T) {
+	inst := &lmeInstance{
+		QuestionID:   "q-update",
+		QuestionType: "knowledge-update",
+		Question:     "What was my previous goal before I updated it?",
+	}
+	prompt := buildLongMemEvalAnswerPrompt(inst, nil)
+	normalizedPrompt := strings.Join(strings.Fields(prompt), " ")
+
+	if !strings.Contains(normalizedPrompt, "asks for an earlier state or the latest state") {
+		t.Fatalf("missing knowledge-update state selection guidance: %s", prompt)
+	}
+	if !strings.Contains(normalizedPrompt, "previous") ||
+		!strings.Contains(normalizedPrompt, "before") ||
+		!strings.Contains(normalizedPrompt, "do not answer with the latest/current value") {
+		t.Fatalf("missing previous-state guidance: %s", prompt)
+	}
+	if !strings.Contains(normalizedPrompt, "current") ||
+		!strings.Contains(normalizedPrompt, "latest") ||
+		!strings.Contains(normalizedPrompt, "newest supported value") {
+		t.Fatalf("missing current-state guidance: %s", prompt)
 	}
 }
 
@@ -349,26 +628,77 @@ func TestBuildLongMemEvalJudgePromptUsesOfficialTaskRules(t *testing.T) {
 func TestParseLongMemEvalJudge(t *testing.T) {
 	t.Parallel()
 
-	if !parseLongMemEvalJudge("Yes.") {
-		t.Fatal("yes response should be correct")
+	for _, test := range []struct {
+		name string
+		raw  string
+		want bool
+	}{
+		{name: "yes", raw: "Analysis.\nVERDICT: yes", want: true},
+		{name: "no", raw: "Analysis.\nVERDICT: no.", want: false},
+		{name: "case insensitive", raw: "VERDICT: YES", want: true},
+		{name: "last explicit verdict", raw: "VERDICT: no\nCorrection.\nVERDICT: yes", want: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := parseLongMemEvalJudge(test.raw)
+			if err != nil {
+				t.Fatalf("parse verdict: %v", err)
+			}
+			if got != test.want {
+				t.Fatalf("verdict = %v, want %v", got, test.want)
+			}
+		})
 	}
-	if !parseLongMemEvalJudge("yesThe model response is correct.") {
-		t.Fatal("yes prefix should be correct")
+	for _, raw := range []string{
+		"Yes.",
+		"The answer is yes.",
+		"The response does not satisfy the rubric.",
+		"VERDICT: maybe",
+	} {
+		if _, err := parseLongMemEvalJudge(raw); err == nil {
+			t.Fatalf("malformed response should fail: %q", raw)
+		}
 	}
-	if !parseLongMemEvalJudge("The answer is yes.") {
-		t.Fatal("yes-only fallback should be correct")
+	for _, test := range []struct {
+		raw  string
+		want string
+	}{
+		{raw: `{"correct":true}`, want: "yes"},
+		{raw: `{"correct":false}`, want: "no"},
+	} {
+		got, err := parseLongMemEvalJudgeRepair(test.raw)
+		if err != nil || got != test.want {
+			t.Fatalf("repair verdict = %q, %v; want %q", got, err, test.want)
+		}
 	}
-	if parseLongMemEvalJudge("No.") {
-		t.Fatal("no response should not be correct")
+	if _, err := parseLongMemEvalJudgeRepair(`{"answer":"yes"}`); err == nil {
+		t.Fatal("verbose repair response should fail")
 	}
-	if parseLongMemEvalJudge("No, not yes.") {
-		t.Fatal("first-token no should not be correct")
+}
+
+func TestJudgeLongMemEvalAnswerRepairsMissingVerdict(t *testing.T) {
+	t.Parallel()
+
+	llm := &queuedJudgeModel{responses: []string{
+		"The answer matches the reference, but the final line is missing.",
+		`{"correct":true}`,
+	}}
+	raw, err := judgeLongMemEvalAnswer(context.Background(), llm, &caseResult{
+		QuestionType: "single-session-user",
+		Question:     "Which option?",
+		Answer:       "Option B",
+	}, "Option B")
+	if err != nil {
+		t.Fatalf("judge answer: %v", err)
 	}
-	if !parseLongMemEvalJudge("The response correctly recalls and uses the user's personal information.") {
-		t.Fatal("positive explanatory judge response should be correct")
+	if llm.calls != 2 {
+		t.Fatalf("model calls = %d, want 2", llm.calls)
 	}
-	if parseLongMemEvalJudge("The response does not satisfy the rubric.") {
-		t.Fatal("negative explanatory judge response should not be correct")
+	if len(llm.requests) != 2 || llm.requests[1].StructuredOutput == nil {
+		t.Fatalf("repair request should require structured output: %#v", llm.requests)
+	}
+	correct, err := parseLongMemEvalJudge(raw)
+	if err != nil || !correct {
+		t.Fatalf("repaired verdict = %v, %v; raw=%q", correct, err, raw)
 	}
 }
 
@@ -504,6 +834,22 @@ func TestAnalyzeLongMemEvalResults(t *testing.T) {
 					},
 				},
 			},
+		}, {
+			QuestionID:   "q2",
+			QuestionType: "single-session-assistant",
+			Question:     "Which beer did you recommend?",
+			Answer:       "I recommended using a Pilsner or Lager.",
+			BackendResults: map[string]*backendResult{
+				"pgvector": {
+					Backend:      "pgvector",
+					FailureStage: "answer_miss",
+					Answer:       "Pilsner or Lager",
+					F1:           0.5,
+					Judge: &lmeJudgeResult{
+						Correct: true,
+					},
+				},
+			},
 		}},
 	}
 	saveLongMemEvalResults(dir, result)
@@ -525,6 +871,20 @@ func TestAnalyzeLongMemEvalResults(t *testing.T) {
 			t.Fatalf("%s missing preference slot diagnosis: %s", name, data)
 		}
 	}
+	badCases, err := os.ReadFile(filepath.Join(dir, "bad_cases.tsv"))
+	if err != nil {
+		t.Fatalf("read bad cases: %v", err)
+	}
+	if strings.Contains(string(badCases), "q2") {
+		t.Fatalf("judge-correct answer should not be a bad case: %s", badCases)
+	}
+	analysis, err := os.ReadFile(filepath.Join(dir, "analysis.md"))
+	if err != nil {
+		t.Fatalf("read analysis: %v", err)
+	}
+	if !strings.Contains(string(analysis), "1/1") {
+		t.Fatalf("analysis missing judge summary: %s", analysis)
+	}
 }
 
 func TestCompareLongMemEvalResults(t *testing.T) {
@@ -536,7 +896,7 @@ func TestCompareLongMemEvalResults(t *testing.T) {
 	basePath := filepath.Join(baseDir, "results.json")
 	candidatePath := filepath.Join(candidateDir, "results.json")
 	base := &runResult{
-		Summary: &runSummary{TotalCases: 1},
+		Summary: &runSummary{TotalCases: 2},
 		Cases: []*caseResult{{
 			QuestionID:   "q1",
 			QuestionType: "single-session-assistant",
@@ -551,10 +911,24 @@ func TestCompareLongMemEvalResults(t *testing.T) {
 					BLEU:         0,
 				},
 			},
+		}, {
+			QuestionID:   "q2",
+			QuestionType: "single-session-assistant",
+			Question:     "Which option was recommended?",
+			Answer:       "Option B",
+			BackendResults: map[string]*backendResult{
+				"pgvector": {
+					Backend:      "pgvector",
+					FailureStage: "answer_miss",
+					Answer:       "The recommendation was Option B.",
+					F1:           0.5,
+					Judge:        &lmeJudgeResult{Correct: true},
+				},
+			},
 		}},
 	}
 	candidate := &runResult{
-		Summary: &runSummary{TotalCases: 1},
+		Summary: &runSummary{TotalCases: 2},
 		Cases: []*caseResult{{
 			QuestionID:   "q1",
 			QuestionType: "single-session-assistant",
@@ -568,6 +942,22 @@ func TestCompareLongMemEvalResults(t *testing.T) {
 					Answer:       "Absinthe",
 					F1:           1,
 					BLEU:         1,
+				},
+			},
+		}, {
+			QuestionID:   "q2",
+			QuestionType: "single-session-assistant",
+			Question:     "Which option was recommended?",
+			Answer:       "Option B",
+			BackendResults: map[string]*backendResult{
+				"pgvector": {
+					Backend:      "pgvector",
+					FailureStage: "ok",
+					ExactMatch:   true,
+					Answer:       "Option B",
+					F1:           1,
+					BLEU:         1,
+					Judge:        &lmeJudgeResult{Correct: false},
 				},
 			},
 		}},
@@ -589,6 +979,19 @@ func TestCompareLongMemEvalResults(t *testing.T) {
 		}
 		if !strings.Contains(text, "+1.0000") {
 			t.Fatalf("%s missing delta: %s", name, text)
+		}
+	}
+	rows := compareLongMemEvalRows(
+		longMemEvalAnalysisRows(base),
+		longMemEvalAnalysisRows(candidate),
+	)
+	summary := summarizeLongMemEvalCompareRows(rows)["pgvector"]
+	if summary == nil || summary.Improved != 1 || summary.Regressed != 1 {
+		t.Fatalf("semantic comparison summary = %#v, want one improvement and one regression", summary)
+	}
+	for _, row := range rows {
+		if row.QuestionID == "q2" && (!row.BaselineCorrect || row.CandidateCorrect) {
+			t.Fatalf("semantic judge was not preferred for q2: %#v", row)
 		}
 	}
 }
@@ -651,6 +1054,81 @@ func TestLongMemEvalTrackingModelTimeout(t *testing.T) {
 		t.Fatalf("error message missing timeout detail: %q", responses[0].Error.Message)
 	}
 }
+
+func TestLongMemEvalTrackingModelDefaultsTemperatureToZero(t *testing.T) {
+	t.Parallel()
+
+	base := &capturingModel{}
+	wrapped := &lmeTrackingModel{base: base, tracker: &lmeTokenTracker{}}
+	original := &model.Request{}
+	ch, err := wrapped.GenerateContent(context.Background(), original)
+	if err != nil {
+		t.Fatalf("generate content: %v", err)
+	}
+	for range ch {
+	}
+	if original.Temperature != nil {
+		t.Fatal("tracking model mutated the caller's request")
+	}
+	if base.request == nil || base.request.Temperature == nil || *base.request.Temperature != 0 {
+		t.Fatalf("captured temperature = %v, want 0", base.request)
+	}
+
+	explicit := 0.3
+	ch, err = wrapped.GenerateContent(context.Background(), &model.Request{
+		GenerationConfig: model.GenerationConfig{Temperature: &explicit},
+	})
+	if err != nil {
+		t.Fatalf("generate content with explicit temperature: %v", err)
+	}
+	for range ch {
+	}
+	if base.request == nil || base.request.Temperature == nil || *base.request.Temperature != explicit {
+		t.Fatalf("explicit temperature was not preserved: %v", base.request)
+	}
+}
+
+type capturingModel struct {
+	request *model.Request
+}
+
+func (m *capturingModel) GenerateContent(
+	_ context.Context,
+	req *model.Request,
+) (<-chan *model.Response, error) {
+	m.request = req
+	ch := make(chan *model.Response)
+	close(ch)
+	return ch, nil
+}
+
+func (*capturingModel) Info() model.Info { return model.Info{} }
+
+type queuedJudgeModel struct {
+	responses []string
+	calls     int
+	requests  []*model.Request
+}
+
+func (m *queuedJudgeModel) GenerateContent(
+	_ context.Context,
+	req *model.Request,
+) (<-chan *model.Response, error) {
+	response := ""
+	if m.calls < len(m.responses) {
+		response = m.responses[m.calls]
+	}
+	m.calls++
+	m.requests = append(m.requests, req)
+	ch := make(chan *model.Response, 1)
+	ch <- &model.Response{Choices: []model.Choice{{
+		Message: model.NewAssistantMessage(response),
+	}}}
+	close(ch)
+	return ch, nil
+}
+
+func (*queuedJudgeModel) Info() model.Info { return model.Info{} }
 
 type blockingModel struct{}
 

@@ -184,9 +184,13 @@ go run . -scenario agentic,auto -memory-backend pgvector,mysql
 
 LongMemEval uses a separate dataset format because each question carries its
 own haystack sessions. The runner replays sessions in chronological order and
-triggers memory extraction after each user/assistant pair, then records
-per-pair memory diffs, retrieval hits, answer text, token usage, and evidence
-recall in `results.json`.
+triggers memory extraction after each user/assistant pair. The pgvector backend
+uses `memory.Service.EnqueueAutoMemoryJob` and waits for its session completion
+marker before continuing; self-hosted mem0 sends the same pair to its memory
+API. `results.json` records pgvector extraction operations, per-pair memory
+diffs, retrieval hits, answer text, LLM and embedding token usage, prompt-cache
+usage, timings, and evidence recall. This separates extraction, persistence,
+retrieval, and answer failures.
 
 ```bash
 export PGVECTOR_DSN="postgres://user:password@localhost:5432/vectordb?sslmode=disable"
@@ -218,27 +222,43 @@ go run . \
   -lme-per-type 10 \
   -lme-abstention-count 20 \
   -lme-sample-seed 42 \
+  -mem0-llm-temperature 0 \
   -table-suffix _lme_baseline \
   -output ../results/lme-baseline
 
-# Analyze an existing LongMemEval run without making model calls.
+# Add semantic-judge results to a completed run.
 go run . \
   -dataset-format longmemeval \
-  -lme-analyze-results ../results/lme-baseline/results.json \
+  -lme-judge-results ../results/lme-baseline/results.json \
+  -output ../results/lme-baseline
+
+# Analyze judged results without making model calls.
+go run . \
+  -dataset-format longmemeval \
+  -lme-analyze-results ../results/lme-baseline/judged_results.json \
   -output ../results/lme-baseline
 
 # Compare two LongMemEval runs without making model calls.
 go run . \
   -dataset-format longmemeval \
-  -lme-compare-results ../results/lme-baseline/results.json,../results/lme-candidate/results.json \
+  -lme-compare-results ../results/lme-baseline/judged_results.json,../results/lme-candidate/judged_results.json \
   -output ../results/lme-candidate
 ```
 
-The analysis command writes `analysis.md` and `bad_cases.tsv`, including
-failure stages, evidence status, backend disagreements, and answer-gap
-diagnostics for missing reference keywords or preference slots.
-The comparison command writes `comparison.md` and `comparison.tsv` with EM,
-F1, BLEU, stage, and answer deltas by backend and question.
+The judge command writes `judged_results.json`. Analysis then treats a valid
+semantic-judge result as the primary correctness signal and falls back to exact
+match when no judge result is available. It writes `analysis.md` and
+`bad_cases.tsv`, including raw pipeline stages, evidence status, backend
+disagreements, and answer-gap diagnostics. Comparison uses the same correctness
+rule and writes `comparison.md` and `comparison.tsv` with correctness, EM, F1,
+BLEU, stage, and answer deltas by backend and question.
+
+Token counters cover model and embedding calls made by this process, including
+pgvector extraction, retrieval, and answer generation. A self-hosted mem0 can
+return internal LLM, cached-token, and embedding usage in `X-Mem0-Usage`;
+`provider_usage_reported` and the analysis coverage column show whether that
+usage was included. Stock mem0 servers do not return it, so their missing
+internal usage must not be interpreted as zero-cost usage.
 
 ## Command-Line Options
 
@@ -255,9 +275,9 @@ F1, BLEU, stage, and answer deltas by backend and question.
 | `-pgvector-dsn`     | (env)                  | PostgreSQL DSN for pgvector            |
 | `-mysql-dsn`        | (env)                  | MySQL DSN for mysql backend            |
 | `-embed-model`      | text-embedding-3-small | Embedding model for vector backends    |
-| `-vector-topk`      | 10                     | Top-k results for vector backends      |
+| `-vector-topk`      | 30                     | Top-k results for vector backends      |
 | `-qa-history-turns` | 0                      | Inject N conversation turns as context |
-| `-qa-search-passes` | 1                      | memory_search calls per QA             |
+| `-qa-search-passes` | 2                      | memory_search calls per QA             |
 | `-sample-id`        |                        | Filter by sample ID                    |
 | `-max-tasks`        | 0                      | Maximum tasks (0=all)                  |
 | `-llm-judge`        | false                  | Enable LLM-as-Judge                    |
@@ -277,12 +297,15 @@ LongMemEval-specific options:
 | `-lme-sample-seed`       | 42      | Sampling seed                                |
 | `-lme-max-sessions`      | 0       | Max haystack sessions per case               |
 | `-lme-max-pairs`         | 0       | Max user/assistant pairs per case            |
-| `-lme-ingest-wait`       | 250ms   | Wait after each pair before reading memories |
+| `-lme-ingest-wait`       | 250ms   | Extra delay after completed pair ingestion   |
+| `-lme-model-call-timeout` | 3m      | Model timeout and mem0 OSS request cap       |
 | `-lme-answer`            | true    | Generate answers from retrieved memories     |
+| `-lme-judge-results`     |         | Add semantic judge results to `results.json` |
 | `-lme-analyze-results`   |         | Analyze one saved LongMemEval `results.json` |
 | `-lme-compare-results`   |         | Compare baseline,candidate `results.json`    |
 | `-mem0-host`             | (env)   | Self-hosted mem0 OSS host                    |
 | `-mem0-cloud`            | false   | Use hosted mem0 API semantics                |
+| `-mem0-llm-temperature`  | -1      | Set OSS mem0 LLM temperature; -1 keeps it    |
 
 ## Environment Variables
 

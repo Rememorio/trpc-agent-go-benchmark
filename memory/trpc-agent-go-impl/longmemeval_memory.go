@@ -52,6 +52,9 @@ const (
 	lmePGVectorTableBase = "lme_memory_eval"
 	defaultMem0Host      = "http://localhost:8888"
 	lmeMem0IngestRetries = 2
+	lmeAutoMemoryPoll    = 20 * time.Millisecond
+	lmeAutoMemoryGrace   = time.Second
+	lmeAutoMemoryTimeout = 10 * time.Minute
 )
 
 type lmeTurn struct {
@@ -98,10 +101,11 @@ func (s flexString) String() string { return string(s) }
 
 type memoryBackend interface {
 	Name() string
-	IngestPair(ctx context.Context, sess *session.Session, meta ingestMeta) error
+	IngestPair(ctx context.Context, sess *session.Session, meta ingestMeta) (*extractionTrace, error)
 	Flush(ctx context.Context) error
 	Search(ctx context.Context, userKey memory.UserKey, query string, topK int) ([]memoryHit, error)
 	Read(ctx context.Context, userKey memory.UserKey, limit int) ([]memorySnapshot, error)
+	SnapshotProviderUsage() lmeProviderUsage
 	Close() error
 }
 
@@ -144,17 +148,38 @@ type memorySnapshot struct {
 }
 
 type ingestTrace struct {
-	SessionIndex int              `json:"session_index"`
-	SessionID    string           `json:"session_id"`
-	Date         string           `json:"date,omitempty"`
-	PairIndex    int              `json:"pair_index"`
-	HasAnswer    bool             `json:"has_answer,omitempty"`
-	Messages     []traceMessage   `json:"messages"`
-	NewMemories  []memorySnapshot `json:"new_memories,omitempty"`
-	MemoryCount  int              `json:"memory_count"`
-	TokenUsage   *lmeTokenUsage   `json:"token_usage,omitempty"`
-	Error        string           `json:"error,omitempty"`
-	DurationMs   int64            `json:"duration_ms"`
+	SessionIndex          int                `json:"session_index"`
+	SessionID             string             `json:"session_id"`
+	Date                  string             `json:"date,omitempty"`
+	PairIndex             int                `json:"pair_index"`
+	HasAnswer             bool               `json:"has_answer,omitempty"`
+	Messages              []traceMessage     `json:"messages"`
+	Extraction            *extractionTrace   `json:"extraction,omitempty"`
+	NewMemories           []memorySnapshot   `json:"new_memories,omitempty"`
+	MemoryCount           int                `json:"memory_count"`
+	TokenUsage            *lmeTokenUsage     `json:"token_usage,omitempty"`
+	EmbeddingUsage        *lmeEmbeddingUsage `json:"embedding_usage,omitempty"`
+	ProviderUsageReported bool               `json:"provider_usage_reported,omitempty"`
+	ProviderUsageError    string             `json:"provider_usage_error,omitempty"`
+	Error                 string             `json:"error,omitempty"`
+	DurationMs            int64              `json:"duration_ms"`
+}
+
+type extractionTrace struct {
+	ExistingMemoryCount int                   `json:"existing_memory_count"`
+	Operations          []extractionOperation `json:"operations,omitempty"`
+	Error               string                `json:"error,omitempty"`
+}
+
+type extractionOperation struct {
+	Type         extractor.OperationType `json:"type"`
+	Memory       string                  `json:"memory,omitempty"`
+	MemoryID     string                  `json:"memory_id,omitempty"`
+	Topics       []string                `json:"topics,omitempty"`
+	MemoryKind   memory.Kind             `json:"memory_kind,omitempty"`
+	EventTime    string                  `json:"event_time,omitempty"`
+	Participants []string                `json:"participants,omitempty"`
+	Location     string                  `json:"location,omitempty"`
 }
 
 type traceMessage struct {
@@ -168,27 +193,30 @@ type lmePair struct {
 }
 
 type backendResult struct {
-	Backend        string           `json:"backend"`
-	UserID         string           `json:"user_id"`
-	SessionID      string           `json:"session_id"`
-	IngestedPairs  int              `json:"ingested_pairs"`
-	IngestTraces   []ingestTrace    `json:"ingest_traces"`
-	FinalMemories  []memorySnapshot `json:"final_memories"`
-	Retrieval      []memoryHit      `json:"retrieval"`
-	Answer         string           `json:"answer,omitempty"`
-	RawAnswer      string           `json:"raw_answer,omitempty"`
-	TokenUsage     *lmeTokenUsage   `json:"token_usage,omitempty"`
-	AnswerUsage    *lmeTokenUsage   `json:"answer_token_usage,omitempty"`
-	Evidence       *evidenceMetrics `json:"evidence,omitempty"`
-	FailureStage   string           `json:"failure_stage,omitempty"`
-	Judge          *lmeJudgeResult  `json:"judge,omitempty"`
-	ExactMatch     bool             `json:"exact_match"`
-	F1             float64          `json:"f1"`
-	BLEU           float64          `json:"bleu"`
-	IngestDuration int64            `json:"ingest_duration_ms"`
-	SearchDuration int64            `json:"search_duration_ms"`
-	AnswerDuration int64            `json:"answer_duration_ms,omitempty"`
-	Error          string           `json:"error,omitempty"`
+	Backend               string             `json:"backend"`
+	UserID                string             `json:"user_id"`
+	SessionID             string             `json:"session_id"`
+	IngestedPairs         int                `json:"ingested_pairs"`
+	IngestTraces          []ingestTrace      `json:"ingest_traces"`
+	FinalMemories         []memorySnapshot   `json:"final_memories"`
+	Retrieval             []memoryHit        `json:"retrieval"`
+	Answer                string             `json:"answer,omitempty"`
+	RawAnswer             string             `json:"raw_answer,omitempty"`
+	TokenUsage            *lmeTokenUsage     `json:"token_usage,omitempty"`
+	EmbeddingUsage        *lmeEmbeddingUsage `json:"embedding_usage,omitempty"`
+	AnswerUsage           *lmeTokenUsage     `json:"answer_token_usage,omitempty"`
+	ProviderUsageReported bool               `json:"provider_usage_reported,omitempty"`
+	ProviderUsageError    string             `json:"provider_usage_error,omitempty"`
+	Evidence              *evidenceMetrics   `json:"evidence,omitempty"`
+	FailureStage          string             `json:"failure_stage,omitempty"`
+	Judge                 *lmeJudgeResult    `json:"judge,omitempty"`
+	ExactMatch            bool               `json:"exact_match"`
+	F1                    float64            `json:"f1"`
+	BLEU                  float64            `json:"bleu"`
+	IngestDuration        int64              `json:"ingest_duration_ms"`
+	SearchDuration        int64              `json:"search_duration_ms"`
+	AnswerDuration        int64              `json:"answer_duration_ms,omitempty"`
+	Error                 string             `json:"error,omitempty"`
 }
 
 type lmeJudgeResult struct {
@@ -221,28 +249,31 @@ type runSummary struct {
 	TotalCases       int                        `json:"total_cases"`
 	BackendSummaries map[string]*backendSummary `json:"backend_summaries"`
 	TokenUsage       lmeTokenUsage              `json:"token_usage"`
+	EmbeddingUsage   lmeEmbeddingUsage          `json:"embedding_usage"`
 	JudgeTokenUsage  lmeTokenUsage              `json:"judge_token_usage,omitempty"`
 }
 
 type backendSummary struct {
-	Cases              int           `json:"cases"`
-	ExactMatches       int           `json:"exact_matches"`
-	JudgedCases        int           `json:"judged_cases,omitempty"`
-	JudgeCorrect       int           `json:"judge_correct,omitempty"`
-	TotalPairs         int           `json:"total_pairs"`
-	TotalMemories      int           `json:"total_memories"`
-	TotalHits          int           `json:"total_hits"`
-	EvidenceCases      int           `json:"evidence_cases"`
-	ExtractRecallAny   int           `json:"extract_recall_any"`
-	RetrievalRecallAny int           `json:"retrieval_recall_any"`
-	RetrievalRecallAll int           `json:"retrieval_recall_all"`
-	TurnEvidenceCases  int           `json:"turn_evidence_cases"`
-	ExtractTurnAny     int           `json:"extract_turn_recall_any"`
-	RetrievalTurnAny   int           `json:"retrieval_turn_recall_any"`
-	AvgF1              float64       `json:"avg_f1"`
-	AvgBLEU            float64       `json:"avg_bleu"`
-	TokenUsage         lmeTokenUsage `json:"token_usage"`
-	JudgeTokenUsage    lmeTokenUsage `json:"judge_token_usage,omitempty"`
+	Cases              int               `json:"cases"`
+	ExactMatches       int               `json:"exact_matches"`
+	JudgedCases        int               `json:"judged_cases,omitempty"`
+	JudgeCorrect       int               `json:"judge_correct,omitempty"`
+	TotalPairs         int               `json:"total_pairs"`
+	TotalMemories      int               `json:"total_memories"`
+	TotalHits          int               `json:"total_hits"`
+	EvidenceCases      int               `json:"evidence_cases"`
+	ExtractRecallAny   int               `json:"extract_recall_any"`
+	RetrievalRecallAny int               `json:"retrieval_recall_any"`
+	RetrievalRecallAll int               `json:"retrieval_recall_all"`
+	TurnEvidenceCases  int               `json:"turn_evidence_cases"`
+	ExtractTurnAny     int               `json:"extract_turn_recall_any"`
+	RetrievalTurnAny   int               `json:"retrieval_turn_recall_any"`
+	AvgF1              float64           `json:"avg_f1"`
+	AvgBLEU            float64           `json:"avg_bleu"`
+	TokenUsage         lmeTokenUsage     `json:"token_usage"`
+	EmbeddingUsage     lmeEmbeddingUsage `json:"embedding_usage"`
+	ProviderUsageCases int               `json:"provider_usage_cases"`
+	JudgeTokenUsage    lmeTokenUsage     `json:"judge_token_usage,omitempty"`
 }
 
 type evidenceMetrics struct {
@@ -260,182 +291,86 @@ type evidenceMetrics struct {
 	RetrievalTurnRecallAny  bool     `json:"retrieval_turn_recall_any"`
 }
 
-type lmeTokenUsage struct {
-	PromptTokens        int     `json:"prompt_tokens"`
-	CompletionTokens    int     `json:"completion_tokens"`
-	TotalTokens         int     `json:"total_tokens"`
-	CachedTokens        int     `json:"cached_tokens,omitempty"`
-	CacheCreationTokens int     `json:"cache_creation_tokens,omitempty"`
-	CacheReadTokens     int     `json:"cache_read_tokens,omitempty"`
-	ReasoningTokens     int     `json:"reasoning_tokens,omitempty"`
-	LLMCalls            int     `json:"llm_calls"`
-	CacheHitRate        float64 `json:"cache_hit_rate,omitempty"`
-}
-
-type lmeTokenTracker struct {
-	mu    sync.Mutex
-	usage lmeTokenUsage
-}
-
-func (t *lmeTokenTracker) Record(u *model.Usage) {
-	if t == nil || u == nil {
-		return
-	}
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.usage.PromptTokens += u.PromptTokens
-	t.usage.CompletionTokens += u.CompletionTokens
-	t.usage.TotalTokens += u.TotalTokens
-	t.usage.CachedTokens += u.PromptTokensDetails.CachedTokens
-	t.usage.CacheCreationTokens += u.PromptTokensDetails.CacheCreationTokens
-	t.usage.CacheReadTokens += u.PromptTokensDetails.CacheReadTokens
-	t.usage.ReasoningTokens += u.CompletionTokensDetails.ReasoningTokens
-	t.usage.LLMCalls++
-	t.usage.setCacheHitRate()
-}
-
-func (t *lmeTokenTracker) Snapshot() lmeTokenUsage {
-	if t == nil {
-		return lmeTokenUsage{}
-	}
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	snap := t.usage
-	t.usage = lmeTokenUsage{}
-	return snap
-}
-
-type lmeTrackingModel struct {
-	base    model.Model
-	tracker *lmeTokenTracker
-	timeout time.Duration
-}
-
-func (m *lmeTrackingModel) GenerateContent(
-	ctx context.Context,
-	req *model.Request,
-) (<-chan *model.Response, error) {
-	var cancel context.CancelFunc
-	if m.timeout > 0 {
-		ctx, cancel = context.WithTimeout(ctx, m.timeout)
-	}
-	respCh, err := m.base.GenerateContent(ctx, req)
-	if err != nil {
-		if cancel != nil {
-			cancel()
-		}
-		return nil, err
-	}
-	out := make(chan *model.Response)
-	go func() {
-		if cancel != nil {
-			defer cancel()
-		}
-		defer close(out)
-		sawError := false
-		for resp := range respCh {
-			if resp != nil && resp.Usage != nil {
-				m.tracker.Record(resp.Usage)
-			}
-			if resp != nil && resp.Error != nil {
-				sawError = true
-			}
-			out <- resp
-		}
-		if err := ctx.Err(); err != nil && !sawError {
-			out <- &model.Response{
-				Object: model.ObjectTypeError,
-				Done:   true,
-				Error: &model.ResponseError{
-					Type:    model.ErrorTypeCancelled,
-					Message: lmeModelCallContextError(err, m.timeout),
-				},
-			}
-		}
-	}()
-	return out, nil
-}
-
-func (m *lmeTrackingModel) Info() model.Info { return m.base.Info() }
-
-func lmeModelCallContextError(err error, timeout time.Duration) string {
-	if errors.Is(err, context.DeadlineExceeded) && timeout > 0 {
-		return fmt.Sprintf("model call timed out after %s", timeout)
-	}
-	return fmt.Sprintf("model call canceled: %v", err)
-}
-
-func (u *lmeTokenUsage) Add(other lmeTokenUsage) {
-	u.PromptTokens += other.PromptTokens
-	u.CompletionTokens += other.CompletionTokens
-	u.TotalTokens += other.TotalTokens
-	u.CachedTokens += other.CachedTokens
-	u.CacheCreationTokens += other.CacheCreationTokens
-	u.CacheReadTokens += other.CacheReadTokens
-	u.ReasoningTokens += other.ReasoningTokens
-	u.LLMCalls += other.LLMCalls
-	u.setCacheHitRate()
-}
-
-func (u *lmeTokenUsage) setCacheHitRate() {
-	if u.PromptTokens <= 0 {
-		u.CacheHitRate = 0
-		return
-	}
-	u.CacheHitRate = float64(u.CachedTokens) / float64(u.PromptTokens)
-}
-
-func (u lmeTokenUsage) IsZero() bool {
-	return u.PromptTokens == 0 &&
-		u.CompletionTokens == 0 &&
-		u.TotalTokens == 0 &&
-		u.CachedTokens == 0 &&
-		u.CacheCreationTokens == 0 &&
-		u.CacheReadTokens == 0 &&
-		u.ReasoningTokens == 0 &&
-		u.LLMCalls == 0
-}
-
-func tokenUsagePtr(u lmeTokenUsage) *lmeTokenUsage {
-	if u.IsZero() {
-		return nil
-	}
-	u.setCacheHitRate()
-	return &u
-}
-
 type pgvectorBackend struct {
-	svc memory.Service
-	ext extractor.MemoryExtractor
+	svc      memory.Service
+	ext      *lmeTracingExtractor
+	embedder *lmeTrackingEmbedder
+}
+
+type lmeTracingExtractor struct {
+	extractor.MemoryExtractor
+	mu    sync.Mutex
+	trace *extractionTrace
+}
+
+func (e *lmeTracingExtractor) Extract(
+	ctx context.Context,
+	messages []model.Message,
+	existing []*memory.Entry,
+) ([]*extractor.Operation, error) {
+	ops, err := e.MemoryExtractor.Extract(ctx, messages, existing)
+	trace := &extractionTrace{ExistingMemoryCount: len(existing)}
+	if err != nil {
+		trace.Error = err.Error()
+	}
+	for _, op := range ops {
+		if op == nil {
+			continue
+		}
+		item := extractionOperation{
+			Type:         op.Type,
+			Memory:       op.Memory,
+			MemoryID:     op.MemoryID,
+			Topics:       append([]string(nil), op.Topics...),
+			MemoryKind:   op.MemoryKind,
+			Participants: append([]string(nil), op.Participants...),
+			Location:     op.Location,
+		}
+		if op.EventTime != nil {
+			item.EventTime = op.EventTime.UTC().Format(time.RFC3339Nano)
+		}
+		trace.Operations = append(trace.Operations, item)
+	}
+	e.mu.Lock()
+	e.trace = trace
+	e.mu.Unlock()
+	return ops, err
+}
+
+func (e *lmeTracingExtractor) Reset() {
+	e.mu.Lock()
+	e.trace = nil
+	e.mu.Unlock()
+}
+
+func (e *lmeTracingExtractor) Snapshot() *extractionTrace {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.trace
 }
 
 func (b *pgvectorBackend) Name() string { return "pgvector" }
 
 func (b *pgvectorBackend) Flush(ctx context.Context) error { return nil }
 
-func (b *pgvectorBackend) IngestPair(ctx context.Context, sess *session.Session, meta ingestMeta) error {
-	userKey := memory.UserKey{AppName: sess.AppName, UserID: sess.UserID}
-	existing, err := b.svc.ReadMemories(ctx, userKey, 500)
-	if err != nil {
-		return err
-	}
-	messages := latestPairMessages(sess)
-	if len(messages) == 0 {
-		return nil
+func (b *pgvectorBackend) IngestPair(
+	ctx context.Context,
+	sess *session.Session,
+	meta ingestMeta,
+) (*extractionTrace, error) {
+	b.ext.Reset()
+	latest, ok := latestSessionMessageTimestamp(sess)
+	if !ok {
+		return nil, nil
 	}
 	if t, ok := parseLMEDate(meta.Date); ok {
 		ctx = extractor.WithReferenceDate(ctx, t)
 	}
-	ops, err := b.ext.Extract(ctx, messages, existing)
-	if err != nil {
-		return err
+	if err := b.svc.EnqueueAutoMemoryJob(ctx, sess); err != nil {
+		return b.ext.Snapshot(), fmt.Errorf("enqueue auto memory: %w", err)
 	}
-	for _, op := range ops {
-		if err := executeOperation(ctx, b.svc, userKey, op); err != nil {
-			return err
-		}
-	}
-	return nil
+	err := waitForAutoMemory(ctx, sess, latest, longMemEvalMemoryJobTimeout()+lmeAutoMemoryGrace)
+	return b.ext.Snapshot(), err
 }
 
 func (b *pgvectorBackend) Search(ctx context.Context, userKey memory.UserKey, query string, topK int) ([]memoryHit, error) {
@@ -461,6 +396,13 @@ func (b *pgvectorBackend) Read(ctx context.Context, userKey memory.UserKey, limi
 	return snapshotsFromEntries(entries), nil
 }
 
+func (b *pgvectorBackend) SnapshotProviderUsage() lmeProviderUsage {
+	return lmeProviderUsage{
+		Embedding: b.embedder.Snapshot(),
+		Reported:  true,
+	}
+}
+
 func (b *pgvectorBackend) Close() error { return b.svc.Close() }
 
 type mem0Backend struct {
@@ -468,15 +410,31 @@ type mem0Backend struct {
 	host       string
 	selfHosted bool
 	httpClient *http.Client
+	usage      *lmeProviderUsageTracker
+}
+
+type mem0RuntimeConfiguration struct {
+	Version             string   `json:"version,omitempty"`
+	LLMProvider         string   `json:"llm_provider,omitempty"`
+	LLMModel            string   `json:"llm_model,omitempty"`
+	LLMTemperature      *float64 `json:"llm_temperature,omitempty"`
+	EmbedderProvider    string   `json:"embedder_provider,omitempty"`
+	EmbedderModel       string   `json:"embedder_model,omitempty"`
+	EmbeddingDimensions int      `json:"embedding_dimensions,omitempty"`
+	VectorStoreProvider string   `json:"vector_store_provider,omitempty"`
 }
 
 func (b *mem0Backend) Name() string { return "mem0" }
 
 func (b *mem0Backend) Flush(ctx context.Context) error { return b.svc.Close() }
 
-func (b *mem0Backend) IngestPair(ctx context.Context, sess *session.Session, meta ingestMeta) error {
+func (b *mem0Backend) IngestPair(
+	ctx context.Context,
+	sess *session.Session,
+	meta ingestMeta,
+) (*extractionTrace, error) {
 	if b.selfHosted {
-		return b.ingestPairOSS(ctx, sess, meta)
+		return nil, b.ingestPairOSS(ctx, sess, meta)
 	}
 	pairSess := session.NewSession(sess.AppName, sess.UserID, fmt.Sprintf("%s-%s-%04d", sess.ID, meta.SessionID, meta.PairIdx))
 	appendMessages(pairSess, latestPairMessages(sess), meta.SessionID, meta.PairIdx)
@@ -492,7 +450,7 @@ func (b *mem0Backend) IngestPair(ctx context.Context, sess *session.Session, met
 	if ts, ok := lmeUnixTimestamp(meta.Date); ok {
 		metadata["timestamp"] = ts
 	}
-	return b.svc.IngestSession(ctx, pairSess,
+	return nil, b.svc.IngestSession(ctx, pairSess,
 		session.WithIngestAgentID(lmeAgentName),
 		session.WithIngestRunID(meta.RunID),
 		session.WithIngestMetadata(metadata),
@@ -555,13 +513,16 @@ func (b *mem0Backend) ingestPairOSS(ctx context.Context, sess *session.Session, 
 				return err
 			}
 		}
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(data))
+		reqCtx, cancel := contextWithOptionalTimeout(ctx, longMemEvalMem0OSSRequestTimeout())
+		req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, endpoint, bytes.NewReader(data))
 		if err != nil {
+			cancel()
 			return err
 		}
 		req.Header.Set("Content-Type", "application/json")
 		resp, err := client.Do(req)
 		if err != nil {
+			cancel()
 			lastErr = err
 			if isRetryableMem0Error(err) {
 				continue
@@ -570,6 +531,7 @@ func (b *mem0Backend) ingestPairOSS(ctx context.Context, sess *session.Session, 
 		}
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		_ = resp.Body.Close()
+		cancel()
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 			return nil
 		}
@@ -601,7 +563,119 @@ func (b *mem0Backend) Read(ctx context.Context, userKey memory.UserKey, limit in
 	return snapshotsFromEntries(entries), nil
 }
 
+func (b *mem0Backend) SnapshotProviderUsage() lmeProviderUsage {
+	return b.usage.Snapshot()
+}
+
 func (b *mem0Backend) Close() error { return b.svc.Close() }
+
+func getMem0Host() string {
+	host := strings.TrimSpace(*flagMem0Host)
+	if host == "" {
+		host = strings.TrimSpace(os.Getenv("MEM0_HOST"))
+	}
+	if host == "" {
+		host = defaultMem0Host
+	}
+	return strings.TrimRight(host, "/")
+}
+
+func prepareLongMemEvalMem0(
+	ctx context.Context,
+	backends []string,
+) (*mem0RuntimeConfiguration, error) {
+	if *flagMem0Cloud || !containsString(backends, "mem0") || *flagMem0LLMTemperature < 0 {
+		return nil, nil
+	}
+	host := getMem0Host()
+	client := &http.Client{Timeout: longMemEvalMem0OSSRequestTimeout()}
+	endpoint := host + "/configure"
+	body, err := json.Marshal(map[string]any{
+		"llm": map[string]any{
+			"config": map[string]any{"temperature": *flagMem0LLMTemperature},
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("encode mem0 temperature configuration: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("create mem0 configuration request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("configure mem0 temperature: %w", err)
+	}
+	responseBody, readErr := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	resp.Body.Close()
+	if readErr != nil {
+		return nil, fmt.Errorf("read mem0 configuration response: %w", readErr)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("configure mem0 temperature: status=%d body=%s",
+			resp.StatusCode, strings.TrimSpace(string(responseBody)))
+	}
+
+	req, err = http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create mem0 configuration read request: %w", err)
+	}
+	resp, err = client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("read mem0 configuration: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return nil, fmt.Errorf("read mem0 configuration: status=%d body=%s",
+			resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	var raw struct {
+		Version string `json:"version"`
+		LLM     struct {
+			Provider string `json:"provider"`
+			Config   struct {
+				Model       string   `json:"model"`
+				Temperature *float64 `json:"temperature"`
+			} `json:"config"`
+		} `json:"llm"`
+		Embedder struct {
+			Provider string `json:"provider"`
+			Config   struct {
+				Model string `json:"model"`
+			} `json:"config"`
+		} `json:"embedder"`
+		VectorStore struct {
+			Provider string `json:"provider"`
+			Config   struct {
+				Dimensions int `json:"embedding_model_dims"`
+			} `json:"config"`
+		} `json:"vector_store"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+		return nil, fmt.Errorf("decode mem0 configuration: %w", err)
+	}
+	return &mem0RuntimeConfiguration{
+		Version:             raw.Version,
+		LLMProvider:         raw.LLM.Provider,
+		LLMModel:            raw.LLM.Config.Model,
+		LLMTemperature:      raw.LLM.Config.Temperature,
+		EmbedderProvider:    raw.Embedder.Provider,
+		EmbedderModel:       raw.Embedder.Config.Model,
+		EmbeddingDimensions: raw.VectorStore.Config.Dimensions,
+		VectorStoreProvider: raw.VectorStore.Provider,
+	}, nil
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
 
 func newLongMemEvalModel(modelName, variant string) (model.Model, error) {
 	opts, err := openAIModelOptionsForVariant(variant)
@@ -665,6 +739,10 @@ func runLongMemEvalMemory(ctx context.Context) error {
 	}
 
 	backends := parseMemoryBackends(*flagMemoryBackends)
+	mem0Config, err := prepareLongMemEvalMem0(ctx, backends)
+	if err != nil {
+		return err
+	}
 	runID := time.Now().UTC().Format("20060102T150405Z")
 	results := &runResult{
 		Metadata: map[string]any{
@@ -672,6 +750,8 @@ func runLongMemEvalMemory(ctx context.Context) error {
 			"dataset":                 datasetPath,
 			"model":                   modelName,
 			"model_variant":           modelVariant,
+			"model_temperature":       0,
+			"model_call_timeout":      flagLMEModelCallTimeout.String(),
 			"backends":                backends,
 			"top_k":                   *flagVectorTopK,
 			"run_id":                  runID,
@@ -682,13 +762,19 @@ func runLongMemEvalMemory(ctx context.Context) error {
 			"sample_abstention_count": *flagLMEAbstentionCount,
 			"sample_seed":             *flagLMESampleSeed,
 			"selected_question_ids":   questionIDs(cases),
+			"ingest_wait":             flagLMEIngestWait.String(),
 			"ingest_policy":           "chronological session replay; trigger extraction after each user/assistant pair",
-			"retrieval_note":          "retrieval hits are searched memories, not raw transcript chunks",
-			"evidence_note":           "source_sessions are inferred from the pair after which a memory first appeared or changed.",
-			"token_usage_scope": "LLM calls made through the trpc-agent-go model in this process. " +
-				"Embedding provider usage and mem0 self-hosted server internal LLM usage are not reported.",
+			"pgvector_ingest_path": "memory.Service.EnqueueAutoMemoryJob; wait for " +
+				"memory:last_extract_at completion after each pair",
+			"retrieval_note": "retrieval hits are searched memories, not raw transcript chunks",
+			"evidence_note":  "source_sessions are inferred from the pair after which a memory first appeared or changed.",
+			"token_usage_scope": "LLM and embedding usage made in this process. Self-hosted mem0 internal " +
+				"usage is included when its server returns X-Mem0-Usage; provider_usage_reported marks coverage.",
 		},
 		Cases: make([]*caseResult, 0, len(cases)),
+	}
+	if mem0Config != nil {
+		results.Metadata["mem0_runtime_configuration"] = mem0Config
 	}
 
 	log.Printf("LongMemEval memory run: cases=%d backends=%v model=%s", len(cases), backends, modelName)
@@ -723,10 +809,12 @@ func runLongMemEvalMemory(ctx context.Context) error {
 			br := runCaseBackend(ctx, llm, tracker, backend, inst, runID)
 			cr.BackendResults[backendName] = br
 			_ = backend.Close()
-			log.Printf("  %s pairs=%d memories=%d hits=%d evidence=%s calls=%d tokens=%d cached=%d em=%v f1=%.3f answer=%q",
+			log.Printf("  %s pairs=%d memories=%d hits=%d evidence=%s calls=%d tokens=%d cached=%d embed_calls=%d embed_tokens=%d provider_usage=%v em=%v f1=%.3f answer=%q",
 				backendName, br.IngestedPairs, len(br.FinalMemories), len(br.Retrieval),
 				br.FailureStage,
 				tokenCalls(br.TokenUsage), tokenTotal(br.TokenUsage), tokenCached(br.TokenUsage),
+				embeddingCalls(br.EmbeddingUsage), embeddingTokens(br.EmbeddingUsage),
+				br.ProviderUsageReported,
 				br.ExactMatch, br.F1, truncate(br.Answer, 120))
 			saveCaseLog(*flagOutput, cr, br)
 		}
@@ -786,7 +874,7 @@ func runCaseBackend(
 			appendMessages(sess, pair.Messages, s.ID, pairIdx)
 			pendingSources[s.ID] = true
 			pendingHasAnswer = pendingHasAnswer || pair.HasAnswer
-			err := backend.IngestPair(ctx, sess, ingestMeta{
+			extraction, err := backend.IngestPair(ctx, sess, ingestMeta{
 				QuestionID: inst.QuestionID,
 				SessionID:  s.ID,
 				SessionIdx: s.OriginalIndex,
@@ -795,6 +883,7 @@ func runCaseBackend(
 				Date:       s.Date,
 				RunID:      runID,
 			})
+			trace.Extraction = extraction
 			if *flagLMEIngestWait > 0 {
 				time.Sleep(*flagLMEIngestWait)
 			}
@@ -802,14 +891,15 @@ func runCaseBackend(
 			if readErr != nil && err == nil {
 				err = readErr
 			}
-			usage := tracker.Snapshot()
+			usage, embeddingUsage, providerUsage := snapshotLongMemEvalUsage(
+				tracker,
+				backend,
+			)
 			trace.TokenUsage = tokenUsagePtr(usage)
-			if trace.TokenUsage != nil {
-				if br.TokenUsage == nil {
-					br.TokenUsage = &lmeTokenUsage{}
-				}
-				br.TokenUsage.Add(usage)
-			}
+			trace.EmbeddingUsage = embeddingUsagePtr(embeddingUsage)
+			trace.ProviderUsageReported = providerUsage.Reported
+			trace.ProviderUsageError = providerUsage.Error
+			addLongMemEvalBackendUsage(br, usage, embeddingUsage, providerUsage)
 			newOrChanged := diffSnapshots(br.FinalMemories, memories)
 			if len(newOrChanged) > 0 {
 				recordProvenance(provenance, answerProvenance, newOrChanged, sortedSet(pendingSources), pendingHasAnswer)
@@ -855,6 +945,16 @@ afterIngest:
 	searchStart := time.Now()
 	hits, err := backend.Search(ctx, userKey, inst.Question, *flagVectorTopK)
 	br.SearchDuration = time.Since(searchStart).Milliseconds()
+	searchUsage, searchEmbeddingUsage, searchProviderUsage := snapshotLongMemEvalUsage(
+		tracker,
+		backend,
+	)
+	addLongMemEvalBackendUsage(
+		br,
+		searchUsage,
+		searchEmbeddingUsage,
+		searchProviderUsage,
+	)
 	if err != nil {
 		br.Error = appendError(br.Error, "search: "+err.Error())
 	}
@@ -863,28 +963,24 @@ afterIngest:
 	if *flagLMEAnswer {
 		answerStart := time.Now()
 		rawAnswer, err := answerFromMemories(ctx, llm, inst, hits)
-		usage := tracker.Snapshot()
+		usage, embeddingUsage, providerUsage := snapshotLongMemEvalUsage(
+			tracker,
+			backend,
+		)
 		br.AnswerDuration = time.Since(answerStart).Milliseconds()
 		br.AnswerUsage = tokenUsagePtr(usage)
-		if br.AnswerUsage != nil {
-			if br.TokenUsage == nil {
-				br.TokenUsage = &lmeTokenUsage{}
-			}
-			br.TokenUsage.Add(usage)
-		}
+		addLongMemEvalBackendUsage(br, usage, embeddingUsage, providerUsage)
 		if err != nil {
 			br.Error = appendError(br.Error, "answer: "+err.Error())
 		}
 		br.RawAnswer = rawAnswer
 		br.Answer = postprocessLongMemEvalAnswer(inst, hits, rawAnswer)
 	}
-	usage := tracker.Snapshot()
-	if !usage.IsZero() {
-		if br.TokenUsage == nil {
-			br.TokenUsage = &lmeTokenUsage{}
-		}
-		br.TokenUsage.Add(usage)
-	}
+	usage, embeddingUsage, providerUsage := snapshotLongMemEvalUsage(
+		tracker,
+		backend,
+	)
+	addLongMemEvalBackendUsage(br, usage, embeddingUsage, providerUsage)
 	br.ExactMatch = exactAnswerMatch(br.Answer, inst.Answer.String())
 	br.F1 = metrics.CalculateF1(br.Answer, inst.Answer.String())
 	br.BLEU = metrics.CalculateBLEU(br.Answer, inst.Answer.String())
@@ -900,30 +996,46 @@ func newBackend(name string, llm model.Model) (memoryBackend, error) {
 		if dsn == "" {
 			return nil, fmt.Errorf("pgvector-dsn or PGVECTOR_DSN is required")
 		}
-		emb := newEmbeddingEmbedder(getEmbedModelName())
+		emb := newLongMemEvalTrackingEmbedder(
+			newEmbeddingEmbedder(getEmbedModelName()),
+		)
 		tableName := tableNameWithSuffix(lmePGVectorTableBase)
+		tracingExtractor := &lmeTracingExtractor{
+			MemoryExtractor: extractor.NewExtractor(llm),
+		}
 		svc, err := memorypgvector.NewService(
 			memorypgvector.WithPGVectorClientDSN(dsn),
 			memorypgvector.WithTableName(tableName),
 			memorypgvector.WithEmbedder(emb),
 			memorypgvector.WithIndexDimension(emb.GetDimensions()),
 			memorypgvector.WithMaxResults(*flagVectorTopK),
+			memorypgvector.WithExtractor(tracingExtractor),
+			memorypgvector.WithAsyncMemoryNum(1),
+			memorypgvector.WithMemoryQueueSize(1),
+			memorypgvector.WithMemoryJobTimeout(longMemEvalMemoryJobTimeout()),
 		)
 		if err != nil {
 			return nil, err
 		}
-		return &pgvectorBackend{svc: svc, ext: extractor.NewExtractor(llm)}, nil
+		return &pgvectorBackend{
+			svc:      svc,
+			ext:      tracingExtractor,
+			embedder: emb,
+		}, nil
 	case "mem0":
-		host := strings.TrimSpace(*flagMem0Host)
-		if host == "" {
-			host = os.Getenv("MEM0_HOST")
-		}
-		if host == "" {
-			host = defaultMem0Host
-		}
+		host := getMem0Host()
 		timeout := 90 * time.Second
+		usage := &lmeProviderUsageTracker{}
+		httpClient := &http.Client{
+			Timeout: timeout,
+			Transport: &lmeMem0UsageTransport{
+				base:    http.DefaultTransport,
+				tracker: usage,
+			},
+		}
 		opts := []memorymem0.ServiceOpt{
 			memorymem0.WithHost(host),
+			memorymem0.WithHTTPClient(httpClient),
 			memorymem0.WithAsyncMode(false),
 			memorymem0.WithTimeout(timeout),
 			memorymem0.WithMemoryJobTimeout(timeout),
@@ -946,7 +1058,8 @@ func newBackend(name string, llm model.Model) (memoryBackend, error) {
 			svc:        svc,
 			host:       host,
 			selfHosted: selfHosted,
-			httpClient: &http.Client{Timeout: timeout},
+			httpClient: httpClient,
+			usage:      usage,
 		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported backend %q", name)
@@ -995,43 +1108,61 @@ func latestPairMessages(sess *session.Session) []model.Message {
 	return out
 }
 
-func executeOperation(
-	ctx context.Context,
-	svc memory.Service,
-	userKey memory.UserKey,
-	op *extractor.Operation,
-) error {
-	if op == nil {
-		return nil
+func latestSessionMessageTimestamp(sess *session.Session) (time.Time, bool) {
+	events := sess.GetEvents()
+	for i := len(events) - 1; i >= 0; i-- {
+		e := events[i]
+		if e.Response == nil || len(e.Response.Choices) == 0 {
+			continue
+		}
+		msg := e.Response.Choices[0].Message
+		if (msg.Role == model.RoleUser || msg.Role == model.RoleAssistant) &&
+			strings.TrimSpace(msg.Content) != "" {
+			return e.Timestamp.UTC(), true
+		}
 	}
-	switch op.Type {
-	case extractor.OperationAdd:
-		return svc.AddMemory(ctx, userKey, op.Memory, op.Topics,
-			memory.WithMetadata(operationMetadata(op)))
-	case extractor.OperationUpdate:
-		key := memory.Key{AppName: userKey.AppName, UserID: userKey.UserID, MemoryID: op.MemoryID}
-		return svc.UpdateMemory(ctx, key, op.Memory, op.Topics,
-			memory.WithUpdateMetadata(operationMetadata(op)))
-	case extractor.OperationDelete:
-		key := memory.Key{AppName: userKey.AppName, UserID: userKey.UserID, MemoryID: op.MemoryID}
-		return svc.DeleteMemory(ctx, key)
-	case extractor.OperationClear:
-		return svc.ClearMemories(ctx, userKey)
-	default:
-		return fmt.Errorf("unknown memory operation %q", op.Type)
-	}
+	return time.Time{}, false
 }
 
-func operationMetadata(op *extractor.Operation) *memory.Metadata {
-	kind := op.MemoryKind
-	if kind == "" {
-		kind = memory.KindFact
+func longMemEvalMemoryJobTimeout() time.Duration {
+	if *flagLMEModelCallTimeout > 0 {
+		return *flagLMEModelCallTimeout
 	}
-	return &memory.Metadata{
-		Kind:         kind,
-		EventTime:    op.EventTime,
-		Participants: op.Participants,
-		Location:     op.Location,
+	return lmeAutoMemoryTimeout
+}
+
+func waitForAutoMemory(
+	ctx context.Context,
+	sess *session.Session,
+	want time.Time,
+	timeout time.Duration,
+) error {
+	if timeout <= 0 {
+		timeout = lmeAutoMemoryTimeout
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	ticker := time.NewTicker(lmeAutoMemoryPoll)
+	defer ticker.Stop()
+
+	for {
+		if raw, ok := sess.GetState(memory.SessionStateKeyAutoMemoryLastExtractAt); ok {
+			got, err := time.Parse(time.RFC3339Nano, string(raw))
+			if err != nil {
+				return fmt.Errorf("parse auto memory completion marker %q: %w", raw, err)
+			}
+			if !got.Before(want) {
+				return nil
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timer.C:
+			return fmt.Errorf("wait for auto memory through %s: timeout after %s",
+				want.Format(time.RFC3339Nano), timeout)
+		case <-ticker.C:
+		}
 	}
 }
 
@@ -1097,7 +1228,7 @@ func judgeLongMemEvalResults(ctx context.Context, path, outputDir string) error 
 	result.Metadata["judge_model"] = modelName
 	result.Metadata["judge_model_variant"] = modelVariant
 	result.Metadata["judged_at"] = time.Now().UTC().Format(time.RFC3339)
-	result.Metadata["judge_note"] = "LLM semantic correctness judge adapted from the official LongMemEval QA evaluator."
+	result.Metadata["judge_note"] = "LLM semantic correctness judge adapted from the official LongMemEval QA evaluator; only an explicit final VERDICT is accepted."
 
 	for _, cr := range result.Cases {
 		if cr == nil {
@@ -1127,9 +1258,11 @@ func judgeLongMemEvalResults(ctx context.Context, path, outputDir string) error 
 			judge := &lmeJudgeResult{
 				Model:      modelName,
 				Raw:        raw,
-				Correct:    parseLongMemEvalJudge(raw),
 				TokenUsage: tokenUsagePtr(usage),
 				DurationMs: time.Since(start).Milliseconds(),
+			}
+			if err == nil {
+				judge.Correct, err = parseLongMemEvalJudge(raw)
 			}
 			if err != nil {
 				judge.Error = err.Error()
@@ -1163,7 +1296,37 @@ func judgeLongMemEvalAnswer(
 	response string,
 ) (string, error) {
 	prompt := buildLongMemEvalJudgePrompt(cr, response)
-	req := newLongMemEvalJudgeRequest(prompt)
+	raw, err := generateLongMemEvalJudgeResponse(
+		ctx,
+		llm,
+		newLongMemEvalJudgeRequest(prompt),
+	)
+	if err != nil {
+		return raw, err
+	}
+	if _, err := parseLongMemEvalJudge(raw); err == nil {
+		return raw, nil
+	}
+	repair, err := generateLongMemEvalJudgeResponse(
+		ctx,
+		llm,
+		newLongMemEvalJudgeRepairRequest(prompt),
+	)
+	if err != nil {
+		return raw, fmt.Errorf("repair judge verdict: %w", err)
+	}
+	verdict, err := parseLongMemEvalJudgeRepair(repair)
+	if err != nil {
+		return raw + "\n\nVerdict repair response: " + repair, err
+	}
+	return raw + "\n\nVERDICT: " + verdict, nil
+}
+
+func generateLongMemEvalJudgeResponse(
+	ctx context.Context,
+	llm model.Model,
+	req *model.Request,
+) (string, error) {
 	respCh, err := llm.GenerateContent(ctx, req)
 	if err != nil {
 		return "", err
@@ -1198,13 +1361,13 @@ func judgeLongMemEvalAnswer(
 }
 
 func newLongMemEvalJudgeRequest(prompt string) *model.Request {
-	maxTokens := 160
+	maxTokens := 512
 	temp := 0.0
 	reasoningEffort := "low"
 	thinkingEnabled := false
 	return &model.Request{
 		Messages: []model.Message{
-			model.NewSystemMessage("You are a strict LongMemEval evaluator. The first word of your response must be yes or no."),
+			model.NewSystemMessage("You are a strict LongMemEval evaluator. Analyze the response, then end with exactly one final line: VERDICT: yes or VERDICT: no. The final verdict line is mandatory."),
 			model.NewUserMessage(prompt),
 		},
 		GenerationConfig: model.GenerationConfig{
@@ -1213,6 +1376,40 @@ func newLongMemEvalJudgeRequest(prompt string) *model.Request {
 			Temperature:     &temp,
 			ReasoningEffort: &reasoningEffort,
 			ThinkingEnabled: &thinkingEnabled,
+		},
+	}
+}
+
+func newLongMemEvalJudgeRepairRequest(prompt string) *model.Request {
+	maxTokens := 128
+	temp := 0.0
+	thinkingEnabled := false
+	return &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage("Return only the required JSON object. Set correct to true for yes and false for no."),
+			model.NewUserMessage(prompt),
+		},
+		GenerationConfig: model.GenerationConfig{
+			Stream:          false,
+			MaxTokens:       &maxTokens,
+			Temperature:     &temp,
+			ThinkingEnabled: &thinkingEnabled,
+		},
+		StructuredOutput: &model.StructuredOutput{
+			Type: model.StructuredOutputJSONSchema,
+			JSONSchema: &model.JSONSchemaConfig{
+				Name:        "longmemeval_judge_verdict",
+				Description: "Binary correctness verdict for one LongMemEval answer.",
+				Strict:      true,
+				Schema: map[string]any{
+					"type":                 "object",
+					"additionalProperties": false,
+					"properties": map[string]any{
+						"correct": map[string]any{"type": "boolean"},
+					},
+					"required": []string{"correct"},
+				},
+			},
 		},
 	}
 }
@@ -1231,7 +1428,7 @@ Explanation: %s
 
 Model Response: %s
 
-Decision:`, cr.Question, cr.Answer, response)
+After your analysis, write the mandatory final line "VERDICT: yes" or "VERDICT: no".`, cr.Question, cr.Answer, response)
 	}
 	switch cr.QuestionType {
 	case "single-session-user", "single-session-assistant", "multi-session":
@@ -1244,7 +1441,7 @@ Correct Answer: %s
 
 Model Response: %s
 
-Decision:`, cr.Question, cr.Answer, response)
+After your analysis, write the mandatory final line "VERDICT: yes" or "VERDICT: no".`, cr.Question, cr.Answer, response)
 	case "temporal-reasoning":
 		return fmt.Sprintf(`Task: Decide whether the model response is correct.
 Return yes if the response contains or is equivalent to the correct answer, or contains all intermediate steps needed to get it. Return no if it only contains a subset of the required answer. For day/week/month count questions, do not penalize off-by-one errors.
@@ -1255,7 +1452,7 @@ Correct Answer: %s
 
 Model Response: %s
 
-Decision:`, cr.Question, cr.Answer, response)
+After your analysis, write the mandatory final line "VERDICT: yes" or "VERDICT: no".`, cr.Question, cr.Answer, response)
 	case "knowledge-update":
 		return fmt.Sprintf(`Task: Decide whether the model response is correct.
 Return yes if the response contains the updated correct answer, even if it also mentions previous information. Return no otherwise.
@@ -1266,7 +1463,7 @@ Correct Answer: %s
 
 Model Response: %s
 
-Decision:`, cr.Question, cr.Answer, response)
+After your analysis, write the mandatory final line "VERDICT: yes" or "VERDICT: no".`, cr.Question, cr.Answer, response)
 	case "single-session-preference":
 		return fmt.Sprintf(`Task: Decide whether the model response satisfies the desired personalized response.
 Return yes if the response recalls and uses the user's personal information correctly. It does not need to reflect every point in the rubric. Return no otherwise.
@@ -1277,7 +1474,7 @@ Rubric: %s
 
 Model Response: %s
 
-Decision:`, cr.Question, cr.Answer, response)
+After your analysis, write the mandatory final line "VERDICT: yes" or "VERDICT: no".`, cr.Question, cr.Answer, response)
 	default:
 		return fmt.Sprintf(`Task: Decide whether the model response is correct.
 Return yes if the response is equivalent to the correct answer. Return no otherwise.
@@ -1288,65 +1485,35 @@ Correct Answer: %s
 
 Model Response: %s
 
-Decision:`, cr.Question, cr.Answer, response)
+After your analysis, write the mandatory final line "VERDICT: yes" or "VERDICT: no".`, cr.Question, cr.Answer, response)
 	}
 }
 
-func parseLongMemEvalJudge(raw string) bool {
-	compact := strings.TrimSpace(strings.ToLower(raw))
-	if strings.HasPrefix(compact, "yes") {
-		return true
+var longMemEvalJudgeVerdictRE = regexp.MustCompile(`(?im)^\s*VERDICT:\s*(yes|no)\s*[.!]?\s*$`)
+
+func parseLongMemEvalJudge(raw string) (bool, error) {
+	matches := longMemEvalJudgeVerdictRE.FindAllStringSubmatch(raw, -1)
+	if len(matches) == 0 {
+		return false, errors.New("judge response missing explicit VERDICT")
 	}
-	if strings.HasPrefix(compact, "no") {
-		return false
+	verdict := strings.ToLower(matches[len(matches)-1][1])
+	return verdict == "yes", nil
+}
+
+func parseLongMemEvalJudgeRepair(raw string) (string, error) {
+	var response struct {
+		Correct *bool `json:"correct"`
 	}
-	tokens := strings.Fields(normalizeExactAnswer(raw))
-	if len(tokens) == 0 {
-		return false
+	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &response); err != nil {
+		return "", fmt.Errorf("decode judge verdict repair %q: %w", truncate(raw, 80), err)
 	}
-	switch tokens[0] {
-	case "yes":
-		return true
-	case "no":
-		return false
+	if response.Correct == nil {
+		return "", errors.New("judge verdict repair omitted correct")
 	}
-	hasYes := false
-	hasNo := false
-	for _, token := range tokens {
-		hasYes = hasYes || token == "yes"
-		hasNo = hasNo || token == "no"
+	if *response.Correct {
+		return "yes", nil
 	}
-	if hasYes && !hasNo {
-		return true
-	}
-	lower := strings.ToLower(raw)
-	for _, pattern := range []string{
-		"does not",
-		"do not",
-		"not correct",
-		"not satisfy",
-		"doesn't satisfy",
-		"incorrect",
-		"fails to",
-	} {
-		if strings.Contains(lower, pattern) {
-			return false
-		}
-	}
-	for _, pattern := range []string{
-		"correctly recalls",
-		"correctly identifies",
-		"response is correct",
-		"is correct",
-		"satisfies",
-		"equivalent",
-		"contains the correct answer",
-	} {
-		if strings.Contains(lower, pattern) {
-			return true
-		}
-	}
-	return false
+	return "no", nil
 }
 
 func postprocessLongMemEvalAnswer(inst *lmeInstance, hits []memoryHit, raw string) string {
@@ -1562,23 +1729,31 @@ func longMemEvalAnswerGuidance(inst *lmeInstance) string {
 	if inst == nil {
 		return ""
 	}
+	if inst.QuestionType == "knowledge-update" {
+		return `
+For knowledge-update questions, first decide from the question wording whether
+it asks for an earlier state or the latest state. If it asks for "previous",
+"before", "old", "former", "prior", or what was true before an update, answer
+with the earlier value immediately before the later update; do not answer with
+the latest/current value. If it asks for "current", "latest", "now", or what
+changed after an update, answer with the newest supported value. Use dates and
+timeline wording in the retrieved memories to choose the value, but output only
+the requested value itself.`
+	}
 	if strings.Contains(inst.QuestionType, "preference") {
 		return `
-For preference questions, LongMemEval expects the user's preference profile,
-not real-time recommendations. If the retrieved memories show relevant
-preferences, constraints, likes, dislikes, prior choices, or recommendation
-history, summarize what the user would prefer and what they would not prefer.
+For preference questions, answer the user's question directly and personalize
+the response with relevant preferences, constraints, prior choices, personal
+details, or recommendation history from the retrieved memories. Do not describe
+the user in the third person or output a preference profile instead of answering
+the question.
 When any retrieved memory is relevant to the preference topic, do not say
 "I don't know" and do not mention missing live data, current local events,
 availability, prices, or fresh product listings.
-Write a 2-3 sentence preference profile, not a recommendation list. Start
-with "The user would prefer". Use this shape: "The user would prefer ... They
-would also appreciate ... They would not prefer ..." Mention concrete
-categories and constraints from memory, such as compatibility, quality,
-durability, protection, portability, language practice, cultural exchange,
-or learning resources. Include negative constraints implied by the memories,
-such as incompatibility, lack of the desired activity, or failure to satisfy
-the user's stated goal.`
+Write a concise, natural response addressed to the user. When the question asks
+for advice or a recommendation, give actionable advice that explicitly builds
+on the remembered details instead of generic suggestions. Mention only concrete
+details supported by memory; do not invent missing personal context.`
 	}
 	return ""
 }
@@ -1817,6 +1992,14 @@ func saveCaseLog(outputDir string, cr *caseResult, br *backendResult) {
 			br.TokenUsage.LLMCalls,
 			br.TokenUsage.CacheHitRate)
 	}
+	if br.EmbeddingUsage != nil {
+		fmt.Fprintf(&b, "EmbeddingUsage: prompt=%d total=%d calls=%d\n\n",
+			br.EmbeddingUsage.PromptTokens,
+			br.EmbeddingUsage.TotalTokens,
+			br.EmbeddingUsage.Calls)
+	}
+	fmt.Fprintf(&b, "ProviderUsage: reported=%v error=%s\n\n",
+		br.ProviderUsageReported, br.ProviderUsageError)
 	fmt.Fprintf(&b, "=== Ingestion Trace ===\n")
 	for _, tr := range br.IngestTraces {
 		fmt.Fprintf(&b, "[session=%s idx=%d pair=%d has_answer=%v date=%s] duration=%dms new=%d total=%d err=%s\n",
@@ -1829,6 +2012,31 @@ func saveCaseLog(outputDir string, cr *caseResult, br *backendResult) {
 				tr.TokenUsage.CachedTokens,
 				tr.TokenUsage.LLMCalls,
 				tr.TokenUsage.CacheHitRate)
+		}
+		if tr.EmbeddingUsage != nil {
+			fmt.Fprintf(&b, "  embedding_usage: prompt=%d total=%d calls=%d\n",
+				tr.EmbeddingUsage.PromptTokens,
+				tr.EmbeddingUsage.TotalTokens,
+				tr.EmbeddingUsage.Calls)
+		}
+		if tr.ProviderUsageReported || tr.ProviderUsageError != "" {
+			fmt.Fprintf(&b, "  provider_usage: reported=%v error=%s\n",
+				tr.ProviderUsageReported, tr.ProviderUsageError)
+		}
+		if tr.Extraction != nil {
+			fmt.Fprintf(&b, "  extraction: existing=%d operations=%d error=%s\n",
+				tr.Extraction.ExistingMemoryCount,
+				len(tr.Extraction.Operations),
+				tr.Extraction.Error)
+			for _, op := range tr.Extraction.Operations {
+				fmt.Fprintf(&b, "    %s id=%s kind=%s event_time=%s topics=%s memory=%s\n",
+					op.Type,
+					op.MemoryID,
+					op.MemoryKind,
+					op.EventTime,
+					strings.Join(op.Topics, ","),
+					truncate(op.Memory, 220))
+			}
 		}
 		for _, msg := range tr.Messages {
 			fmt.Fprintf(&b, "  %s: %s\n", msg.Role, truncate(msg.Content, 220))
@@ -1878,10 +2086,12 @@ func printLongMemEvalSummary(result *runResult) {
 	for _, cr := range result.Cases {
 		fmt.Printf("- %s (%s): %s\n", cr.QuestionID, cr.QuestionType, cr.Question)
 		for _, br := range cr.BackendResults {
-			fmt.Printf("  %s: pairs=%d memories=%d hits=%d stage=%s calls=%d tokens=%d cached=%d EM=%v F1=%.3f BLEU=%.3f err=%s\n",
+			fmt.Printf("  %s: pairs=%d memories=%d hits=%d stage=%s calls=%d tokens=%d cached=%d embedCalls=%d embedTokens=%d providerUsage=%v EM=%v F1=%.3f BLEU=%.3f err=%s\n",
 				br.Backend, br.IngestedPairs, len(br.FinalMemories), len(br.Retrieval),
 				br.FailureStage,
 				tokenCalls(br.TokenUsage), tokenTotal(br.TokenUsage), tokenCached(br.TokenUsage),
+				embeddingCalls(br.EmbeddingUsage), embeddingTokens(br.EmbeddingUsage),
+				br.ProviderUsageReported,
 				br.ExactMatch, br.F1, br.BLEU, br.Error)
 		}
 	}
@@ -1894,14 +2104,16 @@ func printLongMemEvalSummary(result *runResult) {
 		if summary.JudgedCases > 0 {
 			judgeText = fmt.Sprintf(" judge=%d/%d", summary.JudgeCorrect, summary.JudgedCases)
 		}
-		fmt.Printf("  %s: cases=%d EM=%d%s evidence=%d extractAny=%d retrievalAny=%d retrievalAll=%d turnEvidence=%d turnExtractAny=%d turnRetrievalAny=%d avgF1=%.3f avgBLEU=%.3f calls=%d tokens=%d cached=%d cacheHit=%.3f\n",
+		fmt.Printf("  %s: cases=%d EM=%d%s evidence=%d extractAny=%d retrievalAny=%d retrievalAll=%d turnEvidence=%d turnExtractAny=%d turnRetrievalAny=%d avgF1=%.3f avgBLEU=%.3f calls=%d tokens=%d cached=%d cacheHit=%.3f embedCalls=%d embedTokens=%d providerUsage=%d/%d\n",
 			backend, summary.Cases, summary.ExactMatches,
 			judgeText,
 			summary.EvidenceCases, summary.ExtractRecallAny, summary.RetrievalRecallAny, summary.RetrievalRecallAll,
 			summary.TurnEvidenceCases, summary.ExtractTurnAny, summary.RetrievalTurnAny,
 			summary.AvgF1, summary.AvgBLEU,
 			summary.TokenUsage.LLMCalls, summary.TokenUsage.TotalTokens,
-			summary.TokenUsage.CachedTokens, summary.TokenUsage.CacheHitRate)
+			summary.TokenUsage.CachedTokens, summary.TokenUsage.CacheHitRate,
+			summary.EmbeddingUsage.Calls, summary.EmbeddingUsage.TotalTokens,
+			summary.ProviderUsageCases, summary.Cases)
 	}
 }
 
@@ -1965,6 +2177,13 @@ func buildLongMemEvalSummary(cases []*caseResult) *runSummary {
 				bs.TokenUsage.Add(*br.TokenUsage)
 				summary.TokenUsage.Add(*br.TokenUsage)
 			}
+			if br.EmbeddingUsage != nil {
+				bs.EmbeddingUsage.Add(*br.EmbeddingUsage)
+				summary.EmbeddingUsage.Add(*br.EmbeddingUsage)
+			}
+			if br.ProviderUsageReported {
+				bs.ProviderUsageCases++
+			}
 			if br.Judge != nil && br.Judge.TokenUsage != nil {
 				bs.JudgeTokenUsage.Add(*br.Judge.TokenUsage)
 				summary.JudgeTokenUsage.Add(*br.Judge.TokenUsage)
@@ -2000,6 +2219,20 @@ func tokenCached(u *lmeTokenUsage) int {
 		return 0
 	}
 	return u.CachedTokens
+}
+
+func embeddingCalls(u *lmeEmbeddingUsage) int {
+	if u == nil {
+		return 0
+	}
+	return u.Calls
+}
+
+func embeddingTokens(u *lmeEmbeddingUsage) int {
+	if u == nil {
+		return 0
+	}
+	return u.TotalTokens
 }
 
 func resolveLongMemEvalDatasetPath() string {
@@ -2492,6 +2725,29 @@ func sleepWithContext(ctx context.Context, d time.Duration) error {
 	case <-timer.C:
 		return nil
 	}
+}
+
+func longMemEvalMem0OSSRequestTimeout() time.Duration {
+	timeout := 90 * time.Second
+	if flagLMEModelCallTimeout != nil && *flagLMEModelCallTimeout > 0 && *flagLMEModelCallTimeout < timeout {
+		timeout = *flagLMEModelCallTimeout
+	}
+	return timeout
+}
+
+func contextWithOptionalTimeout(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if timeout <= 0 {
+		return ctx, func() {}
+	}
+	if deadline, ok := ctx.Deadline(); ok {
+		if remaining := time.Until(deadline); remaining <= timeout {
+			return ctx, func() {}
+		}
+	}
+	return context.WithTimeout(ctx, timeout)
 }
 
 func appendError(base, next string) string {
