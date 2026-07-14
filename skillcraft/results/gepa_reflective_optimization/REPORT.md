@@ -1,35 +1,39 @@
-# Reflective Skill Optimization on SkillCraft
+# Evaluating Reflective Skill Optimization on the SkillCraft Benchmark
 
-## Executive Summary
+## 1. Introduction
 
 This experiment evaluates the pure-Go reflective optimizer in
 `trpc-agent-go/evolution/optimization` against two SkillCraft task families.
-The optimizer can propose and select skill revisions, but promotion is decided
-only after a paired comparison on a holdout split that reflection never sees.
+The central question is:
 
-The result is intentionally negative:
+> **Can reflective search produce a skill revision that improves unseen
+> SkillCraft tasks, rather than only the cases used during search?**
 
-- the weather control retained its seed;
-- the recipe search found a candidate that was cheaper on validation while
-  preserving official quality and pass rate;
-- the same recipe candidate became more expensive on holdout, again without a
-  quality or pass-rate gain; and
-- the optimizer correctly returned `promotion_eligible=false`.
+The short answer is **not yet**. The optimizer found a recipe candidate that
+looked cheaper on validation, but the saving did not generalize to holdout.
+The promotion gate therefore kept the existing skill.
 
-This establishes that the integration can discover local changes, reject weak
-mutations, catch a validation-only win, and make an auditable no-promotion
-decision. It does **not** establish that the reflected skill improves GLM-5.2
-task quality.
+| Experiment | Validation | Holdout | Result |
+| --- | --- | --- | --- |
+| Weather control | No candidate beat the seed | Seed and selected skill were identical | Keep seed |
+| Recipe optimization | Same quality, 23.81% fewer tokens | Same quality, 60.46% more tokens | Reject candidate |
 
-## Experimental Setup
+This result proves that the search and promotion-safety path works end to end:
+the integration can generate revisions, reject weak mutations, detect a
+validation-only win, and avoid publishing it. It does **not** yet prove that
+the optimizer can produce a skill with a repeatable quality or efficiency gain.
+
+## 2. Experimental Setup
+
+### 2.1 Benchmark and Search Configuration
 
 | Item | Value |
 | --- | --- |
-| Recorded date | 2026-07-13 |
-| Agent / reflection model | `glm52` through an OpenAI-compatible endpoint |
-| Framework revision | `c0b120728b27` |
-| Benchmark base revision | `1edee87` |
-| SkillCraft revision | `0a9ba8808ba49bbc7bd40ad2e853896b8c3d4764` |
+| Benchmark | SkillCraft |
+| Task families | `openmeteo-weather`, `recipe-cookbook-builder` |
+| Variants per family | `e1` / `e2` / `e3` / `m1` / `m2` / `h1` |
+| Agent / reflection model | `glm52` |
+| Scoring | SkillCraft official evaluator plus cost objectives |
 | Feedback split | `e1,e2` |
 | Validation split | `e3,m1` |
 | Holdout split | `m2,h1` |
@@ -39,10 +43,23 @@ task quality.
 The three scale splits are disjoint. Reflection receives only feedback-case
 outputs, evaluator feedback, and bounded traces. Validation is used for
 candidate selection; holdout is evaluated only after the selected candidate is
-frozen. The endpoint is not assumed to honor the optimizer seed, so these are
-paired operational observations rather than a statistical significance claim.
+frozen. The model service is not assumed to honor the optimizer seed, so these
+are paired benchmark observations rather than a statistical significance claim.
 
-## What Was Measured
+### 2.2 Optimization Mechanism
+
+The optimizer repeats a small, gated search loop:
+
+1. run the current skill on a feedback batch;
+2. ask reflection to propose one bounded revision;
+3. keep the revision only if it beats its parent on the same feedback batch;
+4. select the best surviving revision on validation; and
+5. freeze that revision and promote it only if it also passes holdout.
+
+Feedback drives mutation, validation selects, and holdout protects promotion.
+The optimizer never learns from validation or holdout outputs.
+
+### 2.3 Evaluation Protocol
 
 Each evaluation retains separate objectives for official quality, pass status,
 agent tokens, tool calls, duration, and observed skill loading. Candidate
@@ -56,9 +73,9 @@ artifact to identify missing `category_dishes`, `cuisine_dishes`, and
 `ingredient_dishes` fields. It does not inspect evaluator source or expose
 validation and holdout cases to reflection.
 
-## Results
+## 3. Results
 
-### Weather negative control
+### 3.1 Weather Negative Control
 
 The legacy weather seed already achieved official quality `1.0` across the
 selected validation and holdout cases. Three mutations failed strict paired
@@ -77,7 +94,7 @@ score was lower than the seed, so selection retained the seed.
 This is the expected behavior for a control: novelty alone is insufficient for
 selection or promotion.
 
-### Recipe search
+### 3.2 Recipe Search
 
 The recipe search accepted a steps mutation after rejecting description and
 `when_to_use` changes that did not improve their paired feedback batches. On
@@ -107,7 +124,7 @@ candidate was not eligible for promotion. The search evaluated 26 cases,
 accepted 3 candidates including the seed, consumed 3,819,019 agent tokens, and
 used 11,537 reflection tokens.
 
-### Frozen final-code A/B
+### 3.3 Frozen Candidate A/B
 
 To separate search behavior from the final comparison, the seed and selected
 recipe candidate were evaluated with search disabled (`max_iterations=0`) and
@@ -126,7 +143,9 @@ Official quality and pass rate were unchanged on both splits. The candidate was
 faster in wall-clock time on holdout, but it spent more tokens and tool calls
 and reduced the scalar score. It therefore remained ineligible.
 
-## Bad-Case Analysis
+## 4. Discussion
+
+### 4.1 Why the Candidate Failed
 
 The candidate overfit an efficiency signal visible on the selected validation
 cases. Its added checklist made the required related-dish fields explicit and
@@ -140,18 +159,30 @@ optimizer records both the selected revision and the rejected promotion
 decision instead of presenting the validation winner as a deployable
 improvement.
 
-## Conclusion and Next Evidence
+### 4.2 What Is and Is Not Proven
 
-The experiment supports the mechanism-level claim that reflective skill search
-and holdout gating work end to end. It does not support a positive recipe-skill
-effect claim. Such a claim would require:
+The experiment validates three mechanism-level properties:
 
-1. multiple independent optimizer and model runs;
-2. aggregate means and variance on frozen holdout cases;
-3. a public output contract that directly exposes every completeness field the
-   evaluator scores; and
-4. a promotion rule that treats quality as primary and reports cost objectives
-   separately when they disagree.
+1. reflection can turn run feedback into a concrete skill revision;
+2. search can compare that revision with the seed on separate cases; and
+3. the holdout gate can prevent a non-generalizing candidate from becoming
+   active.
+
+It does not validate the stronger product claim that reflective optimization
+already improves SkillCraft outcomes. That claim needs a candidate that wins
+on frozen holdout data across repeated runs.
+
+## 5. Conclusion and Next Steps
+
+The optimizer is useful today as an experimental search and safety framework,
+but this benchmark does not justify enabling automatic promotion by default.
+The next evaluation should:
+
+1. run multiple independent searches instead of relying on one mutation path;
+2. evaluate frozen candidates repeatedly and report mean and variance;
+3. optimize quality first and treat tokens, tool calls, and duration as
+   separate secondary objectives; and
+4. expand to more task families before making a general usefulness claim.
 
 Exact machine-readable values are in [`evidence.json`](evidence.json), and the
 frozen selected revision is in

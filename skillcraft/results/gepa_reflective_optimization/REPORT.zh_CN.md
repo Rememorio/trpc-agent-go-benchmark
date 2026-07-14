@@ -1,32 +1,36 @@
-# SkillCraft 反思式技能优化评测
+# 基于 SkillCraft 基准的反思式技能优化评估
 
-## 摘要
+## 1. 引言
 
 本实验在两个 SkillCraft 任务族上评测
-`trpc-agent-go/evolution/optimization` 的纯 Go 反思式优化器。优化器可以提出、
-筛选技能修订，但候选能否晋升，必须由反思过程从未见过的 holdout 数据做最终配对
-比较决定。
+`trpc-agent-go/evolution/optimization` 的纯 Go 反思式优化器。核心问题是：
 
-本次结果刻意保留为负结果：
+> **反思式搜索能否产生一个在未见过的 SkillCraft 任务上仍然有效的技能，
+> 而不是只改善搜索过程中见过的 case？**
 
-- weather 对照实验最终保留 seed；
-- recipe 搜索找到一个在 validation 上更省 token、且官方质量和通过率不变的候选；
-- 同一候选在 holdout 上反而消耗更多 token，质量和通过率仍没有提升；
-- 优化器因此正确返回 `promotion_eligible=false`。
+简短答案是：**这一次还没有。** Optimizer 找到一个在 validation 上更省 token
+的 recipe 候选，但这项收益没有泛化到 holdout，因此晋升门禁保留了原技能。
 
-这说明当前集成能够发现局部改动、拒绝弱变异、识别只在 validation 上成立的收益，
-并给出可审计的“不晋升”结论。它**不能**证明反思得到的技能提升了 GLM-5.2 的任务
-质量。
+| 实验 | Validation | Holdout | 结论 |
+| --- | --- | --- | --- |
+| Weather 对照 | 没有候选超过 seed | Seed 与最终选择相同 | 保留 seed |
+| Recipe 优化 | 质量相同，token 减少 23.81% | 质量相同，token 增加 60.46% | 拒绝候选 |
 
-## 实验设置
+这个结果证明搜索和晋升保护链路能够端到端工作：系统可以生成修订、拒绝弱变异、
+识别只在 validation 上成立的收益，并避免发布它。但它**还不能**证明 Optimizer
+已经能够稳定提升任务质量或效率。
+
+## 2. 实验设置
+
+### 2.1 基准与搜索配置
 
 | 项目 | 取值 |
 | --- | --- |
-| 记录日期 | 2026-07-13 |
-| Agent / reflection 模型 | 通过 OpenAI-compatible endpoint 调用 `glm52` |
-| Framework revision | `c0b120728b27` |
-| Benchmark base revision | `1edee87` |
-| SkillCraft revision | `0a9ba8808ba49bbc7bd40ad2e853896b8c3d4764` |
+| 基准 | SkillCraft |
+| 任务族 | `openmeteo-weather`、`recipe-cookbook-builder` |
+| 每个族的变体 | `e1` / `e2` / `e3` / `m1` / `m2` / `h1` |
+| Agent / reflection 模型 | `glm52` |
+| 评分 | SkillCraft 官方 evaluator 加成本目标 |
 | Feedback split | `e1,e2` |
 | Validation split | `e3,m1` |
 | Holdout split | `m2,h1` |
@@ -35,9 +39,22 @@
 
 三个 scale split 互不重叠。Reflection 只能看到 feedback case 的输出、评测反馈和
 受限 trace；validation 只用于选择候选；候选冻结后才运行 holdout。由于模型服务
-不保证严格遵守 optimizer seed，这些结果是配对的工程证据，不是统计显著性结论。
+不保证严格遵守 optimizer seed，这些结果是配对 benchmark 观察，不是统计显著性结论。
 
-## 评测指标与反馈
+### 2.2 优化机制
+
+Optimizer 重复执行一个带门禁的小型搜索闭环：
+
+1. 用当前技能运行一批 feedback case；
+2. 让 reflection 提出一个有边界的修订；
+3. 只在同一批 feedback case 上超过 parent 时保留修订；
+4. 在 validation 上选择存活候选中的最佳版本；
+5. 冻结候选，只有通过 holdout 才允许晋升。
+
+Feedback 负责驱动变异，validation 负责选择，holdout 负责保护晋升。Optimizer
+不会从 validation 或 holdout 输出中继续学习。
+
+### 2.3 评估协议
 
 每次评测分别保留官方质量、通过状态、agent tokens、工具调用数、耗时和是否实际
 加载技能。用于搜索的标量分数有严格的通过/失败边界；在已经通过的 case 中，官方
@@ -48,9 +65,9 @@ Evaluator 还会把安全、公开的运行证据转成可操作反馈。对于 
 `ingredient_dishes` 字段；它不会读取 evaluator 源码，也不会把 validation 或
 holdout case 暴露给 reflection。
 
-## 实验结果
+## 3. 实验结果
 
-### Weather 负对照
+### 3.1 Weather 负对照
 
 旧 weather seed 在所选 validation 和 holdout case 上已经达到官方质量 `1.0`。
 三次 mutation 没有通过严格的配对 feedback 接受条件；另一次虽然在 feedback 上
@@ -67,7 +84,7 @@ holdout case 暴露给 reflection。
 
 这符合负对照预期：候选仅仅“不同”，不足以被选择或晋升。
 
-### Recipe 搜索
+### 3.2 Recipe 搜索
 
 `description` 和 `when_to_use` 变异没有改善各自的配对 feedback batch，因此被
 拒绝；随后一个 `steps` 变异被接受。在 validation 上，它保持官方质量和通过率，
@@ -95,7 +112,7 @@ Holdout delta 低于所配置的非回退阈值，所以候选不能晋升。本
 case，接受 3 个候选（含 seed），消耗 3,819,019 agent tokens 和 11,537
 reflection tokens。
 
-### 冻结候选后的最终 A/B
+### 3.3 冻结候选 A/B
 
 为了把搜索过程与最终比较分开，实验关闭搜索（`max_iterations=0`），使用
 optimizer seed `29`，独立评测原 seed 和已经冻结的 recipe 候选。
@@ -112,7 +129,9 @@ optimizer seed `29`，独立评测原 seed 和已经冻结的 recipe 候选。
 两个 split 上的官方质量和通过率都没有变化。候选在 holdout 的墙钟时间更短，
 但 token 和工具调用更多，标量分数下降，所以仍不能晋升。
 
-## Bad Case 分析
+## 4. 讨论
+
+### 4.1 候选为什么失败
 
 该候选过拟合了 validation 中可见的效率信号。新增 checklist 明确了关联菜品字段，
 对 `e3` 有帮助；但同一套额外步骤在规模更大的 `m2,h1` 上引入了更多工作，而质量
@@ -122,15 +141,26 @@ optimizer seed `29`，独立评测原 seed 和已经冻结的 recipe 候选。
 随着任务规模变化而失去泛化能力。优化器会同时记录“validation 选中了谁”和
 “holdout 为什么拒绝晋升”，而不是把 validation winner 直接包装成可部署改进。
 
-## 结论与后续证据要求
+### 4.2 已经证明与尚未证明的部分
 
-本实验支持机制层面的结论：反思式技能搜索与 holdout gate 已经端到端工作。它不
-支持“recipe 技能有正向效果”的结论。要证明后者，还需要：
+本实验验证了三个机制层面的能力：
 
-1. 多个独立 optimizer seed 和模型运行；
-2. 对冻结 holdout case 汇总均值与方差；
-3. 让公开输出契约直接暴露 evaluator 所评分的全部 completeness 字段；
-4. 晋升规则继续以质量为第一优先级，并在成本指标相互冲突时分别报告。
+1. reflection 能把运行反馈转成具体的技能修订；
+2. search 能在隔离的 case 上比较候选与 seed；
+3. holdout gate 能阻止没有泛化的候选成为 active revision。
+
+但它没有验证更强的产品结论——“反思式优化已经改善 SkillCraft 结果”。要证明这一点，
+必须有候选在冻结的 holdout 上经过多次运行仍然稳定获胜。
+
+## 5. 结论与下一步
+
+当前 Optimizer 可以作为实验性的搜索与安全验证框架使用，但本次结果还不足以支持
+默认开启自动晋升。下一轮评测应该：
+
+1. 运行多个独立搜索，不依赖单次 mutation 路径；
+2. 对冻结候选重复评测并报告均值与方差；
+3. 以质量为第一目标，把 token、工具调用和耗时作为独立的次级目标；
+4. 扩展到更多任务族，再判断 Optimizer 是否具有普遍收益。
 
 精确数值见 [`evidence.json`](evidence.json)，冻结的候选修订见
 [`recipe_candidate.json`](recipe_candidate.json)。
