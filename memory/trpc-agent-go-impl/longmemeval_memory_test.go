@@ -218,6 +218,29 @@ func TestWaitForAutoMemoryTimeout(t *testing.T) {
 	}
 }
 
+func TestWaitForAutoMemoryError(t *testing.T) {
+	t.Parallel()
+
+	sess := session.NewSession(lmeAppName, "user", "session")
+	sess.SetState(memory.SessionStateKeyAutoMemoryLastError,
+		[]byte("generate embedding failed"))
+	err := waitForAutoMemory(context.Background(), sess, time.Now().UTC(), 0)
+	if err == nil || !strings.Contains(err.Error(), "generate embedding failed") {
+		t.Fatalf("expected auto memory error, got %v", err)
+	}
+}
+
+func TestWaitForAutoMemoryInvalidMarker(t *testing.T) {
+	t.Parallel()
+
+	sess := session.NewSession(lmeAppName, "user", "session")
+	sess.SetState(memory.SessionStateKeyAutoMemoryLastExtractAt, []byte("invalid"))
+	err := waitForAutoMemory(context.Background(), sess, time.Now().UTC(), time.Second)
+	if err == nil || !strings.Contains(err.Error(), "parse auto memory completion marker") {
+		t.Fatalf("expected completion marker error, got %v", err)
+	}
+}
+
 func TestLMETracingExtractorRecordsOperations(t *testing.T) {
 	t.Parallel()
 

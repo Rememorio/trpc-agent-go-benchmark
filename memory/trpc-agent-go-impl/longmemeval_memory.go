@@ -930,6 +930,9 @@ func runCaseBackend(
 				log.Printf("    %s session=%s pair=%d new=%d total=%d err=%v",
 					backend.Name(), s.ID, pairIdx, len(trace.NewMemories), trace.MemoryCount, err)
 			}
+			if err != nil {
+				goto afterIngest
+			}
 		}
 	}
 
@@ -1153,6 +1156,10 @@ func waitForAutoMemory(
 	defer ticker.Stop()
 
 	for {
+		if raw, ok := sess.GetState(memory.SessionStateKeyAutoMemoryLastError); ok &&
+			len(raw) > 0 {
+			return fmt.Errorf("auto memory job failed: %s", raw)
+		}
 		if raw, ok := sess.GetState(memory.SessionStateKeyAutoMemoryLastExtractAt); ok {
 			got, err := time.Parse(time.RFC3339Nano, string(raw))
 			if err != nil {

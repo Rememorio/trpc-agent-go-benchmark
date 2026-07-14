@@ -186,8 +186,10 @@ LongMemEval uses a separate dataset format because each question carries its
 own haystack sessions. The runner replays sessions in chronological order and
 triggers memory extraction after each user/assistant pair. The pgvector backend
 uses `memory.Service.EnqueueAutoMemoryJob` and waits for its session completion
-marker before continuing; self-hosted mem0 sends the same pair to its memory
-API. `results.json` records pgvector extraction operations, per-pair memory
+marker before continuing. Reported asynchronous extraction or persistence
+errors stop that backend immediately and are retained in the pair trace;
+self-hosted mem0 sends the same pair to its memory API. `results.json` records
+pgvector extraction operations, per-pair memory
 diffs, retrieval hits, answer text, LLM and embedding token usage, prompt-cache
 usage, timings, evidence recall, and build provenance for the benchmark and
 memory modules. This separates extraction, persistence, retrieval, and answer
