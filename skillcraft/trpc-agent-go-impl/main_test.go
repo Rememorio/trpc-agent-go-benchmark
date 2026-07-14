@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -364,6 +365,17 @@ func TestOutcomeFromEval(t *testing.T) {
 		require.LessOrEqual(t, len(o.Notes), 600)
 		require.Contains(t, o.Notes, "agent error: ")
 	})
+}
+
+func TestExecuteBenchmarkRejectsUnsupportedMode(t *testing.T) {
+	err := executeBenchmark(
+		context.Background(),
+		&benchmarkConfig{Mode: runMode("unknown")},
+		nil,
+		&benchmarkResult{},
+		nil,
+	)
+	require.ErrorContains(t, err, "unsupported mode")
 }
 
 func TestSeedManagedSkillsCopiesFolderTreeAndSkipsTopLevelFiles(t *testing.T) {

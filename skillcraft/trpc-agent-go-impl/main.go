@@ -97,7 +97,7 @@ var (
 	flagMode = flag.String(
 		"mode",
 		string(modeCompare),
-		"Run mode: baseline, evolution, or compare (runs baseline + evolution back-to-back)",
+		"Run mode: baseline, evolution, compare, or optimize",
 	)
 	flagModel = flag.String(
 		"model",
@@ -230,7 +230,7 @@ type benchmarkConfig struct {
 	EnableApprovalGate     bool
 	ApprovalGateShadow     bool
 	EffectivenessGate      bool
-	Optimization           optimizationBenchmarkConfig
+	Optimization           *optimizationBenchmarkConfig
 }
 
 type rawTaskConfig struct {
@@ -272,23 +272,24 @@ type taskDefinition struct {
 }
 
 type benchmarkResult struct {
-	Timestamp         string         `json:"timestamp"`
-	RequestedMode     runMode        `json:"requestedMode"`
-	Model             string         `json:"model"`
-	ReviewerModel     string         `json:"reviewerModel"`
-	Variant           string         `json:"variant,omitempty"`
-	SkillCraftRoot    string         `json:"skillcraftRoot"`
-	TaskRoot          string         `json:"taskRoot"`
-	BaseTask          string         `json:"baseTask,omitempty"`
-	Scales            []string       `json:"scales,omitempty"`
-	Tasks             []*taskSummary `json:"tasks"`
-	Baseline          *modeResult    `json:"baseline,omitempty"`
-	Evolution         *modeResult    `json:"evolution,omitempty"`
-	Comparison        *compareResult `json:"comparison,omitempty"`
-	OutputDir         string         `json:"outputDir"`
-	KeepWorkspaces    bool           `json:"keepWorkspaces"`
-	MaxToolIterations int            `json:"maxToolIterations"`
-	TaskTimeoutSec    int            `json:"taskTimeoutSeconds"`
+	Timestamp         string                       `json:"timestamp"`
+	RequestedMode     runMode                      `json:"requestedMode"`
+	Model             string                       `json:"model"`
+	ReviewerModel     string                       `json:"reviewerModel"`
+	Variant           string                       `json:"variant,omitempty"`
+	SkillCraftRoot    string                       `json:"skillcraftRoot"`
+	TaskRoot          string                       `json:"taskRoot"`
+	BaseTask          string                       `json:"baseTask,omitempty"`
+	Scales            []string                     `json:"scales,omitempty"`
+	Tasks             []*taskSummary               `json:"tasks"`
+	Baseline          *modeResult                  `json:"baseline,omitempty"`
+	Evolution         *modeResult                  `json:"evolution,omitempty"`
+	Comparison        *compareResult               `json:"comparison,omitempty"`
+	Optimization      *optimizationBenchmarkResult `json:"optimization,omitempty"`
+	OutputDir         string                       `json:"outputDir"`
+	KeepWorkspaces    bool                         `json:"keepWorkspaces"`
+	MaxToolIterations int                          `json:"maxToolIterations"`
+	TaskTimeoutSec    int                          `json:"taskTimeoutSeconds"`
 }
 
 type taskSummary struct {
@@ -562,56 +563,65 @@ func main() {
 	if err := os.MkdirAll(cfg.OutputDir, 0o755); err != nil {
 		log.Fatalf("create output dir: %v", err)
 	}
-	if cfg.Mode == modeOptimize {
-		if err := runOptimizationBenchmark(context.Background(), cfg, tasks); err != nil {
-			log.Fatalf("optimization run failed: %v", err)
-		}
-		log.Printf("Saved optimization outputs to %s", cfg.OutputDir)
-		return
-	}
 	flushPartial := func() {
 		if writeErr := writeResults(cfg.OutputDir, result); writeErr != nil {
 			log.Printf("warning: failed to flush partial results.json: %v", writeErr)
 		}
 	}
-
-	runBaseline := cfg.Mode == modeBaseline || cfg.Mode == modeCompare
-	runEvolution := cfg.Mode == modeEvolution || cfg.Mode == modeCompare
-
-	if runBaseline {
-		result.Baseline, err = runModeTasks(cfg, modeBaseline, tasks, func() {
-			flushPartial()
-		})
-		if err != nil {
-			flushPartial()
-			log.Fatalf("baseline run failed: %v", err)
-		}
+	if err := executeBenchmark(context.Background(), cfg, tasks, result, flushPartial); err != nil {
 		flushPartial()
+		log.Fatalf("benchmark run failed: %v", err)
 	}
-
-	if runEvolution {
-		result.Evolution, err = runModeTasks(cfg, modeEvolution, tasks, func() {
-			flushPartial()
-		})
-		if err != nil {
-			flushPartial()
-			log.Fatalf("evolution run failed: %v", err)
-		}
-		flushPartial()
-	}
-
-	if result.Baseline != nil && result.Evolution != nil {
-		result.Comparison = buildComparison(result.Baseline, result.Evolution)
-	}
-
-	if err := writeResults(cfg.OutputDir, result); err != nil {
-		log.Fatalf("write results: %v", err)
-	}
-	if err := writeReport(cfg.OutputDir, result); err != nil {
-		log.Fatalf("write report: %v", err)
+	if err := writeBenchmarkOutputs(context.Background(), cfg.OutputDir, result); err != nil {
+		log.Fatalf("write benchmark outputs: %v", err)
 	}
 
 	log.Printf("Saved benchmark outputs to %s", cfg.OutputDir)
+}
+
+func executeBenchmark(
+	ctx context.Context,
+	cfg *benchmarkConfig,
+	tasks []*taskDefinition,
+	result *benchmarkResult,
+	onProgress func(),
+) error {
+	if onProgress == nil {
+		onProgress = func() {}
+	}
+	if cfg.Mode == modeOptimize {
+		optimizationResult, err := runOptimizationBenchmark(ctx, cfg, tasks)
+		if err != nil {
+			return fmt.Errorf("optimize: %w", err)
+		}
+		result.Optimization = optimizationResult
+		return nil
+	}
+	if cfg.Mode != modeBaseline && cfg.Mode != modeEvolution && cfg.Mode != modeCompare {
+		return fmt.Errorf("unsupported mode %q", cfg.Mode)
+	}
+
+	runBaseline := cfg.Mode == modeBaseline || cfg.Mode == modeCompare
+	runEvolution := cfg.Mode == modeEvolution || cfg.Mode == modeCompare
+	var err error
+	if runBaseline {
+		result.Baseline, err = runModeTasks(cfg, modeBaseline, tasks, onProgress)
+		if err != nil {
+			return fmt.Errorf("baseline: %w", err)
+		}
+		onProgress()
+	}
+	if runEvolution {
+		result.Evolution, err = runModeTasks(cfg, modeEvolution, tasks, onProgress)
+		if err != nil {
+			return fmt.Errorf("evolution: %w", err)
+		}
+		onProgress()
+	}
+	if result.Baseline != nil && result.Evolution != nil {
+		result.Comparison = buildComparison(result.Baseline, result.Evolution)
+	}
+	return nil
 }
 
 func buildConfig() (*benchmarkConfig, error) {
@@ -682,7 +692,7 @@ func buildConfig() (*benchmarkConfig, error) {
 		if err != nil {
 			return nil, err
 		}
-		cfg.Optimization = optimizationCfg
+		cfg.Optimization = &optimizationCfg
 	}
 	if *flagTaskTimeoutSeconds > 0 {
 		cfg.TaskTimeout = time.Duration(*flagTaskTimeoutSeconds) * time.Second
@@ -2135,12 +2145,49 @@ func writeResults(outputDir string, result *benchmarkResult) error {
 	path := filepath.Join(outputDir, "results.json")
 	data, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
+		return fmt.Errorf("marshal benchmark result: %w", err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return fmt.Errorf("write benchmark result: %w", err)
+	}
+	return nil
+}
+
+func writeBenchmarkOutputs(
+	ctx context.Context,
+	outputDir string,
+	result *benchmarkResult,
+) error {
+	if result == nil {
+		return errors.New("nil benchmark result")
+	}
+	if err := os.MkdirAll(outputDir, 0o755); err != nil {
+		return fmt.Errorf("create output directory: %w", err)
+	}
+	if result.Optimization != nil {
+		optimizationResult := result.Optimization.Result
+		if optimizationResult == nil || optimizationResult.Spec == nil {
+			return errors.New("incomplete optimization result")
+		}
+		if err := evolution.NewFilePublisher(
+			filepath.Join(outputDir, "selected_skill"),
+		).UpsertSkill(ctx, optimizationResult.Spec); err != nil {
+			return fmt.Errorf("write selected skill: %w", err)
+		}
+	}
+	if err := writeResults(outputDir, result); err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o644)
+	if err := writeReport(outputDir, result); err != nil {
+		return err
+	}
+	return nil
 }
 
 func writeReport(outputDir string, result *benchmarkResult) error {
+	if result == nil {
+		return errors.New("nil benchmark result")
+	}
 	var b strings.Builder
 	b.WriteString("# SkillCraft Benchmark Report\n\n")
 	fmt.Fprintf(&b, "- Time: `%s`\n", result.Timestamp)
@@ -2167,8 +2214,14 @@ func writeReport(outputDir string, result *benchmarkResult) error {
 	if result.Comparison != nil {
 		appendComparisonSection(&b, "Comparison (evolution vs. baseline)", result.Comparison)
 	}
+	if result.Optimization != nil {
+		appendOptimizationSection(&b, result.Optimization)
+	}
 
-	return os.WriteFile(filepath.Join(outputDir, "REPORT.md"), []byte(b.String()), 0o644)
+	if err := os.WriteFile(filepath.Join(outputDir, "REPORT.md"), []byte(b.String()), 0o644); err != nil {
+		return fmt.Errorf("write benchmark report: %w", err)
+	}
+	return nil
 }
 
 func appendComparisonSection(b *strings.Builder, title string, c *compareResult) {

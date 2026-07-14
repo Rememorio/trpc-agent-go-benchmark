@@ -1,7 +1,17 @@
 # Evaluation Results — SkillCraft
 
-This directory stores the SkillCraft benchmark artefacts for
-`trpc-agent-go`'s `evolution` loop.
+This directory stores SkillCraft benchmark artefacts for both the asynchronous
+`evolution` loop and offline reflective skill optimization.
+
+The two evaluation tracks answer different questions:
+
+- [`REPORT.md`](REPORT.md) and [`REPORT.zh_CN.md`](REPORT.zh_CN.md) evaluate
+  whether the online evolution loop helps across repeated task sequences.
+- [`gepa_reflective_optimization/REPORT.md`](gepa_reflective_optimization/REPORT.md)
+  and
+  [`gepa_reflective_optimization/REPORT.zh_CN.md`](gepa_reflective_optimization/REPORT.zh_CN.md)
+  evaluate whether offline reflective search can select revisions and reject a
+  validation-only win at the holdout gate.
 
 The old headline in this folder came from a single historical run. The
 current source of truth is the latest **three-run full compare batch**:
@@ -84,6 +94,12 @@ results/
 |-- README.md
 |-- REPORT.md
 |-- REPORT.zh_CN.md
+|-- gepa_reflective_optimization/
+|   |-- README.md
+|   |-- REPORT.md
+|   |-- REPORT.zh_CN.md
+|   |-- evidence.json
+|   +-- recipe_candidate.json
 |-- tools/
 |   |-- extract_metrics.py
 |   |-- aggregate_runs.py

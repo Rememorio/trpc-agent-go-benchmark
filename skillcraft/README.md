@@ -1,12 +1,14 @@
 # SkillCraft Benchmark for trpc-agent-go
 
 This benchmark runs local [SkillCraft](https://github.com/shiqichen17/SkillCraft)
-tasks with `trpc-agent-go` and compares:
+tasks with `trpc-agent-go` across four run modes:
 
 - `baseline`: no learned skills.
 - `evolution`: reuse skills extracted asynchronously by the `evolution`
   reviewer between tasks.
 - `compare`: run `baseline` + `evolution` back-to-back and report deltas.
+- `optimize`: run offline reflective search over one seed skill, select on a
+  validation split, and make the promotion decision on an unseen holdout split.
 
 `trpc-agent-go` intentionally keeps skill management on the
 reviewer-driven async path. The old in-flow `skill_manage` experiment
@@ -152,7 +154,8 @@ for the final deliverable.
 
 `-mode optimize` evaluates one existing skill with the pure-Go
 `evolution/optimization` package. Unlike the asynchronous `evolution` mode,
-it does not learn from tasks in sequence. It runs an explicit offline search:
+it does not learn from tasks in sequence. It uses the same benchmark result and
+report pipeline as every other mode, but runs an explicit offline search:
 
 1. evaluate the seed skill on validation tasks;
 2. run paired parent/child feedback tasks and ask the reflection model to
@@ -200,21 +203,25 @@ which fields are absent. For feedback cases, the adapter enriches that signal
 without reading evaluator source: it combines the task's declared
 `meta.tools_used` with the generated cookbook JSON and reports missing
 `category_dishes`, `cuisine_dishes`, or `ingredient_dishes` fields by recipe
-count. This is the
-actionable side information needed for reflective mutation. Validation and
-holdout results remain hidden from reflection.
+count. This is the actionable side information needed for reflective mutation.
+Validation and holdout results remain hidden from reflection.
 
-Outputs include `optimization_result.json`, `OPTIMIZATION_REPORT.md`, the
-selected `optimized_skill/`, and a full `optimization_experiments/` lineage.
-The result and report expose `promotion_eligible` and `promotion_reason` even
-when revision submission is disabled, so a validation winner that regresses on
-holdout is explicit rather than silently presented as deployable.
+Like the other modes, optimization writes structured data to `results.json` and
+the readable decision summary to `REPORT.md`. Its mode-specific artifacts are
+the validation-selected `selected_skill/`, evaluated candidate snapshots under
+`optimization_candidates/`, and the full `optimization_experiments/` lineage.
+The canonical result and report expose `promotion_eligible` and
+`promotion_reason`, so a validation winner that regresses on holdout is explicit
+rather than silently presented as deployable.
 Use repeated cases and multiple optimizer seeds for effectiveness claims:
 the optimizer seed makes sampling reproducible, but an OpenAI-compatible
 model endpoint may still be nondeterministic.
 
 A sanitized GLM-5.2 search record is kept under
-[`results/gepa_reflective_optimization`](results/gepa_reflective_optimization/README.md).
+[`results/gepa_reflective_optimization`](results/gepa_reflective_optimization/README.md),
+with full reports in
+[`REPORT.md`](results/gepa_reflective_optimization/REPORT.md) and
+[`REPORT.zh_CN.md`](results/gepa_reflective_optimization/REPORT.zh_CN.md).
 It intentionally reports a non-promotable result: the reflected recipe skill
 improved validation efficiency but regressed on holdout cost. The evidence is
 useful for verifying the holdout gate, not for claiming a recipe-skill quality
@@ -228,7 +235,7 @@ gain.
 | `-tasks` | Explicit task directories, comma-separated |
 | `-base-task` | Base task family, e.g. `cat-facts-collector` |
 | `-scales` | Scale list for `-base-task`, e.g. `e1,e2,e3` |
-| `-mode` | `baseline`, `evolution`, or `compare` |
+| `-mode` | `baseline`, `evolution`, `compare`, or `optimize` |
 | `-model` | Agent model |
 | `-reviewer-model` | Evolution reviewer model |
 | `-output` | Result directory |
@@ -260,6 +267,12 @@ The output directory contains:
   `revisions/<revision-id>/{meta.json, SKILL.md}`, an append-only
   `audit.log`, and an `active.txt` pointer. Rolling back a skill is a
   one-line edit to `active.txt`.
+- `selected_skill/`: validation-selected seed or candidate for `-mode optimize`;
+  its presence does not imply that the holdout gate approved promotion.
+- `optimization_candidates/`: content-addressed candidate snapshots evaluated
+  by optimize mode.
+- `optimization_experiments/`: optimizer lineage, paired seeds, feedback, and
+  bounded traces used to audit selection and promotion decisions.
 
 ## Requirements
 
