@@ -1,5 +1,5 @@
-github.com/Rememorio/trpc-agent-go v0.0.0-20260713125514-c0b120728b27 h1:2z5wJss8XMNSfO4uyMKVMdoq58fcXQylus++jWth8SQ=
-github.com/Rememorio/trpc-agent-go v0.0.0-20260713125514-c0b120728b27/go.mod h1:csXfevo6y6lEJm2D9rXtztbgxWdU6169/lwnv/dMipE=
+github.com/Rememorio/trpc-agent-go v0.0.0-20260714032518-93a3cbbd06c6 h1:ZKIH+bdVJdhb2Zk5KKDWUT6UT7JtU+mkAiHDbUlc2Qw=
+github.com/Rememorio/trpc-agent-go v0.0.0-20260714032518-93a3cbbd06c6/go.mod h1:csXfevo6y6lEJm2D9rXtztbgxWdU6169/lwnv/dMipE=
 github.com/bmatcuk/doublestar/v4 v4.9.1 h1:X8jg9rRZmJd4yRy7ZeNDRnM+T3ZfHv15JiBJ/avrEXE=
 github.com/bmatcuk/doublestar/v4 v4.9.1/go.mod h1:xBQ8jztBU6kakFMg+8WGxn0c6z1fTSPVIjEY1Wr7jzc=
 github.com/bufbuild/protocompile v0.14.1 h1:iA73zAf/fyljNjQKwYzUHD6AD4R8KMasmwa/FBatYVw=
