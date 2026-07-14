@@ -16,7 +16,7 @@
 ### 检索模式
 - `none`：不启用插件，所有工具直接给主模型（baseline）
 - `keyword`：`tool_search` 用内置关键词匹配（新默认）
-- `knowledge`：`tool_search` 用 embedding 语义检索
+- `embedding`：`tool_search` 用 embedding 语义检索
 - `dispatch`：模型只看到 `tool_search` + `call_tool` 两个工具
 
 ### 快速开始
@@ -25,7 +25,7 @@
 在 `toolsearch/trpc-agent-go-impl` 目录运行（四种模式各跑一次，产出可对比的 summary）：
 - `go run . -model <MODEL_NAME> -mode none      -evalset toolsearch-catalog-multiturn -max-tools 5`
 - `go run . -model <MODEL_NAME> -mode keyword   -evalset toolsearch-catalog-multiturn -max-tools 5`
-- `go run . -model <MODEL_NAME> -mode knowledge -evalset toolsearch-catalog-multiturn -max-tools 5`
+- `go run . -model <MODEL_NAME> -mode embedding -evalset toolsearch-catalog-multiturn -max-tools 5`
 - `go run . -model <MODEL_NAME> -mode dispatch  -evalset toolsearch-catalog-multiturn -max-tools 5`
 
 ### 输入与产物

@@ -38,9 +38,9 @@ const (
 func main() {
 	var (
 		flagModel      = flag.String("model", defaultModelName(), "chat model name (e.g. deepseek-chat, gpt-4o-mini)")
-		flagMode       = flag.String("mode", string(ModeKeywordSearch), "toolsearch mode: none | keyword | knowledge | dispatch")
+		flagMode       = flag.String("mode", string(ModeKeywordSearch), "toolsearch mode: none | keyword | embedding | dispatch")
 		flagMaxTools   = flag.Int("max-tools", 3, "max tools selected by toolsearch")
-		flagEmbedModel = flag.String("embed-model", "text-embedding-3-small", "embedding model name (knowledge mode)")
+		flagEmbedModel = flag.String("embed-model", "text-embedding-3-small", "embedding model name (embedding mode)")
 		flagDataDir    = flag.String("data-dir", "../data", "base dir for evalset/metrics")
 		flagOutputDir  = flag.String("output-dir", "../output", "output dir for eval results")
 		flagEvalSetID  = flag.String("evalset", defaultEvalSetID, "eval set id")

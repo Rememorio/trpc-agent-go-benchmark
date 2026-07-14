@@ -31,7 +31,7 @@ const compareNameUnwrapCallTool = "unwrap_call_tool"
 // so without normalization every call_tool-mode turn would score 0 even when the
 // model chose the correct tool. This compare rewrites each actual `call_tool`
 // entry's Name to its arguments.tool_name, then delegates to the standard
-// subset + regex matcher. For every other mode (none/keyword/knowledge) there is
+// subset + regex matcher. For every other mode (none/keyword/embedding) there is
 // no `call_tool` in the trajectory, so the normalization is a no-op and behavior
 // is identical to the built-in criterion.
 func unwrapCallToolCompare() tooltrajectory.CompareFunc {

@@ -14,21 +14,21 @@
 - 一个常驻 preset 工具：`web_search`
 
 每个工具都是「仅元数据」（name + description），执行被打桩（返回固定 JSON），
-所以 benchmark 期间唯一的真实网络流量是模型补全本身（knowledge 模式额外有 embedding 调用）。
+所以 benchmark 期间唯一的真实网络流量是模型补全本身（embedding 模式额外有向量化调用）。
 
 ### 运行
 在本目录执行：
 - `go run . -model deepseek-chat -mode keyword -evalset toolsearch-catalog-multiturn -max-tools 5`
 
 ### 重要参数
-- `-mode`: `none | keyword | knowledge | dispatch`
+- `-mode`: `none | keyword | embedding | dispatch`
   - `none`：不启用插件，所有工具直接提供给主模型（baseline）
   - `keyword`：`NewPlugin` + `WithToolboxes`，`tool_search` 用内置关键词匹配解析 `queries`（新默认）
-  - `knowledge`：在 keyword 基础上加 `WithToolKnowledge`，`queries` 用 embedding（向量）相似度排序
+  - `embedding`：在 keyword 基础上加 `WithSemanticToolIndex`，`queries` 用 embedding（向量）相似度排序
   - `dispatch`：在 keyword 基础上加 `WithInvocationMode(DispatchToolCalls)`，模型只看到 `tool_search` + `call_tool` 两个工具
 - `-data-dir`: 默认 `../data`（读取 `<data-dir>/<app>/<evalset>.{evalset,metrics}.json`）
 - `-output-dir`: 默认 `../output`（evaluation result 落盘目录）
-- `-embed-model`: 默认 `text-embedding-3-small`（仅 `knowledge` 模式使用）
+- `-embed-model`: 默认 `text-embedding-3-small`（仅 `embedding` 模式使用）
 
 ### 关于重构后 API 的说明
 重构后的插件**没有了「LLM 选 top-K」模式**。旧版由一次独立的 LLM 调用从工具列表里挑选 Top-K；
@@ -36,7 +36,7 @@
 
 - `keyword` / `dispatch` 模式**不产生独立的 out-of-band LLM 调用**——其开销（携带目录的更大 prompt、
   `tool_search` 结果、以及工具调用的 completion）已经计入 chat 桶。
-- `knowledge` 模式唯一的 out-of-band 开销是 **embedding 调用**，通过 `countingEmbedder` 包装 embedder，
+- `embedding` 模式唯一的 out-of-band 开销是 **embedding 调用**，通过 `countingEmbedder` 包装 embedder，
   在源头把 token 记入 toolsearch 桶（不依赖插件内部已内联化、每轮重置的 usage accumulator）。
 
 ### call_tool 模式与指标
@@ -47,7 +47,7 @@ tool-trajectory 指标按**工具名**匹配，因此 benchmark 注册了一个�
 
 ### 环境变量
 - `MODEL_NAME`: 未显式传 `-model` 时作为默认
-- `OPENAI_API_KEY` / `OPENAI_BASE_URL`: 取决于所用 model provider（knowledge 模式还需 embedding 端点）
+- `OPENAI_API_KEY` / `OPENAI_BASE_URL`: 取决于所用 model provider（embedding 模式还需 embedding 端点）
 
 ### 依赖
 `go.mod` 通过 `replace` 指向本地 `../../../trpc-agent-go`（及其 `evaluation` 子模块），

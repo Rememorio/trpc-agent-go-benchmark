@@ -25,7 +25,7 @@ import (
 // out-of-band LLM call — their overhead is already captured in the chat bucket
 // (a larger prompt carrying the catalog + the tool_search result, plus the extra
 // completion for the tool call). Embedding is the ONLY out-of-band cost, and it
-// only occurs in knowledge mode. Counting it at the embedder is therefore both
+// only occurs in embedding mode. Counting it at the embedder is therefore both
 // sufficient and robust: it does not depend on the plugin's internal per-turn
 // usage accumulator, which is re-seeded every model call.
 type countingEmbedder struct {

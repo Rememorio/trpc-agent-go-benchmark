@@ -33,7 +33,7 @@ const baselineInstruction = "You MUST use the provided tools to answer the user'
 	"Do NOT call additional tools after you have the result, and never ask clarifying questions. " +
 	"Treat the tool's returned result as authoritative and final."
 
-// searchInstruction is used by the tool_search modes (keyword/knowledge/dispatch).
+// searchInstruction is used by the tool_search modes (keyword/embedding/dispatch).
 // It carries the {deferred_tools_section} placeholder the plugin replaces with
 // the toolbox catalog on every model turn, plus the tool-use policy from the
 // plugin's accuracy test: always call tool_search first, prefer an exact tool
@@ -59,7 +59,7 @@ Tool-use policy (MANDATORY, applies to every user turn):
 
 // NewInstrumentedRunner builds the benchmark runner for the configured mode.
 // It wires an embedder that folds each turn's tool_search embedding usage
-// (knowledge mode only) into the collector, then wraps the runner in a
+// (embedding mode only) into the collector, then wraps the runner in a
 // CountingRunner that records per-turn chat usage and wall time.
 func NewInstrumentedRunner(cfg BenchmarkConfig, collector *Collector) (runner.Runner, error) {
 	chatModel := openai.New(cfg.ModelName)
@@ -111,7 +111,7 @@ func buildPlugins(cfg BenchmarkConfig, collector *Collector, chatModel model.Mod
 	opts := []toolsearch.Option{
 		toolsearch.WithToolboxes(toolboxs.Toolboxes()),
 		toolsearch.WithDeferredTools(toolboxs.DefaultTools()),
-		toolsearch.WithMaxTools(cfg.MaxTools),
+		toolsearch.WithMaxResults(cfg.MaxTools),
 		toolsearch.WithCatalogInDescription(false),
 	}
 
@@ -121,23 +121,23 @@ func buildPlugins(cfg BenchmarkConfig, collector *Collector, chatModel model.Mod
 	case ModeDispatch:
 		// Collapse the loaded toolset behind tool_search + call_tool.
 		opts = append(opts, toolsearch.WithInvocationMode(toolsearch.DispatchToolCalls))
-	case ModeKnowledgeSearch:
+	case ModeEmbeddingSearch:
 		// Wrap the embedder so its token usage lands in the tool-search bucket.
 		emb := newCountingEmbedder(
 			openaiembedder.New(openaiembedder.WithModel(cfg.EmbedModel)),
 			collector,
 		)
 
-		toolKnowledge, err := toolsearch.NewToolKnowledge(
+		semanticIndex, err := toolsearch.NewSemanticToolIndex(
 			emb,
 			toolsearch.WithVectorStore(vectorinmemory.New()),
 		)
 		if err != nil {
-			return nil, fmt.Errorf("create tool knowledge: %w", err)
+			return nil, fmt.Errorf("create semantic tool index: %w", err)
 		}
 		// WithFailOpen keeps tools reachable if embedding fails mid-run.
 		opts = append(opts,
-			toolsearch.WithToolKnowledge(toolKnowledge),
+			toolsearch.WithSemanticToolIndex(semanticIndex),
 			toolsearch.WithEmbeddingFailOpen(),
 		)
 	default:
