@@ -257,16 +257,18 @@ go run . \
   -output ../results/lme-candidate
 ```
 
-The judge command checkpoints `judged_results.json` after each case. Analysis
-treats a valid semantic-judge result as the primary correctness signal and
-falls back to exact
+The judge command checkpoints `judged_results.json` after each case. When
+resuming from that file with the same judge model, it keeps validated verdicts
+and retries only missing or invalid ones. Analysis treats a valid
+semantic-judge result as the primary correctness signal and falls back to exact
 match when no judge result is available. It writes `analysis.md` and
 `bad_cases.tsv`, including raw pipeline stages, evidence status, backend
 disagreements, and answer-gap diagnostics. Comparison uses the same correctness
 rule and writes `comparison.md` and `comparison.tsv` with correctness, EM, F1,
-BLEU, stage, and answer deltas by backend and question. Analysis stage labels
-are judge-aware for answer correctness. `results.json` retains the pre-judge
-pipeline label, which is also exposed as `raw_stage` for bad cases.
+BLEU, stage, and answer deltas for question/backend pairs present in both runs.
+Analysis stage labels are judge-aware for answer correctness. `results.json`
+retains the pre-judge pipeline label, which is also exposed as `raw_stage` for
+bad cases.
 The scored answer is the raw model response: the runner does not complete
 truncated entities from retrieval hits, extract a preferred list, or perform
 arithmetic as an answer post-processing step. The answer prompt preserves each

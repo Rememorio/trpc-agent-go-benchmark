@@ -889,6 +889,7 @@ func TestParseLongMemEvalJudge(t *testing.T) {
 	}{
 		{raw: `{"correct":true}`, want: "yes"},
 		{raw: `{"correct":false}`, want: "no"},
+		{raw: `Analysis omitted. {"correct":false}`, want: "no"},
 	} {
 		got, err := parseLongMemEvalJudgeRepair(test.raw)
 		if err != nil || got != test.want {
@@ -897,6 +898,28 @@ func TestParseLongMemEvalJudge(t *testing.T) {
 	}
 	if _, err := parseLongMemEvalJudgeRepair(`{"answer":"yes"}`); err == nil {
 		t.Fatal("verbose repair response should fail")
+	}
+}
+
+func TestShouldReuseLongMemEvalJudge(t *testing.T) {
+	t.Parallel()
+
+	valid := &backendResult{Judge: &lmeJudgeResult{
+		Model: "judge-model", Raw: "VERDICT: yes", Correct: true,
+	}}
+	if !shouldReuseLongMemEvalJudge(valid, "judge-model") {
+		t.Fatal("valid verdict from the same model should be reused")
+	}
+	for _, result := range []*backendResult{
+		nil,
+		{},
+		{Judge: &lmeJudgeResult{Model: "other-model", Raw: "VERDICT: yes", Correct: true}},
+		{Judge: &lmeJudgeResult{Model: "judge-model", Raw: "VERDICT: yes", Correct: true, Error: "failed"}},
+		{Judge: &lmeJudgeResult{Model: "judge-model", Raw: "VERDICT: yes", Correct: false}},
+	} {
+		if shouldReuseLongMemEvalJudge(result, "judge-model") {
+			t.Fatalf("invalid or incompatible judge was reused: %#v", result)
+		}
 	}
 }
 
@@ -946,6 +969,15 @@ func TestJudgeLongMemEvalAnswerRepairsMissingVerdict(t *testing.T) {
 	}
 	if len(llm.requests) != 2 || llm.requests[1].StructuredOutput == nil {
 		t.Fatalf("repair request should require structured output: %#v", llm.requests)
+	}
+	if llm.requests[0].MaxTokens == nil || *llm.requests[0].MaxTokens != 1024 {
+		t.Fatalf("primary judge max tokens = %v, want 1024", llm.requests[0].MaxTokens)
+	}
+	if llm.requests[1].MaxTokens == nil || *llm.requests[1].MaxTokens != 512 {
+		t.Fatalf("repair judge max tokens = %v, want 512", llm.requests[1].MaxTokens)
+	}
+	if got := llm.requests[1].Messages[1].Content; !strings.Contains(got, `{"correct":true}`) {
+		t.Fatalf("repair request does not require compact JSON: %q", got)
 	}
 	correct, err := parseLongMemEvalJudge(raw)
 	if err != nil || !correct {

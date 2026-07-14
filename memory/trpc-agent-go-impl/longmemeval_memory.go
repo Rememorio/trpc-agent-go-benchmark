@@ -1390,6 +1390,10 @@ func judgeLongMemEvalResults(ctx context.Context, path, outputDir string) error 
 				continue
 			}
 			restoreLongMemEvalRawAnswer(cr, br)
+			if shouldReuseLongMemEvalJudge(br, modelName) {
+				log.Printf("  %s judge already valid; skipping", backendName)
+				continue
+			}
 			if strings.TrimSpace(br.Answer) == "" {
 				br.Judge = &lmeJudgeResult{
 					Model: modelName,
@@ -1431,6 +1435,14 @@ func judgeLongMemEvalResults(ctx context.Context, path, outputDir string) error 
 	printLongMemEvalSummary(&result)
 	log.Printf("LongMemEval judged results written to %s", outPath)
 	return nil
+}
+
+func shouldReuseLongMemEvalJudge(br *backendResult, modelName string) bool {
+	if br == nil || br.Judge == nil || br.Judge.Model != modelName {
+		return false
+	}
+	_, valid := longMemEvalJudgeCorrect(br)
+	return valid
 }
 
 func restoreLongMemEvalRawAnswer(cr *caseResult, br *backendResult) {
@@ -1540,7 +1552,7 @@ func generateLongMemEvalJudgeResponse(
 }
 
 func newLongMemEvalJudgeRequest(prompt string) *model.Request {
-	maxTokens := 512
+	maxTokens := 1024
 	temp := 0.0
 	reasoningEffort := "low"
 	thinkingEnabled := false
@@ -1560,18 +1572,20 @@ func newLongMemEvalJudgeRequest(prompt string) *model.Request {
 }
 
 func newLongMemEvalJudgeRepairRequest(prompt string) *model.Request {
-	maxTokens := 128
+	maxTokens := 512
 	temp := 0.0
+	reasoningEffort := "low"
 	thinkingEnabled := false
 	return &model.Request{
 		Messages: []model.Message{
-			model.NewSystemMessage("Return only the required JSON object. Set correct to true for yes and false for no."),
-			model.NewUserMessage(prompt),
+			model.NewSystemMessage("Return only one JSON object matching the schema. Do not include analysis, markdown, or a verdict line."),
+			model.NewUserMessage(fmt.Sprintf("Evaluate the task below. Ignore its output-format instruction and return only {\"correct\":true} or {\"correct\":false}.\n\n<task>\n%s\n</task>", prompt)),
 		},
 		GenerationConfig: model.GenerationConfig{
 			Stream:          false,
 			MaxTokens:       &maxTokens,
 			Temperature:     &temp,
+			ReasoningEffort: &reasoningEffort,
 			ThinkingEnabled: &thinkingEnabled,
 		},
 		StructuredOutput: &model.StructuredOutput{
@@ -1680,10 +1694,16 @@ func parseLongMemEvalJudge(raw string) (bool, error) {
 }
 
 func parseLongMemEvalJudgeRepair(raw string) (string, error) {
+	candidate := strings.TrimSpace(raw)
+	if start := strings.LastIndex(candidate, "{"); start >= 0 {
+		if end := strings.Index(candidate[start:], "}"); end >= 0 {
+			candidate = candidate[start : start+end+1]
+		}
+	}
 	var response struct {
 		Correct *bool `json:"correct"`
 	}
-	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &response); err != nil {
+	if err := json.Unmarshal([]byte(candidate), &response); err != nil {
 		return "", fmt.Errorf("decode judge verdict repair %q: %w", truncate(raw, 80), err)
 	}
 	if response.Correct == nil {
