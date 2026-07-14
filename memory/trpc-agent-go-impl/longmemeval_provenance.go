@@ -9,11 +9,20 @@
 
 package main
 
-import "runtime/debug"
+import (
+	"runtime/debug"
+	"strconv"
+	"strings"
+)
 
 const (
 	lmeAgentModulePath    = "trpc.group/trpc-go/trpc-agent-go"
 	lmePGVectorModulePath = "trpc.group/trpc-go/trpc-agent-go/memory/pgvector"
+)
+
+var (
+	lmeInjectedBuildRevision string
+	lmeInjectedBuildModified string
 )
 
 type lmeBuildProvenance struct {
@@ -32,7 +41,26 @@ type lmeModuleProvenance struct {
 
 func currentLongMemEvalBuildProvenance() lmeBuildProvenance {
 	info, ok := debug.ReadBuildInfo()
-	return longMemEvalBuildProvenance(info, ok)
+	result := longMemEvalBuildProvenance(info, ok)
+	return applyLongMemEvalInjectedProvenance(
+		result,
+		lmeInjectedBuildRevision,
+		lmeInjectedBuildModified,
+	)
+}
+
+func applyLongMemEvalInjectedProvenance(
+	result lmeBuildProvenance,
+	revision string,
+	modified string,
+) lmeBuildProvenance {
+	if result.Revision == "" {
+		result.Revision = strings.TrimSpace(revision)
+	}
+	if value, err := strconv.ParseBool(strings.TrimSpace(modified)); err == nil {
+		result.Modified = value
+	}
+	return result
 }
 
 func longMemEvalBuildProvenance(info *debug.BuildInfo, ok bool) lmeBuildProvenance {

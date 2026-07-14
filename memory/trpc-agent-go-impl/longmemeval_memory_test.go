@@ -95,6 +95,22 @@ func TestLongMemEvalBuildProvenance(t *testing.T) {
 	if empty.GoVersion != "" || empty.Revision != "" || empty.Modified || empty.Modules != nil {
 		t.Fatalf("unexpected unavailable build provenance: %+v", empty)
 	}
+	injected := applyLongMemEvalInjectedProvenance(empty, " injected-sha ", "true")
+	if injected.Revision != "injected-sha" || !injected.Modified {
+		t.Fatalf("injected provenance was not applied: %+v", injected)
+	}
+	native := applyLongMemEvalInjectedProvenance(
+		lmeBuildProvenance{Revision: "native-sha", Modified: true},
+		"injected-sha",
+		"false",
+	)
+	if native.Revision != "native-sha" || native.Modified {
+		t.Fatalf("native revision or injected modified state was not preserved: %+v", native)
+	}
+	invalid := applyLongMemEvalInjectedProvenance(empty, "", "not-a-bool")
+	if invalid.Revision != "" || invalid.Modified {
+		t.Fatalf("invalid injected provenance changed result: %+v", invalid)
+	}
 }
 
 func TestWriteLongMemEvalResultsErrors(t *testing.T) {
