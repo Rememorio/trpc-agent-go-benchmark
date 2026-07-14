@@ -127,3 +127,9 @@ go run . \
 The seed137 replay used benchmark revision `fc0469392299248e281cb9dfc48bd023b54f369f`
 and trpc-agent-go revision `ce3dd3b76ca0`. Generated result directories remain
 ignored because they contain large traces and model outputs.
+
+That benchmark revision did not yet capture mem0 configuration when the
+temperature flag was left at its default. The sanitized configuration was read
+back after replay and added only to result metadata; the audit record verifies
+that the canonical case payload hash was unchanged. The current runner records
+the configuration automatically for every selected mem0 run.
