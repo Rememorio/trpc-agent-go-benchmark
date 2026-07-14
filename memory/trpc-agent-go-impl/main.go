@@ -167,6 +167,11 @@ var (
 		"",
 		"Analyze an existing LongMemEval results.json and write analysis files",
 	)
+	flagLMEReanswerResults = flag.String(
+		"lme-reanswer-results",
+		"",
+		"Regenerate answers from retrieval hits in an existing LongMemEval results.json",
+	)
 	flagLMEJudgeResults = flag.String(
 		"lme-judge-results",
 		"",

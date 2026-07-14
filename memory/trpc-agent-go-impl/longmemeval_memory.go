@@ -28,7 +28,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -715,6 +714,9 @@ func runLongMemEvalMemory(ctx context.Context) error {
 	if path := strings.TrimSpace(*flagLMEJudgeResults); path != "" {
 		return judgeLongMemEvalResults(ctx, path, longMemEvalAnalysisOutputDir(path))
 	}
+	if path := strings.TrimSpace(*flagLMEReanswerResults); path != "" {
+		return reanswerLongMemEvalResults(ctx, path, longMemEvalAnalysisOutputDir(path))
+	}
 	if path := strings.TrimSpace(*flagLMEAnalyzeResults); path != "" {
 		return analyzeLongMemEvalResults(path, longMemEvalAnalysisOutputDir(path))
 	}
@@ -747,13 +749,17 @@ func runLongMemEvalMemory(ctx context.Context) error {
 	results := &runResult{
 		Metadata: map[string]any{
 			"benchmark":               "longmemeval-memory",
+			"build":                   currentLongMemEvalBuildProvenance(),
 			"dataset":                 datasetPath,
 			"model":                   modelName,
 			"model_variant":           modelVariant,
 			"model_temperature":       0,
 			"model_call_timeout":      flagLMEModelCallTimeout.String(),
+			"embedding_model":         getEmbedModelName(),
 			"backends":                backends,
 			"top_k":                   *flagVectorTopK,
+			"table_suffix":            *flagTableSuffix,
+			"answer_enabled":          *flagLMEAnswer,
 			"run_id":                  runID,
 			"started_at":              time.Now().UTC().Format(time.RFC3339),
 			"max_sessions":            *flagLMEMaxSessions,
@@ -768,6 +774,7 @@ func runLongMemEvalMemory(ctx context.Context) error {
 				"memory:last_extract_at completion after each pair",
 			"retrieval_note": "retrieval hits are searched memories, not raw transcript chunks",
 			"evidence_note":  "source_sessions are inferred from the pair after which a memory first appeared or changed.",
+			"answer_scoring": "raw model output; no retrieval-assisted answer post-processing",
 			"token_usage_scope": "LLM and embedding usage made in this process. Self-hosted mem0 internal " +
 				"usage is included when its server returns X-Mem0-Usage; provider_usage_reported marks coverage.",
 		},
@@ -974,7 +981,7 @@ afterIngest:
 			br.Error = appendError(br.Error, "answer: "+err.Error())
 		}
 		br.RawAnswer = rawAnswer
-		br.Answer = postprocessLongMemEvalAnswer(inst, hits, rawAnswer)
+		br.Answer = strings.TrimSpace(rawAnswer)
 	}
 	usage, embeddingUsage, providerUsage := snapshotLongMemEvalUsage(
 		tracker,
@@ -1207,6 +1214,143 @@ func answerFromMemories(ctx context.Context, llm model.Model, inst *lmeInstance,
 	return "", lastErr
 }
 
+func reanswerLongMemEvalResults(ctx context.Context, path, outputDir string) error {
+	result, err := loadLongMemEvalResults(path)
+	if err != nil {
+		return err
+	}
+	modelName := getModelName()
+	modelVariant := getModelVariant()
+	baseLLM, err := newLongMemEvalModel(modelName, modelVariant)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(outputDir, 0755); err != nil {
+		return fmt.Errorf("create re-answer output dir: %w", err)
+	}
+	return reanswerLongMemEvalResult(
+		ctx,
+		result,
+		baseLLM,
+		modelName,
+		modelVariant,
+		filepath.Join(outputDir, "reanswered_results.json"),
+	)
+}
+
+func reanswerLongMemEvalResult(
+	ctx context.Context,
+	result *runResult,
+	baseLLM model.Model,
+	modelName string,
+	modelVariant string,
+	outPath string,
+) error {
+	if result == nil {
+		return errors.New("re-answer results are nil")
+	}
+	if result.Metadata == nil {
+		result.Metadata = make(map[string]any)
+	}
+	result.Metadata["reanswer_model"] = modelName
+	result.Metadata["reanswer_model_variant"] = modelVariant
+	result.Metadata["reanswer_build"] = currentLongMemEvalBuildProvenance()
+	result.Metadata["reanswered_at"] = time.Now().UTC().Format(time.RFC3339)
+	result.Metadata["answer_scoring"] = "raw model output; no retrieval-assisted answer post-processing"
+	result.Metadata["reanswer_note"] = "Answers regenerated from saved ranked retrieval hits; backend-specific similarity scores are not shown to the answer model."
+	for _, key := range []string{
+		"judge_model",
+		"judge_model_variant",
+		"judge_build",
+		"judged_at",
+		"judge_note",
+	} {
+		delete(result.Metadata, key)
+	}
+	for _, cr := range result.Cases {
+		if cr == nil {
+			continue
+		}
+		for _, br := range cr.BackendResults {
+			if br != nil {
+				br.Judge = nil
+			}
+		}
+	}
+
+	for _, cr := range result.Cases {
+		if cr == nil {
+			continue
+		}
+		log.Printf("re-answering %s type=%s", cr.QuestionID, cr.QuestionType)
+		inst := &lmeInstance{
+			QuestionID:   cr.QuestionID,
+			QuestionType: cr.QuestionType,
+			Question:     cr.Question,
+			QuestionDate: cr.QuestionDate,
+			Answer:       flexString(cr.Answer),
+		}
+		backendNames := make([]string, 0, len(cr.BackendResults))
+		for backendName := range cr.BackendResults {
+			backendNames = append(backendNames, backendName)
+		}
+		sort.Strings(backendNames)
+		for _, backendName := range backendNames {
+			br := cr.BackendResults[backendName]
+			if br == nil {
+				continue
+			}
+			tracker := &lmeTokenTracker{}
+			llm := &lmeTrackingModel{
+				base:    baseLLM,
+				tracker: tracker,
+				timeout: *flagLMEModelCallTimeout,
+			}
+			start := time.Now()
+			raw, answerErr := answerFromMemories(ctx, llm, inst, br.Retrieval)
+			usage := tracker.Snapshot()
+			replaceLongMemEvalAnswerUsage(br, usage)
+			br.AnswerDuration = time.Since(start).Milliseconds()
+			br.RawAnswer = raw
+			br.Answer = strings.TrimSpace(raw)
+			if answerErr != nil {
+				br.Error = appendError(br.Error, "re-answer: "+answerErr.Error())
+			}
+			scoreLongMemEvalAnswer(cr, br)
+			if answerErr != nil {
+				br.FailureStage = "answer_error"
+			}
+			log.Printf("  %s answer=%q calls=%d tokens=%d err=%v",
+				backendName, truncate(br.Answer, 80), usage.LLMCalls,
+				usage.TotalTokens, answerErr)
+		}
+		result.Summary = buildLongMemEvalSummary(result.Cases)
+		if err := writeLongMemEvalResults(outPath, result); err != nil {
+			return fmt.Errorf("checkpoint re-answered results: %w", err)
+		}
+	}
+	result.Summary = buildLongMemEvalSummary(result.Cases)
+	printLongMemEvalSummary(result)
+	log.Printf("LongMemEval re-answered results written to %s", outPath)
+	return nil
+}
+
+func replaceLongMemEvalAnswerUsage(br *backendResult, usage lmeTokenUsage) {
+	if br == nil {
+		return
+	}
+	total := lmeTokenUsage{}
+	if br.TokenUsage != nil {
+		total = *br.TokenUsage
+	}
+	if br.AnswerUsage != nil {
+		total.Sub(*br.AnswerUsage)
+	}
+	total.Add(usage)
+	br.TokenUsage = tokenUsagePtr(total)
+	br.AnswerUsage = tokenUsagePtr(usage)
+}
+
 func judgeLongMemEvalResults(ctx context.Context, path, outputDir string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -1227,8 +1371,14 @@ func judgeLongMemEvalResults(ctx context.Context, path, outputDir string) error 
 	}
 	result.Metadata["judge_model"] = modelName
 	result.Metadata["judge_model_variant"] = modelVariant
+	result.Metadata["judge_build"] = currentLongMemEvalBuildProvenance()
 	result.Metadata["judged_at"] = time.Now().UTC().Format(time.RFC3339)
 	result.Metadata["judge_note"] = "LLM semantic correctness judge adapted from the official LongMemEval QA evaluator; only an explicit final VERDICT is accepted."
+	result.Metadata["answer_scoring"] = "raw model output; no retrieval-assisted answer post-processing"
+	if err := os.MkdirAll(outputDir, 0755); err != nil {
+		return fmt.Errorf("create judge output dir: %w", err)
+	}
+	outPath := filepath.Join(outputDir, "judged_results.json")
 
 	for _, cr := range result.Cases {
 		if cr == nil {
@@ -1239,6 +1389,7 @@ func judgeLongMemEvalResults(ctx context.Context, path, outputDir string) error 
 			if br == nil {
 				continue
 			}
+			restoreLongMemEvalRawAnswer(cr, br)
 			if strings.TrimSpace(br.Answer) == "" {
 				br.Judge = &lmeJudgeResult{
 					Model: modelName,
@@ -1271,22 +1422,50 @@ func judgeLongMemEvalResults(ctx context.Context, path, outputDir string) error 
 			log.Printf("  %s judge correct=%v raw=%q err=%s",
 				backendName, judge.Correct, truncate(judge.Raw, 80), judge.Error)
 		}
+		result.Summary = buildLongMemEvalSummary(result.Cases)
+		if err := writeLongMemEvalResults(outPath, &result); err != nil {
+			return fmt.Errorf("checkpoint judged results: %w", err)
+		}
 	}
 	result.Summary = buildLongMemEvalSummary(result.Cases)
-	if err := os.MkdirAll(outputDir, 0755); err != nil {
-		return fmt.Errorf("create judge output dir: %w", err)
-	}
-	outPath := filepath.Join(outputDir, "judged_results.json")
-	b, err := json.MarshalIndent(&result, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal judged results: %w", err)
-	}
-	if err := os.WriteFile(outPath, b, 0644); err != nil {
-		return fmt.Errorf("write judged results: %w", err)
-	}
 	printLongMemEvalSummary(&result)
 	log.Printf("LongMemEval judged results written to %s", outPath)
 	return nil
+}
+
+func restoreLongMemEvalRawAnswer(cr *caseResult, br *backendResult) {
+	if cr == nil || br == nil {
+		return
+	}
+	raw := strings.TrimSpace(br.RawAnswer)
+	if raw == "" || raw == br.Answer {
+		return
+	}
+	br.Answer = raw
+	scoreLongMemEvalAnswer(cr, br)
+}
+
+func scoreLongMemEvalAnswer(cr *caseResult, br *backendResult) {
+	if cr == nil || br == nil {
+		return
+	}
+	br.ExactMatch = exactAnswerMatch(br.Answer, cr.Answer)
+	br.F1 = metrics.CalculateF1(br.Answer, cr.Answer)
+	br.BLEU = metrics.CalculateBLEU(br.Answer, cr.Answer)
+	switch br.FailureStage {
+	case "ok", "answer_miss":
+		if br.ExactMatch || br.F1 >= 0.8 {
+			br.FailureStage = "ok"
+		} else {
+			br.FailureStage = "answer_miss"
+		}
+	case "ok_abstention", "abstention_answered":
+		if isUnknownAnswer(br.Answer) {
+			br.FailureStage = "ok_abstention"
+		} else {
+			br.FailureStage = "abstention_answered"
+		}
+	}
 }
 
 func judgeLongMemEvalAnswer(
@@ -1516,143 +1695,6 @@ func parseLongMemEvalJudgeRepair(raw string) (string, error) {
 	return "no", nil
 }
 
-func postprocessLongMemEvalAnswer(inst *lmeInstance, hits []memoryHit, raw string) string {
-	answer := strings.TrimSpace(raw)
-	if answer == "" || inst == nil || isPreferenceQuestion(inst) {
-		return answer
-	}
-	if isOrderListQuestion(inst.Question) {
-		if list, ok := orderedListFromAnswer(answer); ok {
-			return completeTrailingListItem(list, hits)
-		}
-		answer = completeTrailingListItem(answer, hits)
-	}
-	if summed, ok := additiveCountAnswer(inst.Question, answer); ok {
-		return summed
-	}
-	return answer
-}
-
-func isPreferenceQuestion(inst *lmeInstance) bool {
-	return inst != nil && strings.Contains(inst.QuestionType, "preference")
-}
-
-func isOrderListQuestion(question string) bool {
-	q := strings.ToLower(question)
-	return strings.Contains(q, "order") ||
-		strings.Contains(q, "earliest to latest") ||
-		strings.Contains(q, "latest to earliest") ||
-		strings.Contains(q, "sequence")
-}
-
-func orderedListFromAnswer(answer string) (string, bool) {
-	lines := strings.Split(answer, "\n")
-	items := make([]string, 0, 8)
-	for _, line := range lines {
-		item, ok := numberedListItem(line)
-		if !ok {
-			continue
-		}
-		items = append(items, item)
-	}
-	if len(items) < 2 {
-		return "", false
-	}
-	return strings.Join(items, ", "), true
-}
-
-var numberedListRE = regexp.MustCompile(`^\s*\d+[\.)]\s+(.+?)\s*$`)
-
-func numberedListItem(line string) (string, bool) {
-	matches := numberedListRE.FindStringSubmatch(line)
-	if len(matches) != 2 {
-		return "", false
-	}
-	item := strings.TrimSpace(matches[1])
-	item = strings.ReplaceAll(item, "\u2013", "-")
-	item = strings.ReplaceAll(item, "\u2014", "-")
-	if strings.HasPrefix(strings.ToLower(item), "memory ") {
-		return "", false
-	}
-	for _, sep := range []string{" - ", " -- ", " ("} {
-		if i := strings.Index(item, sep); i >= 0 {
-			item = strings.TrimSpace(item[:i])
-		}
-	}
-	item = strings.Trim(item, " \t\"'`")
-	if item == "" || strings.Contains(item, ":") {
-		return "", false
-	}
-	return item, true
-}
-
-func completeTrailingListItem(answer string, hits []memoryHit) string {
-	parts := strings.Split(answer, ",")
-	if len(parts) < 2 {
-		return answer
-	}
-	last := strings.TrimSpace(parts[len(parts)-1])
-	if last == "" || strings.Contains(last, " ") {
-		return answer
-	}
-	if completion := completeEntityPrefix(last, hits); completion != "" {
-		parts[len(parts)-1] = " " + completion
-		return strings.TrimSpace(strings.Join(parts, ","))
-	}
-	return answer
-}
-
-var titlePhraseRE = regexp.MustCompile(`\b[A-Z][A-Za-z0-9&'\x{2019}-]*(?:\s+[A-Z][A-Za-z0-9&'\x{2019}-]*){1,5}\b`)
-
-func completeEntityPrefix(prefix string, hits []memoryHit) string {
-	prefix = strings.TrimSpace(prefix)
-	if prefix == "" {
-		return ""
-	}
-	lowerPrefix := strings.ToLower(prefix)
-	best := ""
-	for _, hit := range hits {
-		for _, candidate := range titlePhraseRE.FindAllString(hit.Memory, -1) {
-			candidate = strings.TrimSpace(candidate)
-			lowerCandidate := strings.ToLower(candidate)
-			if lowerCandidate == lowerPrefix ||
-				!strings.HasPrefix(lowerCandidate, lowerPrefix+" ") {
-				continue
-			}
-			if len(candidate) > len(best) {
-				best = candidate
-			}
-		}
-	}
-	return best
-}
-
-func additiveCountAnswer(question, answer string) (string, bool) {
-	q := strings.ToLower(question)
-	if !strings.Contains(q, "how many") && !strings.Contains(q, "count") {
-		return "", false
-	}
-	if strings.Contains(answer, "\n") || len(answer) > 160 || isUnknownAnswer(answer) {
-		return "", false
-	}
-	if strings.ContainsAny(answer, "$%") {
-		return "", false
-	}
-	matches := regexp.MustCompile(`\b\d+\b`).FindAllString(answer, -1)
-	if len(matches) < 2 || len(matches) > 6 {
-		return "", false
-	}
-	total := 0
-	for _, match := range matches {
-		n, err := strconv.Atoi(match)
-		if err != nil {
-			return "", false
-		}
-		total += n
-	}
-	return strconv.Itoa(total), true
-}
-
 func newLongMemEvalAnswerRequest(prompt string) *model.Request {
 	maxTokens := 512
 	temp := 0.0
@@ -1679,9 +1721,6 @@ func buildLongMemEvalAnswerPrompt(inst *lmeInstance, hits []memoryHit) string {
 			fmt.Fprintf(&b, "%d. %s", i+1, hit.Memory)
 			if meta := formatMemoryMetadata(hit.Kind, hit.EventTime, hit.Participants, hit.Location); meta != "" {
 				fmt.Fprintf(&b, " [%s]", meta)
-			}
-			if hit.Score != 0 {
-				fmt.Fprintf(&b, " (score=%.4f)", hit.Score)
 			}
 			b.WriteByte('\n')
 		}
@@ -1952,14 +1991,25 @@ func questionIDs(instances []*lmeInstance) []string {
 }
 
 func saveLongMemEvalResults(outputDir string, result *runResult) {
-	data, err := json.MarshalIndent(result, "", "  ")
-	if err != nil {
-		log.Printf("marshal results: %v", err)
-		return
-	}
-	if err := os.WriteFile(filepath.Join(outputDir, "results.json"), data, 0644); err != nil {
+	if err := writeLongMemEvalResults(filepath.Join(outputDir, "results.json"), result); err != nil {
 		log.Printf("write results: %v", err)
 	}
+}
+
+func writeLongMemEvalResults(path string, result *runResult) error {
+	data, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal results: %w", err)
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0644); err != nil {
+		return fmt.Errorf("write temporary results: %w", err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("replace results: %w", err)
+	}
+	return nil
 }
 
 func saveCaseLog(outputDir string, cr *caseResult, br *backendResult) {
@@ -2141,9 +2191,9 @@ func buildLongMemEvalSummary(cases []*caseResult) *runSummary {
 			if br.ExactMatch {
 				bs.ExactMatches++
 			}
-			if br.Judge != nil && br.Judge.Error == "" {
+			if judgeCorrect, judgeAvailable := longMemEvalJudgeCorrect(br); judgeAvailable {
 				bs.JudgedCases++
-				if br.Judge.Correct {
+				if judgeCorrect {
 					bs.JudgeCorrect++
 				}
 			}

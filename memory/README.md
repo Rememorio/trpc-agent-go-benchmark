@@ -189,8 +189,9 @@ uses `memory.Service.EnqueueAutoMemoryJob` and waits for its session completion
 marker before continuing; self-hosted mem0 sends the same pair to its memory
 API. `results.json` records pgvector extraction operations, per-pair memory
 diffs, retrieval hits, answer text, LLM and embedding token usage, prompt-cache
-usage, timings, and evidence recall. This separates extraction, persistence,
-retrieval, and answer failures.
+usage, timings, evidence recall, and build provenance for the benchmark and
+memory modules. This separates extraction, persistence, retrieval, and answer
+failures.
 
 ```bash
 export PGVECTOR_DSN="postgres://user:password@localhost:5432/vectordb?sslmode=disable"
@@ -232,6 +233,17 @@ go run . \
   -lme-judge-results ../results/lme-baseline/results.json \
   -output ../results/lme-baseline
 
+# Regenerate only the answers from saved retrieval hits after changing the
+# shared answer protocol, then judge that output.
+go run . \
+  -dataset-format longmemeval \
+  -lme-reanswer-results ../results/lme-baseline/results.json \
+  -output ../results/lme-baseline
+go run . \
+  -dataset-format longmemeval \
+  -lme-judge-results ../results/lme-baseline/reanswered_results.json \
+  -output ../results/lme-baseline
+
 # Analyze judged results without making model calls.
 go run . \
   -dataset-format longmemeval \
@@ -245,13 +257,24 @@ go run . \
   -output ../results/lme-candidate
 ```
 
-The judge command writes `judged_results.json`. Analysis then treats a valid
-semantic-judge result as the primary correctness signal and falls back to exact
+The judge command checkpoints `judged_results.json` after each case. Analysis
+treats a valid semantic-judge result as the primary correctness signal and
+falls back to exact
 match when no judge result is available. It writes `analysis.md` and
 `bad_cases.tsv`, including raw pipeline stages, evidence status, backend
 disagreements, and answer-gap diagnostics. Comparison uses the same correctness
 rule and writes `comparison.md` and `comparison.tsv` with correctness, EM, F1,
-BLEU, stage, and answer deltas by backend and question.
+BLEU, stage, and answer deltas by backend and question. Analysis stage labels
+are judge-aware for answer correctness. `results.json` retains the pre-judge
+pipeline label, which is also exposed as `raw_stage` for bad cases.
+The scored answer is the raw model response: the runner does not complete
+truncated entities from retrieval hits, extract a preferred list, or perform
+arithmetic as an answer post-processing step. The answer prompt preserves each
+backend's saved retrieval order but omits backend-specific similarity scores,
+whose scales are not comparable. Re-answering writes checkpointed
+`reanswered_results.json`, replaces the prior answer-call usage in aggregate
+token counters, clears stale judge results, and does not rerun ingestion or
+retrieval.
 
 Token counters cover model and embedding calls made by this process, including
 pgvector extraction, retrieval, and answer generation. A self-hosted mem0 can
@@ -300,6 +323,7 @@ LongMemEval-specific options:
 | `-lme-ingest-wait`       | 250ms   | Extra delay after completed pair ingestion   |
 | `-lme-model-call-timeout` | 3m      | Model timeout and mem0 OSS request cap       |
 | `-lme-answer`            | true    | Generate answers from retrieved memories     |
+| `-lme-reanswer-results`   |         | Re-answer using saved ranked retrieval hits  |
 | `-lme-judge-results`     |         | Add semantic judge results to `results.json` |
 | `-lme-analyze-results`   |         | Analyze one saved LongMemEval `results.json` |
 | `-lme-compare-results`   |         | Compare baseline,candidate `results.json`    |

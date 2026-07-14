@@ -16,6 +16,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -39,6 +40,87 @@ func (s *lmeExtractorStub) Extract(
 	[]*memory.Entry,
 ) ([]*extractor.Operation, error) {
 	return s.ops, nil
+}
+
+func TestLongMemEvalBuildProvenance(t *testing.T) {
+	t.Parallel()
+	if current := currentLongMemEvalBuildProvenance(); current.GoVersion == "" {
+		t.Fatalf("current build provenance omitted Go version: %+v", current)
+	}
+
+	info := &debug.BuildInfo{
+		GoVersion: "go-test",
+		Settings: []debug.BuildSetting{
+			{Key: "vcs.revision", Value: "benchmark-sha"},
+			{Key: "vcs.modified", Value: "true"},
+		},
+		Deps: []*debug.Module{
+			{
+				Path:    lmeAgentModulePath,
+				Version: "v1.7.0",
+				Replace: &debug.Module{
+					Path:    "github.com/example/trpc-agent-go",
+					Version: "v0.0.0-test-agent",
+				},
+			},
+			{
+				Path:    lmePGVectorModulePath,
+				Version: "v1.7.0",
+				Replace: &debug.Module{Path: "/local/checkout"},
+			},
+		},
+	}
+
+	got := longMemEvalBuildProvenance(info, true)
+	if got.GoVersion != "go-test" || got.Revision != "benchmark-sha" || !got.Modified {
+		t.Fatalf("unexpected build provenance: %+v", got)
+	}
+	agent := got.Modules[lmeAgentModulePath]
+	if agent.ReplacementPath != "github.com/example/trpc-agent-go" ||
+		agent.ReplacementVersion != "v0.0.0-test-agent" || agent.LocalReplacement {
+		t.Fatalf("unexpected agent provenance: %+v", agent)
+	}
+	pgvector := got.Modules[lmePGVectorModulePath]
+	if !pgvector.LocalReplacement || pgvector.ReplacementPath != "" {
+		t.Fatalf("local path leaked into pgvector provenance: %+v", pgvector)
+	}
+	encoded, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("marshal provenance: %v", err)
+	}
+	if strings.Contains(string(encoded), "/local/checkout") {
+		t.Fatalf("local replacement path leaked into JSON: %s", encoded)
+	}
+	empty := longMemEvalBuildProvenance(nil, false)
+	if empty.GoVersion != "" || empty.Revision != "" || empty.Modified || empty.Modules != nil {
+		t.Fatalf("unexpected unavailable build provenance: %+v", empty)
+	}
+}
+
+func TestWriteLongMemEvalResultsErrors(t *testing.T) {
+	t.Parallel()
+
+	result := &runResult{Metadata: map[string]any{"invalid": make(chan int)}}
+	if err := writeLongMemEvalResults(filepath.Join(t.TempDir(), "results.json"), result); err == nil {
+		t.Fatal("non-JSON metadata should fail")
+	}
+
+	missingParent := filepath.Join(t.TempDir(), "missing", "results.json")
+	if err := writeLongMemEvalResults(missingParent, &runResult{}); err == nil {
+		t.Fatal("missing output directory should fail")
+	}
+
+	dir := t.TempDir()
+	target := filepath.Join(dir, "results.json")
+	if err := os.Mkdir(target, 0755); err != nil {
+		t.Fatalf("create target directory: %v", err)
+	}
+	if err := writeLongMemEvalResults(target, &runResult{}); err == nil {
+		t.Fatal("replacing a directory should fail")
+	}
+	if _, err := os.Stat(target + ".tmp"); !os.IsNotExist(err) {
+		t.Fatalf("temporary result was not removed: %v", err)
+	}
 }
 
 func TestLongMemEvalDateHelpers(t *testing.T) {
@@ -418,6 +500,7 @@ func TestBuildLongMemEvalAnswerPromptPreferenceGuidance(t *testing.T) {
 	}
 	prompt := buildLongMemEvalAnswerPrompt(inst, []memoryHit{{
 		Memory:       "Attended a language exchange event focused on French and Spanish practice.",
+		Score:        0.9876,
 		Kind:         "episode",
 		EventTime:    "2023-05-20",
 		Participants: []string{"Alice"},
@@ -426,6 +509,9 @@ func TestBuildLongMemEvalAnswerPromptPreferenceGuidance(t *testing.T) {
 
 	if !strings.Contains(prompt, "Question type: single-session-preference") {
 		t.Fatalf("missing question type: %s", prompt)
+	}
+	if strings.Contains(prompt, "score=") || strings.Contains(prompt, "0.9876") {
+		t.Fatalf("backend-specific retrieval score leaked into answer prompt: %s", prompt)
 	}
 	if !strings.Contains(prompt, "answer the user's question directly") {
 		t.Fatalf("missing direct-answer guidance: %s", prompt)
@@ -525,52 +611,175 @@ func TestBuildLongMemEvalAnswerPromptKnowledgeUpdateTimeline(t *testing.T) {
 	}
 }
 
-func TestPostprocessLongMemEvalAnswerCompletesTruncatedListItem(t *testing.T) {
+func TestRestoreLongMemEvalRawAnswerRemovesLegacyPostprocessing(t *testing.T) {
 	t.Parallel()
 
-	inst := &lmeInstance{
-		QuestionType: "temporal-reasoning",
-		Question:     "What is the order of the museums from earliest to latest?",
+	cr := &caseResult{Answer: "8"}
+	br := &backendResult{
+		RawAnswer:    "5 tomato plants and 3 cucumber plants",
+		Answer:       "8",
+		ExactMatch:   true,
+		F1:           1,
+		BLEU:         1,
+		FailureStage: "ok",
 	}
-	raw := "Science Museum, Museum of Contemporary Art, Natural"
-	hits := []memoryHit{{Memory: "User visited the Natural History Museum on 2023-03-04."}}
+	restoreLongMemEvalRawAnswer(cr, br)
+	if br.Answer != br.RawAnswer || br.ExactMatch || br.F1 == 1 || br.FailureStage != "answer_miss" {
+		t.Fatalf("raw answer was not restored: %+v", br)
+	}
 
-	got := postprocessLongMemEvalAnswer(inst, hits, raw)
-	want := "Science Museum, Museum of Contemporary Art, Natural History Museum"
-	if got != want {
-		t.Fatalf("unexpected answer: got %q want %q", got, want)
+	abstention := &backendResult{
+		RawAnswer:    "The memories contain an answer.",
+		Answer:       "I don't know",
+		FailureStage: "ok_abstention",
+	}
+	restoreLongMemEvalRawAnswer(&caseResult{Answer: "The information is unavailable."}, abstention)
+	if abstention.FailureStage != "abstention_answered" {
+		t.Fatalf("abstention stage was not restored: %+v", abstention)
+	}
+
+	unchanged := &backendResult{Answer: "kept"}
+	restoreLongMemEvalRawAnswer(cr, unchanged)
+	if unchanged.Answer != "kept" {
+		t.Fatalf("missing raw answer changed result: %+v", unchanged)
+	}
+	restoreLongMemEvalRawAnswer(nil, br)
+}
+
+func TestReplaceLongMemEvalAnswerUsage(t *testing.T) {
+	t.Parallel()
+
+	br := &backendResult{
+		TokenUsage: &lmeTokenUsage{
+			PromptTokens:     80,
+			CompletionTokens: 20,
+			TotalTokens:      100,
+			CachedTokens:     40,
+			LLMCalls:         2,
+		},
+		AnswerUsage: &lmeTokenUsage{
+			PromptTokens:     15,
+			CompletionTokens: 5,
+			TotalTokens:      20,
+			CachedTokens:     5,
+			LLMCalls:         1,
+		},
+	}
+	newUsage := lmeTokenUsage{
+		PromptTokens:     7,
+		CompletionTokens: 2,
+		TotalTokens:      9,
+		LLMCalls:         1,
+	}
+	replaceLongMemEvalAnswerUsage(br, newUsage)
+
+	if br.TokenUsage == nil || br.TokenUsage.PromptTokens != 72 ||
+		br.TokenUsage.CompletionTokens != 17 || br.TokenUsage.TotalTokens != 89 ||
+		br.TokenUsage.CachedTokens != 35 || br.TokenUsage.LLMCalls != 2 {
+		t.Fatalf("unexpected replacement total: %+v", br.TokenUsage)
+	}
+	if br.AnswerUsage == nil || br.AnswerUsage.TotalTokens != 9 || br.AnswerUsage.LLMCalls != 1 {
+		t.Fatalf("unexpected replacement answer usage: %+v", br.AnswerUsage)
+	}
+
+	clamped := lmeTokenUsage{PromptTokens: 3, TotalTokens: 4, LLMCalls: 1}
+	clamped.Sub(lmeTokenUsage{PromptTokens: 5, TotalTokens: 4, LLMCalls: 2})
+	if !clamped.IsZero() {
+		t.Fatalf("subtraction should clamp at zero: %+v", clamped)
+	}
+	replaceLongMemEvalAnswerUsage(nil, newUsage)
+}
+
+func TestReanswerLongMemEvalResult(t *testing.T) {
+	t.Parallel()
+
+	result := &runResult{
+		Metadata: map[string]any{
+			"judge_model": "old-judge",
+			"judged_at":   "yesterday",
+		},
+		Cases: []*caseResult{{
+			QuestionID:   "q-reanswer",
+			QuestionType: "single-session-user",
+			Question:     "Which option?",
+			Answer:       "Option B",
+			BackendResults: map[string]*backendResult{
+				"pgvector": reanswerTestBackend("pgvector"),
+				"mem0":     reanswerTestBackend("mem0"),
+			},
+		}},
+	}
+	llm := &queuedJudgeModel{
+		responses: []string{"Option B", "Option A"},
+		usage: &model.Usage{
+			PromptTokens:     7,
+			CompletionTokens: 2,
+			TotalTokens:      9,
+		},
+	}
+	outPath := filepath.Join(t.TempDir(), "reanswered_results.json")
+	if err := reanswerLongMemEvalResult(
+		context.Background(), result, llm, "answer-model", "glm", outPath,
+	); err != nil {
+		t.Fatalf("re-answer result: %v", err)
+	}
+	if llm.calls != 2 {
+		t.Fatalf("model calls = %d, want 2", llm.calls)
+	}
+	if len(llm.requests) != 2 || strings.Contains(llm.requests[0].Messages[0].Content, "score=") {
+		t.Fatalf("unexpected answer requests: %#v", llm.requests)
+	}
+
+	got, err := loadLongMemEvalResults(outPath)
+	if err != nil {
+		t.Fatalf("load re-answered result: %v", err)
+	}
+	if _, ok := got.Metadata["judge_model"]; ok {
+		t.Fatalf("stale judge metadata retained: %+v", got.Metadata)
+	}
+	if got.Metadata["reanswer_model"] != "answer-model" || got.Metadata["reanswer_model_variant"] != "glm" {
+		t.Fatalf("missing re-answer metadata: %+v", got.Metadata)
+	}
+	mem0 := got.Cases[0].BackendResults["mem0"]
+	pgvector := got.Cases[0].BackendResults["pgvector"]
+	if mem0.Answer != "Option B" || !mem0.ExactMatch || mem0.FailureStage != "ok" || mem0.Judge != nil {
+		t.Fatalf("unexpected mem0 answer: %+v", mem0)
+	}
+	if pgvector.Answer != "Option A" || pgvector.ExactMatch || pgvector.FailureStage != "answer_miss" || pgvector.Judge != nil {
+		t.Fatalf("unexpected pgvector answer: %+v", pgvector)
+	}
+	if mem0.TokenUsage == nil || mem0.TokenUsage.TotalTokens != 89 ||
+		mem0.AnswerUsage == nil || mem0.AnswerUsage.TotalTokens != 9 {
+		t.Fatalf("unexpected re-answer usage: total=%+v answer=%+v", mem0.TokenUsage, mem0.AnswerUsage)
+	}
+	if got.Summary == nil || got.Summary.BackendSummaries["mem0"].ExactMatches != 1 {
+		t.Fatalf("unexpected re-answer summary: %+v", got.Summary)
+	}
+	if err := reanswerLongMemEvalResult(context.Background(), nil, llm, "", "", outPath); err == nil {
+		t.Fatal("nil result should fail")
 	}
 }
 
-func TestPostprocessLongMemEvalAnswerExtractsNumberedOrder(t *testing.T) {
-	t.Parallel()
-
-	inst := &lmeInstance{
-		QuestionType: "temporal-reasoning",
-		Question:     "What is the order of the six museums I visited from earliest to latest?",
-	}
-	raw := `Let me find the visits.
-1. Science Museum - January 15, 2023
-2. Museum of Contemporary Art - around January 15, 2023
-3. Metropolitan Museum of Art - February 10, 2023`
-
-	got := postprocessLongMemEvalAnswer(inst, nil, raw)
-	want := "Science Museum, Museum of Contemporary Art, Metropolitan Museum of Art"
-	if got != want {
-		t.Fatalf("unexpected answer: got %q want %q", got, want)
-	}
-}
-
-func TestPostprocessLongMemEvalAnswerSumsShortCountAnswer(t *testing.T) {
-	t.Parallel()
-
-	inst := &lmeInstance{
-		QuestionType: "multi-session",
-		Question:     "How many plants did I initially plant for tomatoes and cucumbers?",
-	}
-	got := postprocessLongMemEvalAnswer(inst, nil, "5 tomato plants and 3 cucumber plants")
-	if got != "8" {
-		t.Fatalf("unexpected answer: got %q want 8", got)
+func reanswerTestBackend(name string) *backendResult {
+	return &backendResult{
+		Backend:      name,
+		Answer:       "legacy answer",
+		RawAnswer:    "legacy answer",
+		FailureStage: "answer_miss",
+		Judge:        &lmeJudgeResult{Correct: true, Raw: "VERDICT: yes"},
+		Retrieval:    []memoryHit{{Memory: "Option B was selected.", Score: 0.9}},
+		TokenUsage: &lmeTokenUsage{
+			PromptTokens:     80,
+			CompletionTokens: 20,
+			TotalTokens:      100,
+			LLMCalls:         2,
+		},
+		AnswerUsage: &lmeTokenUsage{
+			PromptTokens:     15,
+			CompletionTokens: 5,
+			TotalTokens:      20,
+			LLMCalls:         1,
+		},
 	}
 }
 
@@ -675,6 +884,32 @@ func TestParseLongMemEvalJudge(t *testing.T) {
 	}
 }
 
+func TestLongMemEvalJudgeCorrectRequiresValidatedRaw(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		result    *backendResult
+		want      bool
+		available bool
+	}{
+		{name: "missing judge", result: &backendResult{}},
+		{name: "judge error", result: &backendResult{Judge: &lmeJudgeResult{Raw: "VERDICT: yes", Correct: true, Error: "failed"}}},
+		{name: "legacy heuristic", result: &backendResult{Judge: &lmeJudgeResult{Raw: "The response is correct.", Correct: true}}},
+		{name: "mismatched saved value", result: &backendResult{Judge: &lmeJudgeResult{Raw: "VERDICT: yes", Correct: false}}},
+		{name: "valid yes", result: &backendResult{Judge: &lmeJudgeResult{Raw: "VERDICT: yes", Correct: true}}, want: true, available: true},
+		{name: "valid no", result: &backendResult{Judge: &lmeJudgeResult{Raw: "VERDICT: no", Correct: false}}, available: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, available := longMemEvalJudgeCorrect(test.result)
+			if got != test.want || available != test.available {
+				t.Fatalf("longMemEvalJudgeCorrect() = (%v, %v), want (%v, %v)", got, available, test.want, test.available)
+			}
+		})
+	}
+}
+
 func TestJudgeLongMemEvalAnswerRepairsMissingVerdict(t *testing.T) {
 	t.Parallel()
 
@@ -711,6 +946,7 @@ func TestBuildLongMemEvalSummaryIncludesJudgeMetrics(t *testing.T) {
 				Backend: "pgvector",
 				Judge: &lmeJudgeResult{
 					Correct: true,
+					Raw:     "VERDICT: yes",
 					TokenUsage: &lmeTokenUsage{
 						LLMCalls:    1,
 						TotalTokens: 11,
@@ -721,6 +957,7 @@ func TestBuildLongMemEvalSummaryIncludesJudgeMetrics(t *testing.T) {
 				Backend: "mem0",
 				Judge: &lmeJudgeResult{
 					Correct: false,
+					Raw:     "VERDICT: no",
 					TokenUsage: &lmeTokenUsage{
 						LLMCalls:    1,
 						TotalTokens: 9,
@@ -847,10 +1084,20 @@ func TestAnalyzeLongMemEvalResults(t *testing.T) {
 					F1:           0.5,
 					Judge: &lmeJudgeResult{
 						Correct: true,
+						Raw:     "VERDICT: yes",
 					},
 				},
 			},
 		}},
+	}
+	rows := longMemEvalAnalysisRows(result)
+	if len(rows) != 2 {
+		t.Fatalf("analysis rows = %d, want 2", len(rows))
+	}
+	for _, row := range rows {
+		if row.QuestionID == "q2" && (row.Stage != "ok" || row.RawStage != "answer_miss") {
+			t.Fatalf("judge-aware stage not applied: %+v", row)
+		}
 	}
 	saveLongMemEvalResults(dir, result)
 	if err := analyzeLongMemEvalResults(resultsPath, dir); err != nil {
@@ -884,6 +1131,50 @@ func TestAnalyzeLongMemEvalResults(t *testing.T) {
 	}
 	if !strings.Contains(string(analysis), "1/1") {
 		t.Fatalf("analysis missing judge summary: %s", analysis)
+	}
+}
+
+func TestEvaluatedFailureStage(t *testing.T) {
+	t.Parallel()
+
+	abstention := &backendResult{Evidence: &evidenceMetrics{IsAbstention: true}}
+	regular := &backendResult{Evidence: &evidenceMetrics{}}
+	backendError := &backendResult{Error: "failed"}
+	tests := []struct {
+		name           string
+		result         *backendResult
+		raw            string
+		judgeCorrect   bool
+		judgeAvailable bool
+		want           string
+	}{
+		{name: "no judge", result: regular, raw: "answer_miss", want: "answer_miss"},
+		{name: "backend error", result: backendError, raw: "backend_error", judgeCorrect: true, judgeAvailable: true, want: "backend_error"},
+		{name: "correct answer", result: regular, raw: "answer_miss", judgeCorrect: true, judgeAvailable: true, want: "ok"},
+		{name: "incorrect answer", result: regular, raw: "ok", judgeAvailable: true, want: "answer_miss"},
+		{name: "correct abstention", result: abstention, raw: "abstention_answered", judgeCorrect: true, judgeAvailable: true, want: "ok_abstention"},
+		{name: "incorrect abstention", result: abstention, raw: "ok_abstention", judgeAvailable: true, want: "abstention_answered"},
+		{name: "pipeline stage", result: regular, raw: "retrieval_miss", judgeCorrect: true, judgeAvailable: true, want: "retrieval_miss"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := evaluatedFailureStage(
+				test.result,
+				test.raw,
+				test.judgeCorrect,
+				test.judgeAvailable,
+			)
+			if got != test.want {
+				t.Fatalf("evaluatedFailureStage() = %q, want %q", got, test.want)
+			}
+		})
+	}
+	cell := disagreementCell(&backendResult{
+		FailureStage: "answer_miss",
+		Judge:        &lmeJudgeResult{Raw: "VERDICT: yes", Correct: true},
+	})
+	if !strings.Contains(cell, "stage=ok") {
+		t.Fatalf("disagreement cell did not use judge-aware stage: %s", cell)
 	}
 }
 
@@ -922,7 +1213,7 @@ func TestCompareLongMemEvalResults(t *testing.T) {
 					FailureStage: "answer_miss",
 					Answer:       "The recommendation was Option B.",
 					F1:           0.5,
-					Judge:        &lmeJudgeResult{Correct: true},
+					Judge:        &lmeJudgeResult{Correct: true, Raw: "VERDICT: yes"},
 				},
 			},
 		}},
@@ -957,7 +1248,7 @@ func TestCompareLongMemEvalResults(t *testing.T) {
 					Answer:       "Option B",
 					F1:           1,
 					BLEU:         1,
-					Judge:        &lmeJudgeResult{Correct: false},
+					Judge:        &lmeJudgeResult{Correct: false, Raw: "VERDICT: no"},
 				},
 			},
 		}},
@@ -1108,6 +1399,7 @@ type queuedJudgeModel struct {
 	responses []string
 	calls     int
 	requests  []*model.Request
+	usage     *model.Usage
 }
 
 func (m *queuedJudgeModel) GenerateContent(
@@ -1123,7 +1415,7 @@ func (m *queuedJudgeModel) GenerateContent(
 	ch := make(chan *model.Response, 1)
 	ch <- &model.Response{Choices: []model.Choice{{
 		Message: model.NewAssistantMessage(response),
-	}}}
+	}}, Usage: m.usage}
 	close(ch)
 	return ch, nil
 }

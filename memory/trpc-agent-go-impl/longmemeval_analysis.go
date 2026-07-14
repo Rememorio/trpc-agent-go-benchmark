@@ -23,6 +23,7 @@ type lmeAnalysisRow struct {
 	QuestionType     string
 	Backend          string
 	Stage            string
+	RawStage         string
 	ExactMatch       bool
 	JudgeAvailable   bool
 	JudgeCorrect     bool
@@ -200,11 +201,13 @@ func longMemEvalAnalysisRows(result *runResult) []lmeAnalysisRow {
 			if judgeAvailable {
 				evaluatedCorrect = judgeCorrect
 			}
+			rawStage := normalizedFailureStage(br)
 			rows = append(rows, lmeAnalysisRow{
 				QuestionID:       cr.QuestionID,
 				QuestionType:     cr.QuestionType,
 				Backend:          backend,
-				Stage:            normalizedFailureStage(br),
+				Stage:            evaluatedFailureStage(br, rawStage, judgeCorrect, judgeAvailable),
+				RawStage:         rawStage,
 				ExactMatch:       br.ExactMatch,
 				JudgeAvailable:   judgeAvailable,
 				JudgeCorrect:     judgeCorrect,
@@ -339,11 +342,41 @@ func normalizedFailureStage(br *backendResult) string {
 	return stage
 }
 
+func evaluatedFailureStage(
+	br *backendResult,
+	rawStage string,
+	judgeCorrect bool,
+	judgeAvailable bool,
+) string {
+	if !judgeAvailable || br == nil || br.Error != "" {
+		return rawStage
+	}
+	switch rawStage {
+	case "ok", "ok_abstention", "answer_miss", "abstention_answered":
+		if br.Evidence != nil && br.Evidence.IsAbstention {
+			if judgeCorrect {
+				return "ok_abstention"
+			}
+			return "abstention_answered"
+		}
+		if judgeCorrect {
+			return "ok"
+		}
+		return "answer_miss"
+	default:
+		return rawStage
+	}
+}
+
 func longMemEvalJudgeCorrect(br *backendResult) (bool, bool) {
 	if br == nil || br.Judge == nil || strings.TrimSpace(br.Judge.Error) != "" {
 		return false, false
 	}
-	return br.Judge.Correct, true
+	correct, err := parseLongMemEvalJudge(br.Judge.Raw)
+	if err != nil || correct != br.Judge.Correct {
+		return false, false
+	}
+	return correct, true
 }
 
 func evidenceStatus(ev *evidenceMetrics) string {
@@ -370,16 +403,17 @@ func evidenceStatus(ev *evidenceMetrics) string {
 
 func formatLongMemEvalBadCases(rows []lmeAnalysisRow) string {
 	var b strings.Builder
-	b.WriteString("question_id\tquestion_type\tbackend\tstage\tevaluated_correct\texact_match\tjudge_available\tjudge_correct\tf1\tbleu\tevidence\tdiagnosis\terror\tanswer\treference\tquestion\n")
+	b.WriteString("question_id\tquestion_type\tbackend\tstage\traw_stage\tevaluated_correct\texact_match\tjudge_available\tjudge_correct\tf1\tbleu\tevidence\tdiagnosis\terror\tanswer\treference\tquestion\n")
 	for _, row := range rows {
 		if row.EvaluatedCorrect {
 			continue
 		}
-		fmt.Fprintf(&b, "%s\t%s\t%s\t%s\t%v\t%v\t%v\t%v\t%.4f\t%.4f\t%s\t%s\t%s\t%s\t%s\t%s\n",
+		fmt.Fprintf(&b, "%s\t%s\t%s\t%s\t%s\t%v\t%v\t%v\t%v\t%.4f\t%.4f\t%s\t%s\t%s\t%s\t%s\t%s\n",
 			tsvCell(row.QuestionID),
 			tsvCell(row.QuestionType),
 			tsvCell(row.Backend),
 			tsvCell(row.Stage),
+			tsvCell(row.RawStage),
 			row.EvaluatedCorrect,
 			row.ExactMatch,
 			row.JudgeAvailable,
@@ -564,7 +598,8 @@ func formatLongMemEvalAnalysisMarkdown(
 	if result != nil && result.Summary != nil {
 		fmt.Fprintf(&b, "- Total cases: %d\n", result.Summary.TotalCases)
 	}
-	b.WriteString("- Failure stages are computed from saved `results.json`; no model calls are made.\n\n")
+	b.WriteString("- Failure stages are computed from saved `results.json`; no model calls are made. " +
+		"Answer-stage labels use a valid semantic-judge verdict when available. `results.json` retains the pre-judge `failure_stage`, which is also exposed as `raw_stage` for bad cases.\n\n")
 
 	b.WriteString("## Backend Summary\n\n")
 	b.WriteString("| Backend | Cases | EM | Judge | Avg F1 | Avg BLEU | LLM Calls | LLM Tokens | Cached | Cache Hit | Embedding Calls | Embedding Tokens | Provider Usage |\n")
@@ -728,7 +763,8 @@ func disagreementCell(br *backendResult) string {
 		return "missing"
 	}
 	if correct, ok := longMemEvalJudgeCorrect(br); ok {
-		return fmt.Sprintf("judge=%v EM=%v stage=%s answer=%s", correct, br.ExactMatch, normalizedFailureStage(br), truncate(br.Answer, 80))
+		stage := evaluatedFailureStage(br, normalizedFailureStage(br), correct, true)
+		return fmt.Sprintf("judge=%v EM=%v stage=%s answer=%s", correct, br.ExactMatch, stage, truncate(br.Answer, 80))
 	}
 	return fmt.Sprintf("EM=%v stage=%s answer=%s", br.ExactMatch, normalizedFailureStage(br), truncate(br.Answer, 80))
 }

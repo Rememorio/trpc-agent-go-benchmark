@@ -2,5 +2,6 @@
 *.json
 *.log
 *.pdf
+lme-*/
 tmp/
 tools/

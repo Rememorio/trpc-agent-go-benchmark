@@ -48,6 +48,25 @@ func (u *lmeTokenUsage) Add(other lmeTokenUsage) {
 	u.setCacheHitRate()
 }
 
+func (u *lmeTokenUsage) Sub(other lmeTokenUsage) {
+	u.PromptTokens = nonNegativeTokenDifference(u.PromptTokens, other.PromptTokens)
+	u.CompletionTokens = nonNegativeTokenDifference(u.CompletionTokens, other.CompletionTokens)
+	u.TotalTokens = nonNegativeTokenDifference(u.TotalTokens, other.TotalTokens)
+	u.CachedTokens = nonNegativeTokenDifference(u.CachedTokens, other.CachedTokens)
+	u.CacheCreationTokens = nonNegativeTokenDifference(u.CacheCreationTokens, other.CacheCreationTokens)
+	u.CacheReadTokens = nonNegativeTokenDifference(u.CacheReadTokens, other.CacheReadTokens)
+	u.ReasoningTokens = nonNegativeTokenDifference(u.ReasoningTokens, other.ReasoningTokens)
+	u.LLMCalls = nonNegativeTokenDifference(u.LLMCalls, other.LLMCalls)
+	u.setCacheHitRate()
+}
+
+func nonNegativeTokenDifference(total, part int) int {
+	if part >= total {
+		return 0
+	}
+	return total - part
+}
+
 func (u *lmeTokenUsage) setCacheHitRate() {
 	if u.PromptTokens <= 0 {
 		u.CacheHitRate = 0
