@@ -583,44 +583,46 @@ func prepareLongMemEvalMem0(
 	ctx context.Context,
 	backends []string,
 ) (*mem0RuntimeConfiguration, error) {
-	if *flagMem0Cloud || !containsString(backends, "mem0") || *flagMem0LLMTemperature < 0 {
+	if *flagMem0Cloud || !containsString(backends, "mem0") {
 		return nil, nil
 	}
 	host := getMem0Host()
 	client := &http.Client{Timeout: longMemEvalMem0OSSRequestTimeout()}
 	endpoint := host + "/configure"
-	body, err := json.Marshal(map[string]any{
-		"llm": map[string]any{
-			"config": map[string]any{"temperature": *flagMem0LLMTemperature},
-		},
-	})
-	if err != nil {
-		return nil, fmt.Errorf("encode mem0 temperature configuration: %w", err)
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("create mem0 configuration request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("configure mem0 temperature: %w", err)
-	}
-	responseBody, readErr := io.ReadAll(io.LimitReader(resp.Body, 4096))
-	resp.Body.Close()
-	if readErr != nil {
-		return nil, fmt.Errorf("read mem0 configuration response: %w", readErr)
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("configure mem0 temperature: status=%d body=%s",
-			resp.StatusCode, strings.TrimSpace(string(responseBody)))
+	if *flagMem0LLMTemperature >= 0 {
+		body, err := json.Marshal(map[string]any{
+			"llm": map[string]any{
+				"config": map[string]any{"temperature": *flagMem0LLMTemperature},
+			},
+		})
+		if err != nil {
+			return nil, fmt.Errorf("encode mem0 temperature configuration: %w", err)
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+		if err != nil {
+			return nil, fmt.Errorf("create mem0 configuration request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := client.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("configure mem0 temperature: %w", err)
+		}
+		responseBody, readErr := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		resp.Body.Close()
+		if readErr != nil {
+			return nil, fmt.Errorf("read mem0 configuration response: %w", readErr)
+		}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return nil, fmt.Errorf("configure mem0 temperature: status=%d body=%s",
+				resp.StatusCode, strings.TrimSpace(string(responseBody)))
+		}
 	}
 
-	req, err = http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create mem0 configuration read request: %w", err)
 	}
-	resp, err = client.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("read mem0 configuration: %w", err)
 	}

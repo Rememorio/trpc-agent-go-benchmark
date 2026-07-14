@@ -289,6 +289,9 @@ return internal LLM, cached-token, and embedding usage in `X-Mem0-Usage`;
 `provider_usage_reported` and the analysis coverage column show whether that
 usage was included. Stock mem0 servers do not return it, so their missing
 internal usage must not be interpreted as zero-cost usage.
+The runner also reads and records the sanitized self-hosted mem0 runtime
+configuration. `-mem0-llm-temperature` changes that configuration only when it
+is non-negative; the default keeps the server value while still recording it.
 
 ## Command-Line Options
 

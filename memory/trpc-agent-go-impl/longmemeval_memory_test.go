@@ -449,8 +449,11 @@ func TestPrepareLongMemEvalMem0ConfiguresAndSanitizesRuntime(t *testing.T) {
 	*flagMem0Cloud = false
 	*flagMem0LLMTemperature = -1
 	config, err := prepareLongMemEvalMem0(context.Background(), []string{"mem0"})
-	if err != nil || config != nil || configured {
-		t.Fatalf("disabled runtime configuration should be a no-op: config=%#v err=%v", config, err)
+	if err != nil || config == nil || configured {
+		t.Fatalf("read-only runtime configuration failed: config=%#v err=%v", config, err)
+	}
+	if config.LLMTemperature == nil || *config.LLMTemperature != 0 {
+		t.Fatalf("runtime temperature was not recorded: %#v", config)
 	}
 
 	*flagMem0LLMTemperature = 0
@@ -471,6 +474,86 @@ func TestPrepareLongMemEvalMem0ConfiguresAndSanitizesRuntime(t *testing.T) {
 	if strings.Contains(string(encoded), "secret") {
 		t.Fatalf("runtime configuration leaked credentials: %s", encoded)
 	}
+}
+
+func TestPrepareLongMemEvalMem0Failures(t *testing.T) {
+	oldHost := *flagMem0Host
+	oldCloud := *flagMem0Cloud
+	oldTemperature := *flagMem0LLMTemperature
+	defer func() {
+		*flagMem0Host = oldHost
+		*flagMem0Cloud = oldCloud
+		*flagMem0LLMTemperature = oldTemperature
+	}()
+	*flagMem0Cloud = false
+
+	t.Run("unselected backend", func(t *testing.T) {
+		config, err := prepareLongMemEvalMem0(context.Background(), []string{"pgvector"})
+		if err != nil || config != nil {
+			t.Fatalf("unselected mem0 returned config=%#v err=%v", config, err)
+		}
+	})
+
+	t.Run("invalid host", func(t *testing.T) {
+		*flagMem0Host = "://invalid"
+		*flagMem0LLMTemperature = -1
+		_, err := prepareLongMemEvalMem0(context.Background(), []string{"mem0"})
+		if err == nil || !strings.Contains(err.Error(), "configuration read request") {
+			t.Fatalf("expected request error, got %v", err)
+		}
+	})
+
+	t.Run("cancelled read", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+		defer server.Close()
+		*flagMem0Host = server.URL
+		*flagMem0LLMTemperature = -1
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		_, err := prepareLongMemEvalMem0(ctx, []string{"mem0"})
+		if err == nil || !strings.Contains(err.Error(), "read mem0 configuration") {
+			t.Fatalf("expected cancelled read error, got %v", err)
+		}
+	})
+
+	t.Run("read status", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+		}))
+		defer server.Close()
+		*flagMem0Host = server.URL
+		*flagMem0LLMTemperature = -1
+		_, err := prepareLongMemEvalMem0(context.Background(), []string{"mem0"})
+		if err == nil || !strings.Contains(err.Error(), "status=503") {
+			t.Fatalf("expected read status error, got %v", err)
+		}
+	})
+
+	t.Run("invalid response", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte("not json"))
+		}))
+		defer server.Close()
+		*flagMem0Host = server.URL
+		*flagMem0LLMTemperature = -1
+		_, err := prepareLongMemEvalMem0(context.Background(), []string{"mem0"})
+		if err == nil || !strings.Contains(err.Error(), "decode mem0 configuration") {
+			t.Fatalf("expected decode error, got %v", err)
+		}
+	})
+
+	t.Run("configure status", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, "bad configuration", http.StatusBadRequest)
+		}))
+		defer server.Close()
+		*flagMem0Host = server.URL
+		*flagMem0LLMTemperature = 0
+		_, err := prepareLongMemEvalMem0(context.Background(), []string{"mem0"})
+		if err == nil || !strings.Contains(err.Error(), "status=400") {
+			t.Fatalf("expected configure status error, got %v", err)
+		}
+	})
 }
 
 func TestRetryableMem0Status(t *testing.T) {
