@@ -1362,6 +1362,44 @@ func TestParseLongMemEvalComparePaths(t *testing.T) {
 	}
 }
 
+func TestCompareLongMemEvalRowsIgnoresJudgeDriftForSameAnswer(t *testing.T) {
+	baseline := []lmeAnalysisRow{{
+		QuestionID:       "q1",
+		Question:         "Which gift?",
+		Reference:        "A yellow dress",
+		Backend:          "pgvector",
+		Answer:           "A yellow dress and earrings",
+		JudgeAvailable:   true,
+		EvaluatedCorrect: true,
+	}}
+	candidate := []lmeAnalysisRow{{
+		QuestionID:       "q1",
+		Question:         "  which GIFT? ",
+		Reference:        "a YELLOW dress",
+		Backend:          "pgvector",
+		Answer:           "A yellow dress   and earrings",
+		JudgeAvailable:   true,
+		EvaluatedCorrect: false,
+	}}
+
+	rows := compareLongMemEvalRows(baseline, candidate)
+	if len(rows) != 1 {
+		t.Fatalf("comparison rows = %d, want 1", len(rows))
+	}
+	row := rows[0]
+	if !row.BaselineCorrect || !row.CandidateCorrect || !row.JudgeDriftIgnored {
+		t.Fatalf("judge drift was not ignored: %#v", row)
+	}
+	summary := summarizeLongMemEvalCompareRows(rows)["pgvector"]
+	if summary == nil || summary.Regressed != 0 || summary.Unchanged != 1 ||
+		summary.JudgeDriftIgnored != 1 {
+		t.Fatalf("comparison summary = %#v, want one unchanged judge drift", summary)
+	}
+	if !strings.Contains(formatLongMemEvalComparisonTSV(rows), "judge_drift_ignored") {
+		t.Fatal("comparison TSV is missing the judge drift column")
+	}
+}
+
 func TestMissingReferenceKeywords(t *testing.T) {
 	got := missingReferenceKeywords(
 		"The user would prefer cultural events.",

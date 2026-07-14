@@ -266,6 +266,9 @@ match when no judge result is available. It writes `analysis.md` and
 disagreements, and answer-gap diagnostics. Comparison uses the same correctness
 rule and writes `comparison.md` and `comparison.tsv` with correctness, EM, F1,
 BLEU, stage, and answer deltas for question/backend pairs present in both runs.
+When normalized questions, references, and answers are identical, comparison
+treats conflicting judge verdicts as unchanged and reports the ignored judge
+drift instead of a model regression.
 Analysis stage labels are judge-aware for answer correctness. `results.json`
 retains the pre-judge pipeline label, which is also exposed as `raw_stage` for
 bad cases.

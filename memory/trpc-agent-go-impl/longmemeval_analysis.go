@@ -70,6 +70,7 @@ type lmeCompareRow struct {
 	DeltaBLEU               float64
 	BaselineError           string
 	CandidateError          string
+	JudgeDriftIgnored       bool
 	Diagnosis               string
 	BaselineAnswer          string
 	CandidateAnswer         string
@@ -78,15 +79,16 @@ type lmeCompareRow struct {
 }
 
 type lmeCompareBackendSummary struct {
-	Cases            int
-	BaselineCorrect  int
-	CandidateCorrect int
-	BaselineEM       int
-	CandidateEM      int
-	TotalDeltaF1     float64
-	Improved         int
-	Regressed        int
-	Unchanged        int
+	Cases             int
+	BaselineCorrect   int
+	CandidateCorrect  int
+	BaselineEM        int
+	CandidateEM       int
+	TotalDeltaF1      float64
+	Improved          int
+	Regressed         int
+	Unchanged         int
+	JudgeDriftIgnored int
 }
 
 func analyzeLongMemEvalResults(path, outputDir string) error {
@@ -269,6 +271,11 @@ func compareLongMemEvalRows(baselineRows, candidateRows []lmeAnalysisRow) []lmeC
 		}
 		row.DeltaF1 = row.CandidateF1 - row.BaselineF1
 		row.DeltaBLEU = row.CandidateBLEU - row.BaselineBLEU
+		if sameLongMemEvalComparisonAnswer(base, cand) &&
+			row.BaselineCorrect != row.CandidateCorrect {
+			row.CandidateCorrect = row.BaselineCorrect
+			row.JudgeDriftIgnored = true
+		}
 		out = append(out, row)
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -278,6 +285,19 @@ func compareLongMemEvalRows(baselineRows, candidateRows []lmeAnalysisRow) []lmeC
 		return out[i].Backend < out[j].Backend
 	})
 	return out
+}
+
+func sameLongMemEvalComparisonAnswer(baseline, candidate lmeAnalysisRow) bool {
+	return normalizedLongMemEvalComparisonText(baseline.Question) ==
+		normalizedLongMemEvalComparisonText(candidate.Question) &&
+		normalizedLongMemEvalComparisonText(baseline.Reference) ==
+			normalizedLongMemEvalComparisonText(candidate.Reference) &&
+		normalizedLongMemEvalComparisonText(baseline.Answer) ==
+			normalizedLongMemEvalComparisonText(candidate.Answer)
+}
+
+func normalizedLongMemEvalComparisonText(text string) string {
+	return strings.ToLower(strings.Join(strings.Fields(text), " "))
 }
 
 func lmeCompareKey(questionID, backend string) string {
@@ -422,9 +442,9 @@ func formatLongMemEvalBadCases(rows []lmeAnalysisRow) string {
 
 func formatLongMemEvalComparisonTSV(rows []lmeCompareRow) string {
 	var b strings.Builder
-	b.WriteString("question_id\tquestion_type\tbackend\tbaseline_stage\tcandidate_stage\tbaseline_correct\tcandidate_correct\tbaseline_judge_available\tcandidate_judge_available\tbaseline_em\tcandidate_em\tbaseline_f1\tcandidate_f1\tdelta_f1\tbaseline_bleu\tcandidate_bleu\tdelta_bleu\tdiagnosis\tbaseline_answer\tcandidate_answer\treference\tquestion\n")
+	b.WriteString("question_id\tquestion_type\tbackend\tbaseline_stage\tcandidate_stage\tbaseline_correct\tcandidate_correct\tbaseline_judge_available\tcandidate_judge_available\tjudge_drift_ignored\tbaseline_em\tcandidate_em\tbaseline_f1\tcandidate_f1\tdelta_f1\tbaseline_bleu\tcandidate_bleu\tdelta_bleu\tdiagnosis\tbaseline_answer\tcandidate_answer\treference\tquestion\n")
 	for _, row := range rows {
-		fmt.Fprintf(&b, "%s\t%s\t%s\t%s\t%s\t%v\t%v\t%v\t%v\t%v\t%v\t%.4f\t%.4f\t%+.4f\t%.4f\t%.4f\t%+.4f\t%s\t%s\t%s\t%s\t%s\n",
+		fmt.Fprintf(&b, "%s\t%s\t%s\t%s\t%s\t%v\t%v\t%v\t%v\t%v\t%v\t%v\t%.4f\t%.4f\t%+.4f\t%.4f\t%.4f\t%+.4f\t%s\t%s\t%s\t%s\t%s\n",
 			tsvCell(row.QuestionID),
 			tsvCell(row.QuestionType),
 			tsvCell(row.Backend),
@@ -434,6 +454,7 @@ func formatLongMemEvalComparisonTSV(rows []lmeCompareRow) string {
 			row.CandidateCorrect,
 			row.BaselineJudgeAvailable,
 			row.CandidateJudgeAvailable,
+			row.JudgeDriftIgnored,
 			row.BaselineEM,
 			row.CandidateEM,
 			row.BaselineF1,
@@ -459,21 +480,22 @@ func formatLongMemEvalComparisonMarkdown(baselinePath, candidatePath string, row
 	fmt.Fprintf(&b, "- Baseline: `%s`\n", baselinePath)
 	fmt.Fprintf(&b, "- Candidate: `%s`\n", candidatePath)
 	b.WriteString("- Correctness uses the semantic judge when available and falls back to exact match; no model calls are made.\n")
-	b.WriteString("- Only question/backend pairs present in both runs are compared.\n\n")
+	b.WriteString("- Only question/backend pairs present in both runs are compared.\n")
+	b.WriteString("- Identical normalized questions, references, and answers are treated as unchanged; conflicting judge verdicts are counted as ignored judge drift.\n\n")
 
 	b.WriteString("## Backend Delta Summary\n\n")
-	b.WriteString("| Backend | Cases | Correct Baseline | Correct Candidate | EM Baseline | EM Candidate | Avg Delta F1 | Improved | Regressed | Unchanged |\n")
-	b.WriteString("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n")
+	b.WriteString("| Backend | Cases | Correct Baseline | Correct Candidate | EM Baseline | EM Candidate | Avg Delta F1 | Improved | Regressed | Unchanged | Judge Drift Ignored |\n")
+	b.WriteString("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n")
 	for _, backend := range sortedCompareBackends(summary) {
 		s := summary[backend]
 		avgDelta := 0.0
 		if s.Cases > 0 {
 			avgDelta = s.TotalDeltaF1 / float64(s.Cases)
 		}
-		fmt.Fprintf(&b, "| %s | %d | %d | %d | %d | %d | %+.4f | %d | %d | %d |\n",
+		fmt.Fprintf(&b, "| %s | %d | %d | %d | %d | %d | %+.4f | %d | %d | %d | %d |\n",
 			mdCell(backend), s.Cases, s.BaselineCorrect, s.CandidateCorrect,
 			s.BaselineEM, s.CandidateEM,
-			avgDelta, s.Improved, s.Regressed, s.Unchanged)
+			avgDelta, s.Improved, s.Regressed, s.Unchanged, s.JudgeDriftIgnored)
 	}
 
 	b.WriteString("\n## Top Improvements\n\n")
@@ -505,6 +527,9 @@ func summarizeLongMemEvalCompareRows(rows []lmeCompareRow) map[string]*lmeCompar
 			s.CandidateEM++
 		}
 		s.TotalDeltaF1 += row.DeltaF1
+		if row.JudgeDriftIgnored {
+			s.JudgeDriftIgnored++
+		}
 		switch {
 		case !row.BaselineCorrect && row.CandidateCorrect:
 			s.Improved++
