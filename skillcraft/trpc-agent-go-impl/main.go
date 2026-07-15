@@ -162,9 +162,9 @@ var (
 	flagOptimizedSkillsFrom = flag.String(
 		"optimized-skills-from",
 		"",
-		"Optional optimized managed_skills directory. In compare mode this adds a third "+
-			"optimized_evolution arm, using the same online reviewer pipeline as evolution "+
-			"but warm-starting from this library.",
+		"Optional optimized managed_skills overlay. In compare mode this adds a third "+
+			"optimized_evolution arm, first loading -load-skills-from and then replacing "+
+			"matching skill folders from this directory.",
 	)
 	flagEvaluationSeed = flag.String(
 		"evaluation-seed",
@@ -970,7 +970,7 @@ func runModeTasks(
 		if err := os.MkdirAll(skillsDir, 0o755); err != nil {
 			return nil, fmt.Errorf("create managed skills dir: %w", err)
 		}
-		if seedDir := managedSkillsSeed(cfg, mode); seedDir != "" {
+		for _, seedDir := range managedSkillsSeeds(cfg, mode) {
 			n, err := seedManagedSkills(seedDir, skillsDir)
 			if err != nil {
 				return nil, fmt.Errorf("seed managed skills from %s: %w", seedDir, err)
@@ -1011,14 +1011,17 @@ func managedSkillRevisionsDirName(mode runMode) string {
 	return managedSkillsDirName(mode) + "_revisions"
 }
 
-func managedSkillsSeed(cfg *benchmarkConfig, mode runMode) string {
+func managedSkillsSeeds(cfg *benchmarkConfig, mode runMode) []string {
 	if cfg == nil {
-		return ""
+		return nil
 	}
 	if mode == modeOptimizedEvolution {
-		return cfg.OptimizedSkillsFrom
+		return []string{cfg.LoadSkillsFrom, cfg.OptimizedSkillsFrom}
 	}
-	return cfg.LoadSkillsFrom
+	if cfg.LoadSkillsFrom == "" {
+		return nil
+	}
+	return []string{cfg.LoadSkillsFrom}
 }
 
 // seedManagedSkills copies every immediate subdirectory of srcDir (each

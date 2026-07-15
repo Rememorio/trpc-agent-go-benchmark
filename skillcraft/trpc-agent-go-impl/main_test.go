@@ -143,8 +143,8 @@ func TestManagedSkillInputsAreIsolatedByArm(t *testing.T) {
 	require.False(t, modeLearnsSkills(modeBaseline))
 	require.Equal(t, "managed_skills", managedSkillsDirName(modeEvolution))
 	require.Equal(t, "optimized_managed_skills", managedSkillsDirName(modeOptimizedEvolution))
-	require.Equal(t, "/legacy", managedSkillsSeed(cfg, modeEvolution))
-	require.Equal(t, "/optimized", managedSkillsSeed(cfg, modeOptimizedEvolution))
+	require.Equal(t, []string{"/legacy"}, managedSkillsSeeds(cfg, modeEvolution))
+	require.Equal(t, []string{"/legacy", "/optimized"}, managedSkillsSeeds(cfg, modeOptimizedEvolution))
 }
 
 func TestSetModeResultPublishesPartialArmState(t *testing.T) {

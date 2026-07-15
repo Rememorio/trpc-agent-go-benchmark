@@ -13,7 +13,10 @@ tasks with `trpc-agent-go` across four run modes:
 When `compare` also receives `-optimized-skills-from`, it runs a controlled
 third arm named `optimized_evolution`. Both evolution arms use the same online
 reviewer, publisher, quality gates, task sequence, and model settings; only the
-warm-start skill library differs. `-evaluation-seed` derives one task-specific
+warm-start skill library differs. The third arm starts from
+`-load-skills-from` and overlays only the changed skill folders from
+`-optimized-skills-from`, so callers do not maintain two complete copies.
+`-evaluation-seed` derives one task-specific
 sampling seed that is reused across all arms, and odd/even root seeds reverse
 the whole-arm order across repeated runs without disturbing online learning
 within an arm.
@@ -337,7 +340,7 @@ regression set after exposing a development failure.
 | `-task-timeout-seconds` | Override task timeout |
 | `-max-tool-iterations` | Max tool loops per task |
 | `-load-skills-from` | Warm-start the evolution arm from an existing managed-skill directory |
-| `-optimized-skills-from` | In compare mode, add an optimized-evolution arm with a separate warm-start library; requires `-load-skills-from` |
+| `-optimized-skills-from` | In compare mode, add an optimized-evolution arm by overlaying changed skill folders on `-load-skills-from` |
 | `-evaluation-seed` | Optional root seed used to derive paired per-task seeds across compare arms |
 | `-evaluation-temperature` | Optional shared agent/reviewer sampling temperature for non-optimization modes |
 | `-max-prompt-skills` | Cap the number of full skill summaries rendered into the prompt |
