@@ -96,6 +96,16 @@ func longMemEvalImplementation() string {
 	return "unspecified"
 }
 
+func longMemEvalMem0Implementation() string {
+	if value := strings.TrimSpace(*flagMem0Implementation); value != "" {
+		return value
+	}
+	if value := strings.TrimSpace(os.Getenv("MEM0_IMPLEMENTATION")); value != "" {
+		return value
+	}
+	return "unspecified"
+}
+
 func longMemEvalFileSHA256(path string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {

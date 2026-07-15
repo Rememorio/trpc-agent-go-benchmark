@@ -757,6 +757,17 @@ func runLongMemEvalMemory(ctx context.Context) error {
 	}
 
 	backends := parseMemoryBackends(*flagMemoryBackends)
+	mem0Implementation := ""
+	for _, backend := range backends {
+		if backend != "mem0" {
+			continue
+		}
+		mem0Implementation = longMemEvalMem0Implementation()
+		if mem0Implementation == "unspecified" {
+			return errors.New("mem0 backend requires -mem0-implementation or MEM0_IMPLEMENTATION")
+		}
+		break
+	}
 	mem0Config, err := prepareLongMemEvalMem0(ctx, backends)
 	if err != nil {
 		return err
@@ -806,6 +817,9 @@ func runLongMemEvalMemory(ctx context.Context) error {
 	}
 	if mem0Config != nil {
 		results.Metadata["mem0_runtime_configuration"] = mem0Config
+	}
+	if mem0Implementation != "" {
+		results.Metadata["mem0_implementation"] = mem0Implementation
 	}
 	for _, backend := range backends {
 		if backend == "mem0" {

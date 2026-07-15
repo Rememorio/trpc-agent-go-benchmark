@@ -174,6 +174,10 @@ func validateLongMemEvalComparison(baseline, candidate *runResult) error {
 	if baselineImplementation == candidateImplementation {
 		return fmt.Errorf("baseline and candidate use the same implementation label %q", baselineImplementation)
 	}
+	mem0Implementation, ok := lmeMetadataString(baseline.Metadata, "mem0_implementation")
+	if !ok || mem0Implementation == "" || mem0Implementation == "unspecified" {
+		return errors.New("baseline is missing a specific Mem0 implementation label")
+	}
 
 	required := []string{
 		"dataset_sha256",
@@ -716,6 +720,9 @@ func writeLongMemEvalComparisonArms(b *strings.Builder, baseline, candidate *run
 
 func longMemEvalReferenceImplementation(result *runResult) string {
 	if result != nil {
+		if implementation, ok := lmeMetadataString(result.Metadata, "mem0_implementation"); ok && implementation != "" {
+			return implementation
+		}
 		if mode, ok := lmeMetadataString(result.Metadata, "mem0_mode"); ok && mode != "" {
 			return "Mem0 " + mode
 		}

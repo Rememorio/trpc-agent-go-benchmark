@@ -1483,7 +1483,7 @@ func TestCompareLongMemEvalResults(t *testing.T) {
 		}
 		if name == "comparison.md" &&
 			(!strings.Contains(text, "Three-Arm Summary") ||
-				!strings.Contains(text, "self-hosted Mem0")) {
+				!strings.Contains(text, "mem0-oss-test-revision")) {
 			t.Fatalf("%s missing three-arm summary: %s", name, text)
 		}
 	}
@@ -1511,6 +1511,7 @@ func TestCompareLongMemEvalResults(t *testing.T) {
 func testLongMemEvalComparisonMetadata(implementation string) map[string]any {
 	return map[string]any{
 		"implementation":        implementation,
+		"mem0_implementation":   "mem0-oss-test-revision",
 		"dataset_sha256":        "dataset-digest",
 		"selection_sha256":      "selection-digest",
 		"protocol_version":      lmeProtocolVersion,
@@ -1521,6 +1522,22 @@ func testLongMemEvalComparisonMetadata(implementation string) map[string]any {
 		"embedding_model":       "embedding-model",
 		"answer_prompt_version": lmeAnswerPromptVersion,
 		"judge_prompt_version":  lmeJudgePromptVersion,
+	}
+}
+
+func TestValidateLongMemEvalComparisonRequiresMem0Implementation(t *testing.T) {
+	t.Parallel()
+
+	baseline := &runResult{
+		Metadata: testLongMemEvalComparisonMetadata("upstream-main"),
+	}
+	delete(baseline.Metadata, "mem0_implementation")
+	candidate := &runResult{
+		Metadata: testLongMemEvalComparisonMetadata("candidate-2196"),
+	}
+	err := validateLongMemEvalComparison(baseline, candidate)
+	if err == nil || !strings.Contains(err.Error(), "Mem0 implementation") {
+		t.Fatalf("missing Mem0 implementation error = %v", err)
 	}
 }
 

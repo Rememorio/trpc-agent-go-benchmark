@@ -192,6 +192,12 @@ var (
 		"",
 		"Mem0 OSS host (env MEM0_HOST or http://localhost:8888)",
 	)
+	flagMem0Implementation = flag.String(
+		"mem0-implementation",
+		"",
+		"Mem0 source revision or image digest recorded in LongMemEval results "+
+			"(env MEM0_IMPLEMENTATION)",
+	)
 	flagMem0Cloud = flag.Bool(
 		"mem0-cloud",
 		false,

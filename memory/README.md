@@ -217,6 +217,7 @@ self-hosted mem0 comparison.
 ```bash
 export PGVECTOR_DSN="postgres://user:password@localhost:5432/vectordb?sslmode=disable"
 export MEM0_HOST="http://localhost:8888"
+export MEM0_IMPLEMENTATION="mem0-oss-<source-commit-or-image-digest>"
 
 # One-case smoke test.
 go run . \
@@ -377,6 +378,7 @@ LongMemEval-specific options:
 | `-lme-analyze-results`   |         | Analyze one saved LongMemEval `results.json` |
 | `-lme-compare-results`   |         | Compare baseline,candidate `results.json`    |
 | `-mem0-host`             | (env)   | Self-hosted mem0 OSS host                    |
+| `-mem0-implementation`   | (env)   | Mem0 source revision or image digest         |
 | `-mem0-cloud`            | false   | Use hosted mem0 API semantics                |
 | `-mem0-llm-temperature`  | -1      | Set OSS mem0 LLM temperature; -1 keeps it    |
 
@@ -395,6 +397,7 @@ LongMemEval-specific options:
 | `OPENAI_EMBEDDING_API_KEY`  | API key for embedding model (optional)    |
 | `OPENAI_EMBEDDING_BASE_URL` | Base URL for embedding API (optional)     |
 | `MEM0_HOST`                 | Self-hosted mem0 OSS host                 |
+| `MEM0_IMPLEMENTATION`       | Mem0 source revision or image digest      |
 | `LME_IMPLEMENTATION`        | LongMemEval implementation label          |
 
 ## Dataset Setup
