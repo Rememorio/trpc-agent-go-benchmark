@@ -6,9 +6,16 @@ This directory stores memory benchmark evaluation results.
 
 | File | Description |
 |------|-------------|
-| [REPORT.md](REPORT.md) | Full evaluation report (English) |
-| [REPORT.zh_CN.md](REPORT.zh_CN.md) | Full evaluation report (Chinese) |
-| [LONGMEMEVAL_REPORT.md](LONGMEMEVAL_REPORT.md) | LongMemEval pgvector vs self-hosted mem0 report |
+| [REPORT.md](REPORT.md) | Unified LoCoMo and LongMemEval evaluation report (English) |
+| [REPORT.zh_CN.md](REPORT.zh_CN.md) | Unified LoCoMo and LongMemEval evaluation report (Chinese) |
+
+## LongMemEval Memory Evaluation Summary
+
+The production-style LongMemEval Oracle evaluation uses one 16-question
+development subset and one zero-overlap 16-question holdout. Pgvector scores
+13/16 versus mem0 at 11/16 on development after identical-answer judge-drift
+normalization, then scores 15/16 versus 14/16 on the unseen holdout. See the
+unified reports for replay design, token usage, bad cases, and limitations.
 
 ## LoCoMo Benchmark Evaluation Summary
 

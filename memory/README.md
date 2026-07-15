@@ -1,13 +1,14 @@
 # Memory Evaluation Benchmark
 
 This benchmark evaluates the long-term conversational memory capabilities of
-trpc-agent-go using the LoCoMo dataset.
+trpc-agent-go using LoCoMo and LongMemEval.
 
 ## Overview
 
 Based on:
 
 - [LoCoMo: Long-Context Conversational Memory](https://arxiv.org/abs/2402.17753)
+- [LongMemEval: Benchmarking Chat Assistants on Long-Term Interactive Memory](https://arxiv.org/abs/2410.10813)
 - [Memory in the Age of AI Agents](https://arxiv.org/abs/2512.13564)
 
 ## Reports
@@ -49,6 +50,18 @@ Based on:
    for factual recall tasks.
 4. pgvector > MySQL for retrieval quality; gap vanishes with history
    injection.
+
+**LongMemEval Oracle (Two Stratified 16-Question Subsets)**:
+
+| Subset | Role | mem0 | pgvector |
+|--------|------|-----:|---------:|
+| seed48 | Development | 11/16 | 13/16 drift-normalized (12/16 raw) |
+| seed137 | Unseen holdout | 14/16 | **15/16** |
+
+LongMemEval replays each user/assistant pair through the production
+auto-memory path. The 32-question result is diagnostic rather than a
+full-dataset significance claim; see the full English or Chinese report for
+the method, usage, failure-stage analysis, and limitations.
 
 ## SQLite vs SQLiteVec (Subset)
 
@@ -195,8 +208,9 @@ usage, timings, evidence recall, and build provenance for the benchmark and
 memory modules. This separates extraction, persistence, retrieval, and answer
 failures.
 
-See the [LongMemEval evaluation report](results/LONGMEMEVAL_REPORT.md) for the
-current pgvector and self-hosted mem0 comparison.
+The unified [English](results/REPORT.md) and
+[Chinese](results/REPORT.zh_CN.md) reports include the current pgvector and
+self-hosted mem0 comparison.
 
 ```bash
 export PGVECTOR_DSN="postgres://user:password@localhost:5432/vectordb?sslmode=disable"

@@ -1,43 +1,63 @@
-# Evaluating Long-Term Conversational Memory on LoCoMo Benchmark
+# Long-Term Conversational Memory Evaluation on LoCoMo and LongMemEval
 
 ## 1. Introduction
 
 This report evaluates the long-term conversational memory of
-**trpc-agent-go** using the **LoCoMo** benchmark (Maharana et al.,
-2024). It covers two versions:
+**trpc-agent-go** on two complementary benchmarks:
 
+- **LoCoMo** measures broad conversational QA quality over 1,986
+  questions and supports comparisons with agent frameworks and
+  published memory systems.
+- **LongMemEval** isolates the production memory lifecycle across
+  extraction, persistence, retrieval, and answer generation. The
+  evaluation directly compares the trpc-agent-go pgvector memory
+  service with a self-hosted mem0 deployment.
+
+The LoCoMo evaluation covers a long-context upper bound and three memory
+strategies:
+
+- **Long-Context**: Full transcript in the model context
 - **trpc-agent-go (original)**: Baseline version (Auto extraction + pgvector)
 - **trpc-agent-go (optimized)**: After multiple rounds of optimization
   including contextualized memory extraction, episodic memory
   classification, hybrid search, and multi-pass retrieval
   (see Section 2.3 for details)
+- **Session Recall**: Query-time retrieval over persisted raw session events
 
-Both versions are compared against four Python agent frameworks
+These approaches are compared against four Python agent frameworks
 (AutoGen, Agno, ADK, CrewAI) and ten external memory systems
-(Mem0, Zep, etc.).
+(Mem0, Zep, etc.). The LongMemEval evaluation uses two controlled
+16-question subsets: one for development and one unseen holdout.
+It is designed for diagnostic confidence rather than as a claim
+about the complete 500-question dataset.
 
 ## 2. Experimental Setup
 
-### 2.1 Benchmark
+### 2.1 Benchmarks
 
-| Item | Value |
-| --- | --- |
-| Dataset | LoCoMo-10 (10 conversations, 1,986 QA) |
-| Categories | single-hop (282), multi-hop (321), temporal (96), open-domain (841), adversarial (446) |
-| Model | GPT-4o-mini (inference + judge) |
-| Embedding | text-embedding-3-small |
+| Benchmark | Scope | Categories | Model | Embedding |
+| --- | --- | --- | --- | --- |
+| LoCoMo-10 | 10 conversations, 1,986 QA | single-hop (282), multi-hop (321), temporal (96), open-domain (841), adversarial (446) | GPT-4o-mini (inference + judge) | text-embedding-3-small |
+| LongMemEval Oracle | Two stratified 16-question subsets from 500 questions | knowledge-update, multi-session, single-session-assistant, single-session-preference, single-session-user, temporal-reasoning; 30 abstention questions | glm52 (memory, answer, and judge) | text-embedding-3-small |
 
-### 2.2 Scenarios
+LoCoMo is the broad quality and cross-system benchmark. LongMemEval
+Oracle removes the large irrelevant-session haystack so that failures can
+be attributed more precisely to memory extraction, persistence, retrieval,
+or answer generation. The latter does not substitute for a future
+LongMemEval-M evaluation under noisy long histories.
+
+### 2.2 LoCoMo Scenarios
 
 | Scenario | Description |
 | --- | --- |
 | **Long-Context** | Full transcript as LLM context (upper bound) |
+| **Session Recall** | Query-time search over persisted raw historical session events |
 | **Original** | Auto extraction + pgvector baseline; background extractor writes memories and retrieves them at query time |
 | **Optimized** | Optimized memory extraction strategy and multi-pass retrieval over extracted memories |
 
-### 2.3 Optimizations: Original → Optimized
+### 2.3 Memory Optimizations
 
-The optimized version builds on the original baseline with a series
+For LoCoMo, the optimized version builds on the original baseline with a series
 of targeted improvements across the memory extraction, storage, and
 retrieval pipeline:
 
@@ -93,6 +113,47 @@ retrieval pipeline:
    word-level Jaccard similarity) are deduplicated, keeping only
    the highest-scored version. This reduces redundant context
    in the retrieval results.
+
+LongMemEval then exposed a different set of production-path reliability
+problems. The resulting changes preserve dated state transitions instead
+of collapsing historical and current states, retain concrete assistant
+answers and structured deliverables, and retry malformed structured
+extraction output. If extraction still produces no operation, qualifying
+long assistant output is stored through a conservative fallback.
+
+Automatic Add reconciliation now rewrites only high-confidence
+near-duplicates; related plans, recommendations, events, and entity lists
+remain distinct. Add, Update, Delete, and Clear failures are propagated
+from asynchronous jobs, exposed through session state, and no longer
+advance the extraction completion marker. A benchmark-like extraction
+example was also replaced with synthetic content to avoid prompt leakage.
+
+### 2.4 LongMemEval Replay and Fairness
+
+Each LongMemEval question owns a separate user and run scope. Haystack
+sessions are sorted chronologically and replayed one user/assistant pair at
+a time. After every pair, pgvector invokes the production
+`memory.Service.EnqueueAutoMemoryJob` path and waits for completion; mem0
+receives the same dated pair through its public API. The answer model sees
+only searched memories, never the raw transcript.
+
+Both backends use glm52 at temperature 0, `text-embedding-3-small`, and
+top-k 50 retrieval. Self-hosted mem0 v1.1 uses pgvector as its vector store.
+The runner records extraction operations, memory diffs, retrieval hits,
+evidence provenance, errors, timings, LLM and embedding usage, cached
+tokens, build revisions, and sanitized mem0 configuration.
+
+Sampling is deterministic and separates answerable and abstention cases.
+Each subset contains two non-abstention questions from every LongMemEval
+type plus four abstention questions, for 16 questions total. Seed48 is the
+development subset. Seed137 is an unseen holdout with no question-ID overlap
+with the 50 development, targeted-validation, and earlier holdout IDs used
+while changing the memory service.
+
+A strict semantic judge scores the saved raw answers. Exact match, F1, and
+BLEU are retained as secondary diagnostics. When normalized question,
+reference, and answer are identical across two runs, a conflicting semantic
+verdict is reported as judge drift rather than a behavioral change.
 
 ## 3. Results
 
@@ -287,6 +348,59 @@ We also rerun the same configuration on another representative sample.
   be sensitive to noise in retrieved memories.
 - `qa-search-passes=2` improves some categories (e.g. multi-hop) but does
   not improve overall F1, and increases both tokens and latency.
+
+### 3.4 LongMemEval: pgvector vs Self-Hosted mem0
+
+The LongMemEval comparison measures the production auto-memory path rather
+than the LoCoMo retrieval variants above. Both backends replay the same
+conversation pairs and use the same answer protocol. The seed48 subset is
+used for development; seed137 is the independent holdout.
+
+| Subset | Role | Backend | Judge | EM | Avg F1 |
+| --- | --- | --- | ---: | ---: | ---: |
+| seed48 | development | mem0 | 11/16 | 3/16 | 0.300 |
+| seed48 | development | pgvector before fallback | 11/16 | 2/16 | 0.192 |
+| seed48 | development | pgvector final, raw judge | 12/16 | 3/16 | 0.282 |
+| seed48 | development | pgvector final, drift-normalized | **13/16** | 3/16 | 0.282 |
+| seed137 | unseen holdout | mem0 | 14/16 | 5/16 | 0.453 |
+| seed137 | unseen holdout | pgvector final | **15/16** | **7/16** | **0.553** |
+
+Seed48 contains one conflicting semantic-judge verdict for identical
+normalized question, reference, and answer. Treating that pair as unchanged
+leaves two pgvector improvements and no behavioral regressions. Across both
+subsets, raw judge correctness is 27/32 for pgvector and 25/32 for mem0;
+applying the identical-answer rule gives pgvector 28/32.
+
+Seed137 replayed 144 user/assistant pairs per backend. Provider-reported
+usage for that holdout is:
+
+| Backend | LLM Calls | LLM Tokens | Cached Tokens | Embedding Calls | Embedding Tokens |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| mem0 | 160 | 1,446,726 | 1,107,264 | 297 | 112,771 |
+| pgvector | 161 | 1,322,812 | 688,384 | 873 | 54,882 |
+| semantic judge | 32 | 8,324 | 832 | 0 | 0 |
+
+Pgvector uses 8.6% fewer total LLM tokens and 51.3% fewer embedding tokens
+on seed137, although it makes more, shorter embedding requests. Cached tokens
+remain separate because billing treatment varies by provider.
+
+The traces make the remaining disagreements attributable:
+
+- `e3fc4d6e` was a pgvector extraction miss on a long assistant entity
+  list. The structured-output fallback preserves the list and changes the
+  answer from `I don't know` to the exact `Dr. Arati Prabhakar`.
+- `8a2466db` is the only pgvector-only holdout failure. The source assistant
+  listed Adobe Premiere Pro learning resources, but pgvector retained only
+  the user's interest in advanced settings. This is a partial assistant-output
+  extraction miss, not a ranking failure. No change was made after observing
+  the holdout case.
+- mem0's two holdout-only failures, `09ba9854` and `51b23612`, have relevant
+  memories in retrieval but miss `$50` and `Nu, pogodi!` at answer generation.
+
+The result shows a consistent advantage on two controlled subsets and gives
+stage-level evidence for the change, but 32 questions are too few for a claim
+of statistical significance. A larger unseen Oracle sample and LongMemEval-M
+remain necessary confirmatory evaluations.
 
 ---
 
@@ -675,6 +789,11 @@ Source: Mem0 Table 1 (Chhikara et al., 2025, arXiv:2504.19413).
 All systems use GPT-4o-mini. Adversarial category excluded for
 cross-system comparability (Mem0 paper does not include it).
 
+This section uses published LoCoMo numbers and is separate from the direct,
+same-run self-hosted mem0 comparison in Section 3.4. The two evaluations use
+different datasets and model protocols, so their absolute scores must not be
+mixed.
+
 > **About "LoCoMo (paper baseline)" in the table.** LoCoMo is
 > both the dataset used in this report and a memory system
 > proposed in the LoCoMo paper (Maharana et al., 2024). That
@@ -784,13 +903,21 @@ Agno                |====================                      | 0.267
    robustness, while Long-Context still serves as a useful upper
    bound for short single-session histories.
 
-3. **trpc-agent-go now surpasses dedicated memory systems by a wide
+3. **The production pgvector memory path also leads self-hosted mem0
+   on controlled LongMemEval replay.** It improves from 11/16 to 13/16
+   on seed48 after identical-answer judge normalization, then scores
+   15/16 versus mem0's 14/16 on the unseen seed137 holdout. The sample
+   is intentionally small, but the zero-overlap holdout and saved
+   stage-level traces reduce the risk that the gain is a benchmark-specific
+   answer-policy artifact.
+
+4. **trpc-agent-go now surpasses dedicated memory systems by a wide
    margin.** Session Recall's 4-category weighted F1 of 0.531 is well
    above Mem0g (0.422), Mem0 (0.421), Zep (0.403), LangMem (0.362),
    A-Mem (0.347), OpenAI Memory (0.328), MemGPT (0.308), and other
    purpose-built memory systems.
 
-4. **Limitations of other Python frameworks.**
+5. **Limitations of other Python frameworks.**
 
    - **ADK**: Highest token consumption (49,224 tokens/QA) — **2.9x**
      that of the optimized version — yet only achieves 0.362 F1. Its
@@ -815,17 +942,20 @@ Agno                |====================                      | 0.267
      lowest among all frameworks, revealing a critical adversarial
      robustness deficiency
 
-5. **Memory is essential for production agents.** Long-Context is
+6. **Memory is essential for production agents.** Long-Context is
    effective for short single-session scenarios, but cannot persist
    knowledge across sessions or scale beyond the model's context
    window. Session Recall delivers a stronger quality/cost balance,
    while the optimized version provides a second memory strategy built on
    extracted persistent memories.
 
-6. **Temporal reasoning remains the next optimization target.** The
-   optimized version reaches 0.247 in temporal, but Session Recall is
-   still at 0.174. Time-aware retrieval, temporal query rewriting,
-   and richer reranking remain the main next steps.
+7. **Temporal reasoning and structured assistant-output completeness
+   remain the next optimization targets.** The optimized version reaches
+   0.247 in temporal, but Session Recall is
+   still at 0.174. LongMemEval additionally leaves one holdout case where
+   only part of an assistant recommendation was extracted. Time-aware
+   retrieval, temporal query rewriting, richer reranking, and a general
+   structured-output completeness rule remain the main next steps.
 
 ### Production Recommendations
 
@@ -833,8 +963,9 @@ Agno                |====================                      | 0.267
 | --- | --- |
 | Short single-session (< 50K tokens) | Long-context (no memory needed) |
 | Cross-session QA / best accuracy | Session Recall |
-| Long-running agents (weeks/months) | Optimized |
+| Long-running agents with durable extracted memory | Optimized pgvector auto memory |
 | History exceeding context window | Session Recall or optimized |
+| Memory regression development | Stratified Oracle subset plus a new unseen seed |
 
 ---
 
@@ -845,10 +976,11 @@ Agno                |====================                      | 0.267
 | Component | Version/Config |
 | --- | --- |
 | Framework | trpc-agent-go |
-| Model | gpt-4o-mini |
+| Models | GPT-4o-mini (LoCoMo); glm52 (LongMemEval) |
 | Embedding | text-embedding-3-small |
 | PostgreSQL | 15+ with pgvector extension |
-| Dataset | LoCoMo-10 (10 samples, 1,986 QA) |
+| Datasets | LoCoMo-10 (10 samples, 1,986 QA); LongMemEval Oracle (two 16-question subsets) |
+| Comparison backend | Self-hosted mem0 v1.1 with pgvector (LongMemEval) |
 
 ### B. Full Category Breakdown (F1 / BLEU / LLM)
 
@@ -872,10 +1004,39 @@ Agno                |====================                      | 0.267
 | Agno | 20,694,534 | 31,194 | 20,725,728 | 1,986 | 1.0 |
 | ADK | 97,691,620 | 67,833 | 97,759,453 | 4,028 | 2.0 |
 
+### D. LongMemEval Reproduction and Provenance
+
+The evaluated subset shape can be reproduced with:
+
+```bash
+go run . \
+  -dataset-format longmemeval \
+  -dataset ../../summary/data/longmemeval-cleaned/longmemeval_oracle.json \
+  -memory-backend pgvector,mem0 \
+  -lme-per-type 2 \
+  -lme-abstention-count 4 \
+  -lme-sample-seed 137 \
+  -mem0-llm-temperature 0 \
+  -vector-topk 50 \
+  -debug-dump-memories \
+  -debug-qa-limit 16 \
+  -output ../results/lme-seed137
+```
+
+The seed137 replay used benchmark revision
+`fc0469392299248e281cb9dfc48bd023b54f369f` and trpc-agent-go revision
+`ce3dd3b76ca0`. That benchmark revision did not yet capture mem0
+configuration when the temperature flag remained at its default. The
+sanitized configuration was read back after replay and added only to result
+metadata; its audit record verifies that the canonical case payload hash did
+not change. The current runner records the configuration for every selected
+mem0 run.
+
 ---
 
 ## References
 
 1. Maharana, A., Lee, D., Tulyakov, S., Bansal, M., Barbieri, F., and Fang, Y. "Evaluating Very Long-Term Conversational Memory of LLM Agents." arXiv:2402.17753, 2024.
-2. Chhikara, P., Khant, D., Aryan, S., Singh, T., and Yadav, D. "Mem0: Building Production-Ready AI Agents with Scalable Long-Term Memory." arXiv:2504.19413, 2025.
-3. Hu, C., et al. "Memory in the Age of AI Agents." arXiv:2512.13564, 2024.
+2. Wu, D., Wang, H., Yu, W., Zhang, Y., Chang, K.-W., and Yu, D. "LongMemEval: Benchmarking Chat Assistants on Long-Term Interactive Memory." arXiv:2410.10813, 2024.
+3. Chhikara, P., Khant, D., Aryan, S., Singh, T., and Yadav, D. "Mem0: Building Production-Ready AI Agents with Scalable Long-Term Memory." arXiv:2504.19413, 2025.
+4. Hu, C., et al. "Memory in the Age of AI Agents." arXiv:2512.13564, 2025.

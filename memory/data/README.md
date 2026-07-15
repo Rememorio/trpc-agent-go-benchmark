@@ -112,4 +112,4 @@ The LongMemEval dataset contains per-question haystack conversations:
 
 ### Reference
 
-[LongMemEval: Benchmarking Chat Assistants on Long-Term Interactive Memory](https://arxiv.org/abs/2504.19413)
+[LongMemEval: Benchmarking Chat Assistants on Long-Term Interactive Memory](https://arxiv.org/abs/2410.10813)

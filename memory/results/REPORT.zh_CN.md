@@ -1,39 +1,55 @@
-# 基于 LoCoMo 基准的长期对话记忆评估
+# 基于 LoCoMo 与 LongMemEval 的长期对话记忆评估
 
 ## 1. 引言
 
-本报告使用 **LoCoMo** 基准（Maharana et al., 2024）评估
-**trpc-agent-go** 的长期对话记忆能力。报告涵盖两个版本：
+本报告使用两个互补基准评估 **trpc-agent-go** 的长期对话记忆能力：
 
+- **LoCoMo** 通过 1,986 个问题评估广泛的对话问答质量，并支持
+  与 Agent 框架及公开记忆系统进行横向比较。
+- **LongMemEval** 将生产 memory 生命周期拆分为提取、持久化、
+  召回和回答阶段，直接比较 trpc-agent-go pgvector memory service
+  与 self-hosted mem0。
+
+LoCoMo 评估涵盖一个 long-context 上界和三种 memory 策略：
+
+- **Long-Context**：将完整对话放入模型上下文
 - **trpc-agent-go (原版)**：基线版本（Auto 提取 + pgvector）
 - **trpc-agent-go (优化版)**：经过多轮优化，包括情境化记忆提取、
   情景记忆分类、混合检索、多轮检索等（详见 2.3 节）
+- **Session Recall**：在查询时检索已持久化的原始 session event
 
-以上两个版本与四个 Python Agent 框架（AutoGen、Agno、ADK、
+以上方案与四个 Python Agent 框架（AutoGen、Agno、ADK、
 CrewAI）和十个外部记忆系统（Mem0、Zep 等）进行对比。
+LongMemEval 则使用两个受控的 16 题子集：一个用于开发，另一个
+作为未见盲测。其目标是提供可诊断的证据，而不是声称代表完整
+500 题数据集。
 
 ## 2. 实验设置
 
 ### 2.1 基准数据集
 
-| 项目 | 值 |
-| --- | --- |
-| 数据集 | LoCoMo-10（10 个对话，1,986 个 QA） |
-| 类别 | single-hop (282), multi-hop (321), temporal (96), open-domain (841), adversarial (446) |
-| 模型 | GPT-4o-mini（推理 + 评判） |
-| Embedding | text-embedding-3-small |
+| 基准 | 范围 | 类别 | 模型 | Embedding |
+| --- | --- | --- | --- | --- |
+| LoCoMo-10 | 10 个对话，1,986 个 QA | single-hop (282), multi-hop (321), temporal (96), open-domain (841), adversarial (446) | GPT-4o-mini（推理 + 评判） | text-embedding-3-small |
+| LongMemEval Oracle | 从 500 题中抽取两个 16 题分层子集 | knowledge-update、multi-session、single-session-assistant、single-session-preference、single-session-user、temporal-reasoning；其中 30 题为 abstention | glm52（memory、回答与评判） | text-embedding-3-small |
 
-### 2.2 评估场景
+LoCoMo 用于广泛质量评估与跨系统比较。LongMemEval Oracle 去掉了
+大量无关 session 的 haystack，使失败更容易归因到 memory 提取、
+持久化、召回或回答阶段，但它不能替代未来在嘈杂长历史上的
+LongMemEval-M 评测。
+
+### 2.2 LoCoMo 评估场景
 
 | 场景 | 描述 |
 | --- | --- |
 | **Long-Context** | 完整对话文本作为 LLM 上下文（上界） |
+| **Session Recall** | 在查询时搜索已持久化的原始历史 session event |
 | **原版** | Auto 提取 + pgvector 基线；后台提取器自动生成记忆并在查询时检索 |
 | **优化版** | 面向抽取式持久化 memory 的优化记忆提取策略与多轮检索流程 |
 
-### 2.3 优化项：原版 → 优化版
+### 2.3 Memory 优化
 
-优化版在原版基线的基础上，围绕记忆提取、存储和检索三个环节
+在 LoCoMo 上，优化版在原版基线的基础上，围绕记忆提取、存储和检索三个环节
 进行了一系列针对性改进：
 
 1. **情境化记忆提取（Contextualized Memory Extraction）**——
@@ -79,6 +95,42 @@ CrewAI）和十个外部记忆系统（Mem0、Zep 等）进行对比。
 8. **内容去重（Content Deduplication）**——对检索结果中近重复
    的记忆（词级 Jaccard 相似度 > 80%）进行去重，仅保留得分
    最高的版本，减少检索结果中的冗余上下文。
+
+LongMemEval 进一步暴露了生产路径上的另一组可靠性问题。相应改动
+会保留带日期的状态变化，不再把历史状态与当前状态压缩成同一偏好；
+同时保留 assistant 给出的具体答案、列表和结构化产物，并在结构化
+提取结果格式错误时重试。如果重试后仍没有 operation，符合条件的
+长 assistant 输出会通过保守 fallback 保存。
+
+自动 Add reconcile 现在只改写高置信近重复内容，相关但不同的计划、
+推荐、事件和实体列表会分别保留。异步任务中的 Add、Update、Delete
+和 Clear 错误会向上传播并写入 session state，失败任务不再推进提取
+完成标记。提取 prompt 中类似 benchmark 的示例也已换成合成内容，
+避免 prompt leakage。
+
+### 2.4 LongMemEval 重放与公平性
+
+每个 LongMemEval 问题使用独立的 user 和 run scope。Haystack session
+按时间排序，并逐个 user/assistant pair 重放。每个 pair 后，pgvector
+通过生产接口 `memory.Service.EnqueueAutoMemoryJob` 触发提取并等待完成；
+mem0 通过公开 API 接收同一个带日期 pair。回答模型只看到搜索出的
+memories，不会看到原始对话。
+
+两个后端都使用 temperature 0 的 glm52、`text-embedding-3-small`
+和 top-k 50。Self-hosted mem0 v1.1 使用 pgvector 作为 vector store。
+Runner 会记录提取 operation、memory diff、retrieval hit、证据来源、
+错误、耗时、LLM/embedding usage、cached tokens、构建 revision 和
+脱敏后的 mem0 配置。
+
+抽样过程是确定性的，并将可回答问题与 abstention 问题分开。每个
+子集从 LongMemEval 的每种类型抽取 2 个非 abstention 问题，再从全部
+abstention 问题中抽取 4 个，共 16 题。Seed48 是开发集；seed137 是
+未见盲测，与修改 memory service 时使用过的 50 个开发、定向验证和
+早期 holdout question ID 零重叠。
+
+严格语义 judge 对保存的原始答案进行评分，Exact Match、F1 和 BLEU
+作为辅助诊断保留。若两次运行的归一化问题、参考答案和模型答案完全
+相同，则冲突的语义 verdict 会被报告为 judge drift，而不是行为变化。
 
 ## 3. 结果
 
@@ -262,6 +314,55 @@ Long-Context 将完整对话历史放入单次 LLM 调用，在短单 session
 - **top-k 并非越大越好**：top-k=20/40 虽然增加了 prompt token，但 F1/BLEU
   略有下降。QA Agent 对检索噪声较敏感。
 - `qa-search-passes=2` 在部分类别上有改善（如 multi-hop），但总体 F1 无提升。
+
+### 3.4 LongMemEval：pgvector vs Self-Hosted mem0
+
+LongMemEval 比较评估的是生产 auto-memory 路径，而不是前文的 LoCoMo
+检索变体。两个后端重放相同的对话 pair，并使用相同的回答协议。
+seed48 用于开发，seed137 是独立盲测。
+
+| 子集 | 角色 | 后端 | Judge | EM | 平均 F1 |
+| --- | --- | --- | ---: | ---: | ---: |
+| seed48 | 开发集 | mem0 | 11/16 | 3/16 | 0.300 |
+| seed48 | 开发集 | fallback 前 pgvector | 11/16 | 2/16 | 0.192 |
+| seed48 | 开发集 | 最终 pgvector，raw judge | 12/16 | 3/16 | 0.282 |
+| seed48 | 开发集 | 最终 pgvector，drift-normalized | **13/16** | 3/16 | 0.282 |
+| seed137 | 未见盲测 | mem0 | 14/16 | 5/16 | 0.453 |
+| seed137 | 未见盲测 | 最终 pgvector | **15/16** | **7/16** | **0.553** |
+
+seed48 有一个问题在归一化问题、参考答案和模型答案完全相同时得到
+冲突的 semantic-judge verdict。将该问题视为未变化后，pgvector 有
+两个改善且没有行为回退。两个子集合计，raw judge 正确数为 pgvector
+27/32、mem0 25/32；应用相同答案规则后 pgvector 为 28/32。
+
+seed137 每个后端重放了 144 个 user/assistant pair。该盲测的
+provider-reported usage 如下：
+
+| 后端 | LLM 调用 | LLM Tokens | Cached Tokens | Embedding 调用 | Embedding Tokens |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| mem0 | 160 | 1,446,726 | 1,107,264 | 297 | 112,771 |
+| pgvector | 161 | 1,322,812 | 688,384 | 873 | 54,882 |
+| semantic judge | 32 | 8,324 | 832 | 0 | 0 |
+
+pgvector 在 seed137 上少使用 8.6% 的 LLM token 和 51.3% 的
+embedding token，但进行了更多次、更短的 embedding 请求。Cached
+tokens 单独报告，因为不同 provider 的计费方式可能不同。
+
+保存的 trace 可以把剩余分歧归因到具体阶段：
+
+- `e3fc4d6e` 原本是长 assistant 实体列表的 pgvector extraction miss。
+  Structured-output fallback 保留列表后，答案从 `I don't know` 变为
+  exact match `Dr. Arati Prabhakar`。
+- `8a2466db` 是唯一的 pgvector-only 盲测失败。源 assistant 给出了
+  Adobe Premiere Pro 学习资源，但 pgvector 只保留了用户对高级设置
+  的兴趣。这是部分 assistant-output extraction miss，不是排序失败；
+  看到该盲测问题后没有继续修改实现。
+- mem0 的两个盲测独有失败 `09ba9854` 和 `51b23612` 已召回相关
+  memories，但在回答阶段分别遗漏 `$50` 和 `Nu, pogodi!`。
+
+两个受控子集上的一致优势和 stage-level trace 支持当前改动，但 32 题
+不足以得出统计显著结论。后续仍需更大的未见 Oracle 子集和
+LongMemEval-M 作为确认性评测。
 
 ---
 
@@ -606,6 +707,10 @@ ADK（Google Agent Development Kit）使用纯内存后端，通过 Agent
 arXiv:2504.19413）。所有系统均使用 GPT-4o-mini。为跨系统可比性，
 已排除 adversarial 类别（Mem0 论文未包含该类别）。
 
+本节使用论文公开的 LoCoMo 数字，与 3.4 节在同一次运行中直接比较
+self-hosted mem0 的实验相互独立。两者使用不同数据集和模型协议，
+不能混用绝对分数。
+
 > **关于表中"LoCoMo（论文基线）"的说明。** LoCoMo 既是本报告
 > 使用的数据集，也是 LoCoMo 论文（Maharana et al., 2024）中
 > 提出的一套记忆系统方案。该方案使用 LLM 从对话中提取事件和
@@ -708,12 +813,18 @@ Agno                |====================                      | 0.267
    和 adversarial 上仍更强；Long-Context 则仍可作为短单 session
    场景下的上界参考。
 
-3. **trpc-agent-go 已明显超越专用记忆系统。** Session Recall 的
+3. **生产 pgvector memory 路径在受控 LongMemEval 重放中也领先
+   self-hosted mem0。** seed48 在相同答案 judge 归一化后从 11/16
+   提升到 13/16；未见 seed137 盲测达到 15/16，mem0 为 14/16。
+   样本规模有意控制得较小，但零重叠盲测和保存的 stage-level trace
+   降低了收益来自 benchmark 特定回答策略的风险。
+
+4. **trpc-agent-go 已明显超越专用记忆系统。** Session Recall 的
    4 类加权 F1 达到 0.531，显著高于 Mem0g（0.422）、Mem0
    （0.421）、Zep（0.403）、LangMem（0.362）、A-Mem（0.347）、
    OpenAI Memory（0.328）、MemGPT（0.308）等专用记忆系统。
 
-4. **其他 Python 框架的局限性。**
+5. **其他 Python 框架的局限性。**
 
    - **ADK**：token 消耗最为严重（49,224 tokens/QA），是优化版的
      **2.9 倍**，但 F1 仅 0.362。其 `LoadMemoryTool` 将全部记忆
@@ -732,16 +843,17 @@ Agno                |====================                      | 0.267
      open-domain 单一类别的突出表现（0.594）；在 adversarial 上
      仅 0.272，为所有框架最低，对抗鲁棒性严重不足
 
-5. **Memory 仍然是生产 Agent 的必需能力。** Long-Context 在单
+6. **Memory 仍然是生产 Agent 的必需能力。** Long-Context 在单
    session 短对话中有效，但无法跨 session 持久化知识，也无法扩展到
    超过模型上下文窗口的历史。Session Recall 提供了更好的质量/成本
    平衡，而优化版则提供了基于抽取式持久化 memory 的第二种
    路线。
 
-6. **temporal 仍然是下一步重点优化方向。** 优化版在
+7. **temporal 与结构化 assistant 输出完整性仍是下一步重点。** 优化版在
    temporal 上达到 0.247，但 Session Recall 目前仍是 0.174。
-   时间感知检索、temporal query rewrite 和更强的 rerank 仍是后续
-   优先方向。
+   LongMemEval 还剩一个只提取了部分 assistant 推荐内容的盲测问题。
+   时间感知检索、temporal query rewrite、更强的 rerank 和通用的
+   structured-output 完整性规则仍是后续优先方向。
 
 ### 生产建议
 
@@ -749,8 +861,9 @@ Agno                |====================                      | 0.267
 | --- | --- |
 | 短对话单 session（< 50K tokens） | Long-Context（无需记忆） |
 | 跨 session QA / 以准确率优先 | Session Recall |
-| 长期运行 Agent（数周/数月历史） | 优化版 |
+| 需要持久化抽取 memory 的长期运行 Agent | 优化版 pgvector auto memory |
 | 历史超出上下文窗口限制 | Session Recall 或优化版 |
+| Memory 回归开发 | 分层 Oracle 子集 + 新的未见 seed |
 
 ---
 
@@ -761,10 +874,11 @@ Agno                |====================                      | 0.267
 | 组件 | 版本/配置 |
 | --- | --- |
 | 框架 | trpc-agent-go |
-| 模型 | gpt-4o-mini |
+| 模型 | GPT-4o-mini（LoCoMo）；glm52（LongMemEval） |
 | Embedding | text-embedding-3-small |
 | PostgreSQL | 15+ with pgvector extension |
-| 数据集 | LoCoMo-10（10 样本，1,986 QA） |
+| 数据集 | LoCoMo-10（10 样本，1,986 QA）；LongMemEval Oracle（两个 16 题子集） |
+| 对比后端 | Self-hosted mem0 v1.1 + pgvector（LongMemEval） |
 
 ### B. 完整类别详情（F1 / BLEU / LLM）
 
@@ -788,10 +902,37 @@ Agno                |====================                      | 0.267
 | Agno | 20,694,534 | 31,194 | 20,725,728 | 1,986 | 1.0 |
 | ADK | 97,691,620 | 67,833 | 97,759,453 | 4,028 | 2.0 |
 
+### D. LongMemEval 复现与 Provenance
+
+本次评估的子集形状可通过以下命令复现：
+
+```bash
+go run . \
+  -dataset-format longmemeval \
+  -dataset ../../summary/data/longmemeval-cleaned/longmemeval_oracle.json \
+  -memory-backend pgvector,mem0 \
+  -lme-per-type 2 \
+  -lme-abstention-count 4 \
+  -lme-sample-seed 137 \
+  -mem0-llm-temperature 0 \
+  -vector-topk 50 \
+  -debug-dump-memories \
+  -debug-qa-limit 16 \
+  -output ../results/lme-seed137
+```
+
+seed137 重放使用 benchmark revision
+`fc0469392299248e281cb9dfc48bd023b54f369f` 和 trpc-agent-go revision
+`ce3dd3b76ca0`。该 benchmark revision 在 temperature flag 保持默认值时
+还不会自动记录 mem0 配置，因此脱敏配置是在重放后读回并且只补充到
+result metadata 中；audit record 验证了 canonical case payload hash
+没有发生变化。当前 runner 会为每个选中的 mem0 运行自动记录配置。
+
 ---
 
 ## 参考文献
 
 1. Maharana, A., Lee, D., Tulyakov, S., Bansal, M., Barbieri, F., and Fang, Y. "Evaluating Very Long-Term Conversational Memory of LLM Agents." arXiv:2402.17753, 2024.
-2. Chhikara, P., Khant, D., Aryan, S., Singh, T., and Yadav, D. "Mem0: Building Production-Ready AI Agents with Scalable Long-Term Memory." arXiv:2504.19413, 2025.
-3. Hu, C., et al. "Memory in the Age of AI Agents." arXiv:2512.13564, 2024.
+2. Wu, D., Wang, H., Yu, W., Zhang, Y., Chang, K.-W., and Yu, D. "LongMemEval: Benchmarking Chat Assistants on Long-Term Interactive Memory." arXiv:2410.10813, 2024.
+3. Chhikara, P., Khant, D., Aryan, S., Singh, T., and Yadav, D. "Mem0: Building Production-Ready AI Agents with Scalable Long-Term Memory." arXiv:2504.19413, 2025.
+4. Hu, C., et al. "Memory in the Age of AI Agents." arXiv:2512.13564, 2025.
