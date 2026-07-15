@@ -189,14 +189,27 @@ func LoadSpec(path string) (*evolution.SkillSpec, error) {
 		return nil, fmt.Errorf("decode skill spec: %w", err)
 	}
 	if _, revision := probe["spec"]; revision {
-		var envelope evolution.Revision
-		if err := decodeStrictJSON(raw, &envelope); err != nil {
-			return nil, fmt.Errorf("decode skill revision: %w", err)
+		if _, immutableRevision := probe["revision_id"]; immutableRevision {
+			var envelope evolution.Revision
+			if err := decodeStrictJSON(raw, &envelope); err != nil {
+				return nil, fmt.Errorf("decode skill revision: %w", err)
+			}
+			if envelope.Spec == nil {
+				return nil, errors.New("skill revision has no spec")
+			}
+			return envelope.Spec, nil
 		}
-		if envelope.Spec == nil {
-			return nil, errors.New("skill revision has no spec")
+		var candidate struct {
+			ID   string               `json:"id"`
+			Spec *evolution.SkillSpec `json:"spec"`
 		}
-		return envelope.Spec, nil
+		if err := decodeStrictJSON(raw, &candidate); err != nil {
+			return nil, fmt.Errorf("decode stored candidate: %w", err)
+		}
+		if candidate.Spec == nil {
+			return nil, errors.New("stored candidate has no spec")
+		}
+		return candidate.Spec, nil
 	}
 	var spec evolution.SkillSpec
 	if err := decodeStrictJSON(raw, &spec); err != nil {

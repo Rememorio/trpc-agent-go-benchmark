@@ -116,6 +116,13 @@ func TestLoadSpec(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "Weather", loaded.Name)
 
+	candidatePath := filepath.Join(dir, "candidate.json")
+	candidate := `{"id":"candidate-1","spec":` + spec + `}`
+	require.NoError(t, os.WriteFile(candidatePath, []byte(candidate), 0o644))
+	loaded, err = LoadSpec(candidatePath)
+	require.NoError(t, err)
+	require.Equal(t, "Weather", loaded.Name)
+
 	trailingPath := filepath.Join(dir, "trailing.json")
 	require.NoError(t, os.WriteFile(trailingPath, []byte(spec+` {}`), 0o644))
 	_, err = LoadSpec(trailingPath)
