@@ -483,7 +483,7 @@ func (b *mem0Backend) ingestPairOSS(ctx context.Context, sess *session.Session, 
 		}
 		apiMsgs = append(apiMsgs, map[string]string{
 			"role":    msg.Role.String(),
-			"content": withObservationDate(content, meta.Date),
+			"content": content,
 		})
 	}
 	if len(apiMsgs) == 0 {
@@ -504,6 +504,9 @@ func (b *mem0Backend) ingestPairOSS(ctx context.Context, sess *session.Session, 
 		metadata["session_timestamp"] = ts
 	} else {
 		delete(metadata, "session_timestamp")
+	}
+	if observationDate, ok := lmeObservationDate(meta.Date); ok {
+		metadata["observation_date"] = observationDate
 	}
 	payload := map[string]any{
 		"messages": apiMsgs,
@@ -2842,16 +2845,12 @@ func lmeUnixTimestamp(date string) (int64, bool) {
 	return t.Unix(), true
 }
 
-func withObservationDate(content, date string) string {
-	date = strings.TrimSpace(date)
-	if date == "" {
-		return content
+func lmeObservationDate(date string) (string, bool) {
+	t, ok := parseLMEDate(date)
+	if !ok {
+		return "", false
 	}
-	return fmt.Sprintf("Observation date: %s\n"+
-		"Use this observation date as the event date for any newly mentioned "+
-		"past or present visit, meeting, purchase, class, presentation, "+
-		"recommendation, or concrete experience that has no explicit date. "+
-		"Do not use today's system date for those events.\n%s", date, content)
+	return t.Format(time.DateOnly), true
 }
 
 func isRetryableMem0Error(err error) bool {

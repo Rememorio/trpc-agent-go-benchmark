@@ -134,8 +134,10 @@ Each LongMemEval question owns a separate user and run scope. Haystack
 sessions are sorted chronologically and replayed one user/assistant pair at
 a time. After every pair, pgvector invokes the production
 `memory.Service.EnqueueAutoMemoryJob` path and waits for completion; mem0
-receives the same dated pair through its public API. The answer model sees
-only searched memories, never the raw transcript.
+receives the same raw pair through its public API. The source session date is
+transported outside message content and fills each backend's observation-date
+context. The answer model sees only searched memories, never the raw
+transcript.
 
 Both backends use glm52 at temperature 0, `text-embedding-3-small`, and
 top-k 50 retrieval. Self-hosted mem0 v1.1 uses pgvector as its vector store.
@@ -350,6 +352,14 @@ We also rerun the same configuration on another representative sample.
   not improve overall F1, and increases both tokens and latency.
 
 ### 3.4 LongMemEval: pgvector vs Self-Hosted mem0
+
+> **Protocol correction:** The results in this subsection are retained for
+> bad-case diagnosis, but are not the final cross-backend baseline. Their Mem0
+> replay prefixed observation-date instructions to message content, while
+> pgvector received the date through extraction context. The corrected runner
+> preserves byte-identical user/assistant content and transports the date as
+> metadata; the table will be replaced after all arms are rerun under that
+> protocol.
 
 The LongMemEval comparison measures the production auto-memory path rather
 than the LoCoMo retrieval variants above. Both backends replay the same

@@ -113,8 +113,9 @@ LongMemEval 进一步暴露了生产路径上的另一组可靠性问题。相�
 每个 LongMemEval 问题使用独立的 user 和 run scope。Haystack session
 按时间排序，并逐个 user/assistant pair 重放。每个 pair 后，pgvector
 通过生产接口 `memory.Service.EnqueueAutoMemoryJob` 触发提取并等待完成；
-mem0 通过公开 API 接收同一个带日期 pair。回答模型只看到搜索出的
-memories，不会看到原始对话。
+mem0 通过公开 API 接收同一个原始 pair。源 session 日期不写入消息
+正文，而是独立传递并填入各后端的 observation-date context。回答模型
+只看到搜索出的 memories，不会看到原始对话。
 
 两个后端都使用 temperature 0 的 glm52、`text-embedding-3-small`
 和 top-k 50。Self-hosted mem0 v1.1 使用 pgvector 作为 vector store。
@@ -316,6 +317,12 @@ Long-Context 将完整对话历史放入单次 LLM 调用，在短单 session
 - `qa-search-passes=2` 在部分类别上有改善（如 multi-hop），但总体 F1 无提升。
 
 ### 3.4 LongMemEval：pgvector vs Self-Hosted mem0
+
+> **协议修正：** 本节结果保留用于 bad-case 诊断，但不再视为正式的
+> 跨后端 baseline。该轮 Mem0 replay 在消息正文前加入了 observation-date
+> 指令，而 pgvector 通过 extraction context 接收日期。修正后的 runner
+> 保持两个后端的 user/assistant 正文逐字一致，并通过 metadata 独立传递
+> 日期；全部评测臂按新协议重跑后会替换下表。
 
 LongMemEval 比较评估的是生产 auto-memory 路径，而不是前文的 LoCoMo
 检索变体。两个后端重放相同的对话 pair，并使用相同的回答协议。

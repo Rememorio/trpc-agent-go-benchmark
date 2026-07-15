@@ -201,7 +201,14 @@ triggers memory extraction after each user/assistant pair. The pgvector backend
 uses `memory.Service.EnqueueAutoMemoryJob` and waits for its session completion
 marker before continuing. Reported asynchronous extraction or persistence
 errors stop that backend immediately and are retained in the pair trace;
-self-hosted mem0 sends the same pair to its memory API. `results.json` records
+self-hosted mem0 sends the same raw pair to its memory API. Session dates are
+transported separately: pgvector receives the date through extraction context,
+while mem0 receives an ISO date in `metadata.observation_date`. The Mem0 V3
+runtime used for a comparison must pass that metadata value to its existing
+`Observation Date` prompt field and identify this transport-only patch in
+`MEM0_IMPLEMENTATION`. Prefixing dates to message content or silently using the
+server's current date produces a different protocol and is not comparable.
+`results.json` records
 pgvector extraction operations, per-pair memory
 diffs, retrieval hits, answer text, LLM and embedding token usage, prompt-cache
 usage, timings, evidence recall, and build provenance for the benchmark and

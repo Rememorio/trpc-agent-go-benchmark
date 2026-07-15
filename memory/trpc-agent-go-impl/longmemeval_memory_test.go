@@ -194,23 +194,13 @@ func TestLongMemEvalDateHelpers(t *testing.T) {
 	if _, ok := lmeUnixTimestamp("not-a-date"); ok {
 		t.Fatal("invalid date parsed")
 	}
-}
 
-func TestWithObservationDate(t *testing.T) {
-	t.Parallel()
-
-	got := withObservationDate("The Fitbit has been used for 9 months.", "2023/04/10 (Mon) 14:47")
-	if !strings.HasPrefix(got, "Observation date: 2023/04/10 (Mon) 14:47\n") {
-		t.Fatalf("missing observation date prefix: %q", got)
+	observationDate, ok := lmeObservationDate("2023/04/10 (Mon) 14:47")
+	if !ok || observationDate != "2023-04-10" {
+		t.Fatalf("unexpected observation date: %q, %v", observationDate, ok)
 	}
-	if !strings.Contains(got, "Do not use today's system date") {
-		t.Fatalf("missing system-date guard: %q", got)
-	}
-	if !strings.Contains(got, "The Fitbit has been used for 9 months.") {
-		t.Fatalf("missing original content: %q", got)
-	}
-	if out := withObservationDate("content", "  "); out != "content" {
-		t.Fatalf("empty date should leave content unchanged: %q", out)
+	if _, ok := lmeObservationDate("not-a-date"); ok {
+		t.Fatal("invalid observation date parsed")
 	}
 }
 
@@ -346,6 +336,49 @@ func TestMem0OSSIngestRetriesTransientStatus(t *testing.T) {
 	}
 	if got := attempts.Load(); got != 2 {
 		t.Fatalf("unexpected attempts: got %d want 2", got)
+	}
+}
+
+func TestMem0OSSIngestPassesObservationDateWithoutChangingMessages(t *testing.T) {
+	t.Parallel()
+
+	var payload struct {
+		Messages []map[string]string `json:"messages"`
+		Metadata map[string]any      `json:"metadata"`
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("decode request: %v", err)
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	sess := session.NewSession(lmeAppName, "user", "session")
+	appendMessages(sess, []model.Message{
+		{Role: model.RoleUser, Content: "hello"},
+		{Role: model.RoleAssistant, Content: "hi"},
+	}, "source", 0)
+	backend := &mem0Backend{
+		host:       server.URL,
+		selfHosted: true,
+		httpClient: server.Client(),
+	}
+	err := backend.ingestPairOSS(context.Background(), sess, ingestMeta{
+		SessionID: "source",
+		Date:      "2023/04/10 (Mon) 14:47",
+	})
+	if err != nil {
+		t.Fatalf("ingest pair: %v", err)
+	}
+	if len(payload.Messages) != 2 || payload.Messages[0]["content"] != "hello" ||
+		payload.Messages[1]["content"] != "hi" {
+		t.Fatalf("messages were changed: %#v", payload.Messages)
+	}
+	if got := payload.Metadata["observation_date"]; got != "2023-04-10" {
+		t.Fatalf("unexpected observation date: %#v", got)
 	}
 }
 
