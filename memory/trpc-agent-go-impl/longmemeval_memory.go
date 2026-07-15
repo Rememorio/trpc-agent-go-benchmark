@@ -2131,6 +2131,10 @@ func buildLongMemEvalAnswerPrompt(inst *lmeInstance, hits []memoryHit) string {
 	return fmt.Sprintf(`You are answering a LongMemEval memory question.
 
 Use only the retrieved memories below. If the memories do not contain enough information, answer "I don't know".
+Metadata in brackets belongs to the preceding memory. The topics field lists
+semantic categories for that memory and can establish category membership, but
+it does not add an entity, action, quantity, or relationship absent from the
+memory text.
 Output only the final answer. Do not explain, reason step by step, cite
 memory numbers, mention uncertainty analysis, or use markdown. The first token
 must be part of the final answer. If the question asks for an order, list, or
