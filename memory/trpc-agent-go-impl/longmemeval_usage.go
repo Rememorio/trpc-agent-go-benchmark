@@ -127,6 +127,7 @@ type lmeProviderUsage struct {
 type lmeTokenTracker struct {
 	mu    sync.Mutex
 	usage lmeTokenUsage
+	calls []lmeModelCallTrace
 }
 
 func (t *lmeTokenTracker) Record(u *model.Usage) {
@@ -155,6 +156,26 @@ func (t *lmeTokenTracker) Snapshot() lmeTokenUsage {
 	snap := t.usage
 	t.usage = lmeTokenUsage{}
 	return snap
+}
+
+func (t *lmeTokenTracker) RecordCall(call lmeModelCallTrace) {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	t.calls = append(t.calls, call)
+	t.mu.Unlock()
+}
+
+func (t *lmeTokenTracker) SnapshotCalls() []lmeModelCallTrace {
+	if t == nil {
+		return nil
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	calls := append([]lmeModelCallTrace(nil), t.calls...)
+	t.calls = nil
+	return calls
 }
 
 type lmeTrackingModel struct {
@@ -186,22 +207,43 @@ func (m *lmeTrackingModel) GenerateContent(
 		}
 		defer close(out)
 		sawError := false
+		call := lmeModelCallTrace{}
+		defer func() {
+			m.tracker.RecordCall(call)
+		}()
 		for resp := range respCh {
 			if resp != nil && resp.Usage != nil {
 				m.tracker.Record(resp.Usage)
 			}
 			if resp != nil && resp.Error != nil {
 				sawError = true
+				call.Error = resp.Error.Message
+			}
+			if resp != nil && len(resp.Choices) > 0 {
+				msg := resp.Choices[0].Message
+				if msg.Content != "" {
+					call.Content = msg.Content
+				}
+				if len(msg.ToolCalls) > 0 {
+					call.ToolCalls = make([]lmeToolCallTrace, 0, len(msg.ToolCalls))
+					for _, toolCall := range msg.ToolCalls {
+						call.ToolCalls = append(call.ToolCalls, lmeToolCallTrace{
+							Name:      toolCall.Function.Name,
+							Arguments: string(toolCall.Function.Arguments),
+						})
+					}
+				}
 			}
 			out <- resp
 		}
 		if err := ctx.Err(); err != nil && !sawError {
+			call.Error = lmeModelCallContextError(err, m.timeout)
 			out <- &model.Response{
 				Object: model.ObjectTypeError,
 				Done:   true,
 				Error: &model.ResponseError{
 					Type:    model.ErrorTypeCancelled,
-					Message: lmeModelCallContextError(err, m.timeout),
+					Message: call.Error,
 				},
 			}
 		}

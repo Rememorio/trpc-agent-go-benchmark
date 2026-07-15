@@ -172,7 +172,19 @@ type ingestTrace struct {
 type extractionTrace struct {
 	ExistingMemoryCount int                   `json:"existing_memory_count"`
 	Operations          []extractionOperation `json:"operations,omitempty"`
+	ModelCalls          []lmeModelCallTrace   `json:"model_calls,omitempty"`
 	Error               string                `json:"error,omitempty"`
+}
+
+type lmeModelCallTrace struct {
+	Content   string             `json:"content,omitempty"`
+	ToolCalls []lmeToolCallTrace `json:"tool_calls,omitempty"`
+	Error     string             `json:"error,omitempty"`
+}
+
+type lmeToolCallTrace struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments,omitempty"`
 }
 
 type extractionOperation struct {
@@ -950,6 +962,13 @@ func runCaseBackend(
 				tracker,
 				backend,
 			)
+			modelCalls := tracker.SnapshotCalls()
+			if len(modelCalls) > 0 {
+				if trace.Extraction == nil {
+					trace.Extraction = &extractionTrace{}
+				}
+				trace.Extraction.ModelCalls = modelCalls
+			}
 			trace.TokenUsage = tokenUsagePtr(usage)
 			trace.EmbeddingUsage = embeddingUsagePtr(embeddingUsage)
 			trace.ProviderUsageReported = providerUsage.Reported
@@ -2162,6 +2181,14 @@ func saveCaseLog(outputDir string, cr *caseResult, br *backendResult) {
 					op.EventTime,
 					strings.Join(op.Topics, ","),
 					truncate(op.Memory, 220))
+			}
+			for i, call := range tr.Extraction.ModelCalls {
+				fmt.Fprintf(&b, "    model_call[%d] error=%s content=%s\n",
+					i, call.Error, truncate(call.Content, 500))
+				for _, toolCall := range call.ToolCalls {
+					fmt.Fprintf(&b, "      tool=%s arguments=%s\n",
+						toolCall.Name, truncate(toolCall.Arguments, 500))
+				}
 			}
 		}
 		for _, msg := range tr.Messages {

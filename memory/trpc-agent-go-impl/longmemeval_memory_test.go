@@ -1700,9 +1700,63 @@ func TestLongMemEvalTrackingModelDefaultsTemperatureToZero(t *testing.T) {
 	}
 }
 
+func TestLongMemEvalTrackingModelRecordsResponseAndToolCalls(t *testing.T) {
+	t.Parallel()
+
+	tracker := &lmeTokenTracker{}
+	base := &queuedResponseModel{response: &model.Response{Choices: []model.Choice{{
+		Message: model.Message{
+			Role:    model.RoleAssistant,
+			Content: "I will store this.",
+			ToolCalls: []model.ToolCall{{Function: model.FunctionDefinitionParam{
+				Name:      "memory_add",
+				Arguments: []byte(`{"memory":"Likes tea"}`),
+			}}},
+		},
+	}}}}
+	wrapped := &lmeTrackingModel{base: base, tracker: tracker}
+
+	ch, err := wrapped.GenerateContent(context.Background(), &model.Request{})
+	if err != nil {
+		t.Fatalf("generate content: %v", err)
+	}
+	for range ch {
+	}
+	calls := tracker.SnapshotCalls()
+	if len(calls) != 1 {
+		t.Fatalf("model calls = %d, want 1", len(calls))
+	}
+	if calls[0].Content != "I will store this." || len(calls[0].ToolCalls) != 1 {
+		t.Fatalf("unexpected model call trace: %#v", calls[0])
+	}
+	if calls[0].ToolCalls[0].Name != "memory_add" ||
+		!strings.Contains(calls[0].ToolCalls[0].Arguments, "Likes tea") {
+		t.Fatalf("unexpected tool call trace: %#v", calls[0].ToolCalls[0])
+	}
+	if got := tracker.SnapshotCalls(); len(got) != 0 {
+		t.Fatalf("second snapshot returned %d calls", len(got))
+	}
+}
+
 type capturingModel struct {
 	request *model.Request
 }
+
+type queuedResponseModel struct {
+	response *model.Response
+}
+
+func (m *queuedResponseModel) GenerateContent(
+	_ context.Context,
+	_ *model.Request,
+) (<-chan *model.Response, error) {
+	ch := make(chan *model.Response, 1)
+	ch <- m.response
+	close(ch)
+	return ch, nil
+}
+
+func (*queuedResponseModel) Info() model.Info { return model.Info{} }
 
 func (m *capturingModel) GenerateContent(
 	_ context.Context,
