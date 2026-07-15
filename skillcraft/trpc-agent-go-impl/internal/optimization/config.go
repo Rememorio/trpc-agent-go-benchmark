@@ -200,8 +200,11 @@ func LoadSpec(path string) (*evolution.SkillSpec, error) {
 			return envelope.Spec, nil
 		}
 		var candidate struct {
-			ID   string               `json:"id"`
-			Spec *evolution.SkillSpec `json:"spec"`
+			ID        string               `json:"id"`
+			ParentID  string               `json:"parent_id,omitempty"`
+			Component string               `json:"component,omitempty"`
+			Rationale string               `json:"rationale,omitempty"`
+			Spec      *evolution.SkillSpec `json:"spec"`
 		}
 		if err := decodeStrictJSON(raw, &candidate); err != nil {
 			return nil, fmt.Errorf("decode stored candidate: %w", err)
