@@ -257,7 +257,12 @@ func refreshLongMemEvalRetrievalResult(
 				br.Error = appendError(br.Error, "refresh answer: "+answerErr.Error())
 			}
 			scoreLongMemEvalAnswer(cr, br)
+			previousEvidence := br.Evidence
 			br.Evidence = computeEvidenceMetrics(inst, br, *flagVectorTopK)
+			if previousEvidence != nil {
+				br.Evidence.HasAnswerTurnLabels =
+					previousEvidence.HasAnswerTurnLabels
+			}
 			br.FailureStage = classifyFailure(inst, br)
 			if answerErr != nil {
 				br.FailureStage = "answer_error"

@@ -85,7 +85,8 @@ func TestRefreshLongMemEvalRetrievalResult(t *testing.T) {
 					FinalMemories: []memorySnapshot{
 						saved,
 					},
-					Judge: &lmeJudgeResult{Correct: false},
+					Evidence: &evidenceMetrics{HasAnswerTurnLabels: true},
+					Judge:    &lmeJudgeResult{Correct: false},
 				},
 			},
 		}},
@@ -110,7 +111,8 @@ func TestRefreshLongMemEvalRetrievalResult(t *testing.T) {
 		!br.Retrieval[0].SourceHasAnswer {
 		t.Fatalf("refreshed retrieval provenance = %#v", br.Retrieval[0])
 	}
-	if br.Evidence == nil || !br.Evidence.RetrievalRecallAll {
+	if br.Evidence == nil || !br.Evidence.RetrievalRecallAll ||
+		!br.Evidence.HasAnswerTurnLabels {
 		t.Fatalf("refreshed evidence = %#v", br.Evidence)
 	}
 	if br.Judge != nil {
