@@ -34,6 +34,19 @@ type lmeExtractorStub struct {
 	ops []*extractor.Operation
 }
 
+type lmeStagedExtractorStub struct {
+	*lmeExtractorStub
+	assistantOps []*extractor.Operation
+}
+
+func (s *lmeStagedExtractorStub) ExtractOperationStages(
+	context.Context,
+	[]model.Message,
+	[]*memory.Entry,
+) ([]*extractor.Operation, []*extractor.Operation, error) {
+	return s.ops, s.assistantOps, nil
+}
+
 func (s *lmeExtractorStub) Extract(
 	context.Context,
 	[]model.Message,
@@ -300,6 +313,91 @@ func TestLMETracingExtractorRecordsOperations(t *testing.T) {
 	}
 	if op.EventTime != "2023-05-22T00:00:00Z" {
 		t.Fatalf("unexpected event time: %q", op.EventTime)
+	}
+}
+
+func TestLMETracingExtractorForwardsOperationStages(t *testing.T) {
+	t.Parallel()
+
+	primary := &extractor.Operation{
+		Type: extractor.OperationAdd, Memory: "User prefers Go.",
+	}
+	assistantResult := &extractor.Operation{
+		Type: extractor.OperationAdd, Memory: "Recommended Python.",
+	}
+	tracing := &lmeTracingExtractor{MemoryExtractor: &lmeStagedExtractorStub{
+		lmeExtractorStub: &lmeExtractorStub{ops: []*extractor.Operation{primary}},
+		assistantOps:     []*extractor.Operation{assistantResult},
+	}}
+
+	gotPrimary, gotResults, err := tracing.ExtractOperationStages(
+		context.Background(), nil, []*memory.Entry{{ID: "existing"}},
+	)
+	if err != nil {
+		t.Fatalf("extract operation stages: %v", err)
+	}
+	if len(gotPrimary) != 1 || gotPrimary[0] != primary ||
+		len(gotResults) != 1 || gotResults[0] != assistantResult {
+		t.Fatalf("unexpected staged operations: primary=%#v result=%#v",
+			gotPrimary, gotResults)
+	}
+	trace := tracing.Snapshot()
+	if trace == nil || trace.ExistingMemoryCount != 1 ||
+		len(trace.Operations) != 2 {
+		t.Fatalf("unexpected extraction trace: %#v", trace)
+	}
+	if trace.Operations[0].Stage != "primary" ||
+		trace.Operations[1].Stage != "assistant_result" {
+		t.Fatalf("unexpected operation stages: %#v", trace.Operations)
+	}
+}
+
+func TestLMETracingExtractorStagesFallback(t *testing.T) {
+	t.Parallel()
+
+	op := &extractor.Operation{Type: extractor.OperationAdd, Memory: "fact"}
+	tracing := &lmeTracingExtractor{MemoryExtractor: &lmeExtractorStub{
+		ops: []*extractor.Operation{op},
+	}}
+	primary, assistantResults, err := tracing.ExtractOperationStages(
+		context.Background(), nil, nil,
+	)
+	if err != nil {
+		t.Fatalf("extract operation stages: %v", err)
+	}
+	if len(primary) != 1 || primary[0] != op || assistantResults != nil {
+		t.Fatalf("unexpected fallback operations: primary=%#v result=%#v",
+			primary, assistantResults)
+	}
+	trace := tracing.Snapshot()
+	if trace == nil || len(trace.Operations) != 1 ||
+		trace.Operations[0].Stage != "primary" {
+		t.Fatalf("unexpected fallback trace: %#v", trace)
+	}
+}
+
+func TestAssistantResultUpdatePolicy(t *testing.T) {
+	t.Parallel()
+
+	if got := assistantResultUpdatePolicy(
+		extractor.UpdatePolicyReconcile, false,
+	); got != "" {
+		t.Fatalf("disabled policy = %q, want empty", got)
+	}
+	if got := assistantResultUpdatePolicy(
+		extractor.UpdatePolicyReconcile, true,
+	); got != extractor.UpdatePolicyHistoryPreserving {
+		t.Fatalf("reconcile result policy = %q", got)
+	}
+	if got := assistantResultUpdatePolicy(
+		extractor.UpdatePolicyHistoryPreserving, true,
+	); got != extractor.UpdatePolicyHistoryPreserving {
+		t.Fatalf("history result policy = %q", got)
+	}
+	if got := assistantResultUpdatePolicy(
+		extractor.UpdatePolicyAddOnly, true,
+	); got != extractor.UpdatePolicyAddOnly {
+		t.Fatalf("add-only result policy = %q", got)
 	}
 }
 

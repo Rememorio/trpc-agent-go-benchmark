@@ -189,6 +189,7 @@ type lmeToolCallTrace struct {
 }
 
 type extractionOperation struct {
+	Stage        string                  `json:"stage,omitempty"`
 	Type         extractor.OperationType `json:"type"`
 	Memory       string                  `json:"memory,omitempty"`
 	MemoryID     string                  `json:"memory_id,omitempty"`
@@ -200,8 +201,9 @@ type extractionOperation struct {
 }
 
 type lmePGVectorExtractionConfig struct {
-	UpdatePolicy              extractor.UpdatePolicy `json:"update_policy"`
-	AssistantResultExtraction bool                   `json:"assistant_result_extraction"`
+	UpdatePolicy                extractor.UpdatePolicy `json:"update_policy"`
+	AssistantResultExtraction   bool                   `json:"assistant_result_extraction"`
+	AssistantResultUpdatePolicy extractor.UpdatePolicy `json:"assistant_result_update_policy,omitempty"`
 }
 
 type traceMessage struct {
@@ -338,38 +340,88 @@ type lmeTracingExtractor struct {
 	trace *extractionTrace
 }
 
+type lmeStagedOperationExtractor interface {
+	ExtractOperationStages(
+		ctx context.Context,
+		messages []model.Message,
+		existing []*memory.Entry,
+	) (primary, assistantResults []*extractor.Operation, err error)
+}
+
 func (e *lmeTracingExtractor) Extract(
 	ctx context.Context,
 	messages []model.Message,
 	existing []*memory.Entry,
 ) ([]*extractor.Operation, error) {
 	ops, err := e.MemoryExtractor.Extract(ctx, messages, existing)
+	e.recordExtraction(existing, err, extractionStage{ops: ops})
+	return ops, err
+}
+
+func (e *lmeTracingExtractor) ExtractOperationStages(
+	ctx context.Context,
+	messages []model.Message,
+	existing []*memory.Entry,
+) ([]*extractor.Operation, []*extractor.Operation, error) {
+	staged, ok := e.MemoryExtractor.(lmeStagedOperationExtractor)
+	if !ok {
+		ops, err := e.MemoryExtractor.Extract(ctx, messages, existing)
+		e.recordExtraction(existing, err, extractionStage{
+			name: "primary",
+			ops:  ops,
+		})
+		return ops, nil, err
+	}
+	primary, assistantResults, err := staged.ExtractOperationStages(
+		ctx, messages, existing,
+	)
+	e.recordExtraction(
+		existing,
+		err,
+		extractionStage{name: "primary", ops: primary},
+		extractionStage{name: "assistant_result", ops: assistantResults},
+	)
+	return primary, assistantResults, err
+}
+
+type extractionStage struct {
+	name string
+	ops  []*extractor.Operation
+}
+
+func (e *lmeTracingExtractor) recordExtraction(
+	existing []*memory.Entry,
+	err error,
+	stages ...extractionStage,
+) {
 	trace := &extractionTrace{ExistingMemoryCount: len(existing)}
 	if err != nil {
 		trace.Error = err.Error()
 	}
-	for _, op := range ops {
-		if op == nil {
-			continue
+	for _, stage := range stages {
+		for _, op := range stage.ops {
+			if op == nil {
+				continue
+			}
+			item := extractionOperation{
+				Stage:        stage.name,
+				Type:         op.Type,
+				Memory:       op.Memory,
+				MemoryID:     op.MemoryID,
+				Topics:       append([]string(nil), op.Topics...),
+				MemoryKind:   op.MemoryKind,
+				Participants: append([]string(nil), op.Participants...),
+				Location:     op.Location,
+			}
+			if op.EventTime != nil {
+				item.EventTime = op.EventTime.UTC().Format(time.RFC3339Nano)
+			}
+			trace.Operations = append(trace.Operations, item)
 		}
-		item := extractionOperation{
-			Type:         op.Type,
-			Memory:       op.Memory,
-			MemoryID:     op.MemoryID,
-			Topics:       append([]string(nil), op.Topics...),
-			MemoryKind:   op.MemoryKind,
-			Participants: append([]string(nil), op.Participants...),
-			Location:     op.Location,
-		}
-		if op.EventTime != nil {
-			item.EventTime = op.EventTime.UTC().Format(time.RFC3339Nano)
-		}
-		trace.Operations = append(trace.Operations, item)
 	}
 	e.mu.Lock()
 	e.trace = trace
 	e.mu.Unlock()
-	return ops, err
 }
 
 func (e *lmeTracingExtractor) Reset() {
@@ -764,7 +816,23 @@ func currentLongMemEvalPGVectorExtractionConfig() (
 	return lmePGVectorExtractionConfig{
 		UpdatePolicy:              policy,
 		AssistantResultExtraction: *flagLMEAssistantResultExtraction,
+		AssistantResultUpdatePolicy: assistantResultUpdatePolicy(
+			policy, *flagLMEAssistantResultExtraction,
+		),
 	}, nil
+}
+
+func assistantResultUpdatePolicy(
+	policy extractor.UpdatePolicy,
+	enabled bool,
+) extractor.UpdatePolicy {
+	if !enabled {
+		return ""
+	}
+	if policy == extractor.UpdatePolicyAddOnly {
+		return extractor.UpdatePolicyAddOnly
+	}
+	return extractor.UpdatePolicyHistoryPreserving
 }
 
 func runLongMemEvalMemory(ctx context.Context) error {
