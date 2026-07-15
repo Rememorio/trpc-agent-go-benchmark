@@ -223,9 +223,13 @@ self-hosted mem0 comparison.
 
 Use `./run-longmemeval.sh` for every formal ingestion, answer, rerank, refresh,
 or judge run. It rejects a modified benchmark worktree and injects the exact
-benchmark commit into the result provenance. Plain `go run .` remains useful
-for local smoke tests, but its output may omit `benchmark_revision` and is then
-intentionally rejected by strict comparison.
+benchmark commit and module manifest/checksum digests into the result
+provenance. Set `LME_AGENT_REPLACEMENT=<module-path>@<version>` to build an
+upstream arm from a deterministic temporary modfile without editing the
+worktree; the resolved module versions and both temporary manifest digests are
+recorded. Plain `go run .` remains useful for local smoke tests, but its output
+may omit formal provenance and is then intentionally rejected by strict
+comparison.
 
 ```bash
 export PGVECTOR_DSN="postgres://user:password@localhost:5432/vectordb?sslmode=disable"
@@ -253,6 +257,7 @@ go run . \
   -output ../results/lme-badcase
 
 # Stratified 16-question development baseline plus a frozen Mem0 reference arm.
+LME_AGENT_REPLACEMENT="trpc.group/trpc-go/trpc-agent-go@<upstream-pseudo-version>" \
 ./run-longmemeval.sh \
   -dataset-format longmemeval \
   -dataset ../../summary/data/longmemeval-cleaned/longmemeval_oracle.json \

@@ -12,6 +12,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -108,19 +109,42 @@ func TestLongMemEvalBuildProvenance(t *testing.T) {
 	if empty.GoVersion != "" || empty.Revision != "" || empty.Modified || empty.Modules != nil {
 		t.Fatalf("unexpected unavailable build provenance: %+v", empty)
 	}
-	injected := applyLongMemEvalInjectedProvenance(empty, " injected-sha ", "true")
-	if injected.Revision != "injected-sha" || !injected.Modified {
+	injected := applyLongMemEvalInjectedProvenance(
+		empty,
+		" injected-sha ",
+		"true",
+		" manifest-sha ",
+		" sum-sha ",
+	)
+	if injected.Revision != "injected-sha" || !injected.Modified ||
+		injected.ModuleManifestSHA256 != "manifest-sha" ||
+		injected.ModuleSumSHA256 != "sum-sha" {
 		t.Fatalf("injected provenance was not applied: %+v", injected)
 	}
 	native := applyLongMemEvalInjectedProvenance(
-		lmeBuildProvenance{Revision: "native-sha", Modified: true},
+		lmeBuildProvenance{
+			Revision:             "native-sha",
+			Modified:             true,
+			ModuleManifestSHA256: "native-manifest",
+			ModuleSumSHA256:      "native-sum",
+		},
 		"injected-sha",
 		"false",
+		"injected-manifest",
+		"injected-sum",
 	)
-	if native.Revision != "native-sha" || native.Modified {
+	if native.Revision != "native-sha" || native.Modified ||
+		native.ModuleManifestSHA256 != "native-manifest" ||
+		native.ModuleSumSHA256 != "native-sum" {
 		t.Fatalf("native revision or injected modified state was not preserved: %+v", native)
 	}
-	invalid := applyLongMemEvalInjectedProvenance(empty, "", "not-a-bool")
+	invalid := applyLongMemEvalInjectedProvenance(
+		empty,
+		"",
+		"not-a-bool",
+		"",
+		"",
+	)
 	if invalid.Revision != "" || invalid.Modified {
 		t.Fatalf("invalid injected provenance changed result: %+v", invalid)
 	}
@@ -129,8 +153,10 @@ func TestLongMemEvalBuildProvenance(t *testing.T) {
 func TestLongMemEvalBuildProvenanceIssue(t *testing.T) {
 	t.Parallel()
 	pinned := lmeBuildProvenance{
-		GoVersion: "go-test",
-		Revision:  "benchmark-sha",
+		GoVersion:            "go-test",
+		Revision:             "benchmark-sha",
+		ModuleManifestSHA256: "manifest-sha",
+		ModuleSumSHA256:      "sum-sha",
 		Modules: map[string]lmeModuleProvenance{
 			lmeAgentModulePath: {
 				Version: "v1.7.0",
@@ -165,14 +191,14 @@ func TestLongMemEvalBuildProvenanceIssue(t *testing.T) {
 		},
 		{
 			name: "local memory module",
-			build: lmeBuildProvenance{
-				Revision: "benchmark-sha",
-				Modules: map[string]lmeModuleProvenance{
-					lmeAgentModulePath: {
-						LocalReplacement: true,
-					},
-				},
-			},
+			build: func() lmeBuildProvenance {
+				build := pinned
+				build.Modules = maps.Clone(pinned.Modules)
+				module := build.Modules[lmeAgentModulePath]
+				module.LocalReplacement = true
+				build.Modules[lmeAgentModulePath] = module
+				return build
+			}(),
 			want: "uses an unpinned local replacement",
 		},
 	}
@@ -1881,8 +1907,10 @@ func testLongMemEvalComparisonMetadata(implementation string) map[string]any {
 
 func testLongMemEvalBuildProvenance(revision string) lmeBuildProvenance {
 	return lmeBuildProvenance{
-		GoVersion: "go-test",
-		Revision:  revision,
+		GoVersion:            "go-test",
+		Revision:             revision,
+		ModuleManifestSHA256: "manifest-sha",
+		ModuleSumSHA256:      "sum-sha",
 		Modules: map[string]lmeModuleProvenance{
 			lmeAgentModulePath: {
 				Version: "v1.0.0",
@@ -1928,6 +1956,24 @@ func TestValidateLongMemEvalComparisonRequiresPinnedBuilds(t *testing.T) {
 				metadata["build"] = build
 			},
 			wantError: "unpinned local replacement",
+		},
+		{
+			name: "missing module manifest digest",
+			mutate: func(metadata map[string]any) {
+				build := testLongMemEvalBuildProvenance("runner-revision")
+				build.ModuleManifestSHA256 = ""
+				metadata["build"] = build
+			},
+			wantError: "missing module_manifest_sha256",
+		},
+		{
+			name: "missing module checksum digest",
+			mutate: func(metadata map[string]any) {
+				build := testLongMemEvalBuildProvenance("runner-revision")
+				build.ModuleSumSHA256 = ""
+				metadata["build"] = build
+			},
+			wantError: "missing module_sum_sha256",
 		},
 		{
 			name: "missing judge revision",

@@ -285,6 +285,20 @@ func validateLongMemEvalBuildPair(
 		if strings.TrimSpace(build.GoVersion) == "" {
 			return fmt.Errorf("%s %s provenance is missing go_version", label, key)
 		}
+		if strings.TrimSpace(build.ModuleManifestSHA256) == "" {
+			return fmt.Errorf(
+				"%s %s provenance is missing module_manifest_sha256",
+				label,
+				key,
+			)
+		}
+		if strings.TrimSpace(build.ModuleSumSHA256) == "" {
+			return fmt.Errorf(
+				"%s %s provenance is missing module_sum_sha256",
+				label,
+				key,
+			)
+		}
 		if requireMemoryModules {
 			if err := validateLongMemEvalMemoryModules(build.Modules); err != nil {
 				return fmt.Errorf("%s %s provenance: %w", label, key, err)

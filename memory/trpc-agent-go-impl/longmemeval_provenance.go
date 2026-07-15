@@ -40,15 +40,19 @@ const (
 )
 
 var (
-	lmeInjectedBuildRevision string
-	lmeInjectedBuildModified string
+	lmeInjectedBuildRevision        string
+	lmeInjectedBuildModified        string
+	lmeInjectedModuleManifestSHA256 string
+	lmeInjectedModuleSumSHA256      string
 )
 
 type lmeBuildProvenance struct {
-	GoVersion string                         `json:"go_version,omitempty"`
-	Revision  string                         `json:"benchmark_revision,omitempty"`
-	Modified  bool                           `json:"benchmark_modified"`
-	Modules   map[string]lmeModuleProvenance `json:"modules,omitempty"`
+	GoVersion            string                         `json:"go_version,omitempty"`
+	Revision             string                         `json:"benchmark_revision,omitempty"`
+	Modified             bool                           `json:"benchmark_modified"`
+	ModuleManifestSHA256 string                         `json:"module_manifest_sha256,omitempty"`
+	ModuleSumSHA256      string                         `json:"module_sum_sha256,omitempty"`
+	Modules              map[string]lmeModuleProvenance `json:"modules,omitempty"`
 }
 
 type lmeModuleProvenance struct {
@@ -227,6 +231,8 @@ func currentLongMemEvalBuildProvenance() lmeBuildProvenance {
 		result,
 		lmeInjectedBuildRevision,
 		lmeInjectedBuildModified,
+		lmeInjectedModuleManifestSHA256,
+		lmeInjectedModuleSumSHA256,
 	)
 }
 
@@ -236,6 +242,12 @@ func longMemEvalBuildProvenanceIssue(build lmeBuildProvenance) string {
 	}
 	if build.Modified {
 		return "benchmark worktree was modified at build time"
+	}
+	if strings.TrimSpace(build.ModuleManifestSHA256) == "" {
+		return "module manifest digest is missing"
+	}
+	if strings.TrimSpace(build.ModuleSumSHA256) == "" {
+		return "module checksum digest is missing"
 	}
 	if err := validateLongMemEvalMemoryModules(build.Modules); err != nil {
 		return err.Error()
@@ -275,12 +287,20 @@ func applyLongMemEvalInjectedProvenance(
 	result lmeBuildProvenance,
 	revision string,
 	modified string,
+	moduleManifestSHA256 string,
+	moduleSumSHA256 string,
 ) lmeBuildProvenance {
 	if result.Revision == "" {
 		result.Revision = strings.TrimSpace(revision)
 	}
 	if value, err := strconv.ParseBool(strings.TrimSpace(modified)); err == nil {
 		result.Modified = value
+	}
+	if result.ModuleManifestSHA256 == "" {
+		result.ModuleManifestSHA256 = strings.TrimSpace(moduleManifestSHA256)
+	}
+	if result.ModuleSumSHA256 == "" {
+		result.ModuleSumSHA256 = strings.TrimSpace(moduleSumSHA256)
 	}
 	return result
 }
