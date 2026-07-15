@@ -201,6 +201,7 @@ func validateLongMemEvalComparison(baseline, candidate *runResult) error {
 		"reanswer_model_variant",
 		"judge_model",
 		"judge_model_variant",
+		"judge_runs",
 	} {
 		if err := compareLongMemEvalMetadataValue(baseline.Metadata, candidate.Metadata, key, false); err != nil {
 			return err

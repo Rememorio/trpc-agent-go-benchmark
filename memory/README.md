@@ -276,6 +276,7 @@ go run . \
 go run . \
   -dataset-format longmemeval \
   -lme-judge-results ../results/lme-upstream/results.json \
+  -lme-judge-runs 3 \
   -output ../results/lme-upstream
 
 # Regenerate only the answers from saved retrieval hits after changing the
@@ -287,6 +288,7 @@ go run . \
 go run . \
   -dataset-format longmemeval \
   -lme-judge-results ../results/lme-upstream/reanswered_results.json \
+  -lme-judge-runs 3 \
   -output ../results/lme-upstream
 
 # Analyze judged results without making model calls.
@@ -302,9 +304,11 @@ go run . \
   -output ../results/lme-candidate
 ```
 
-The judge command checkpoints `judged_results.json` after each case. When
-resuming from that file with the same judge model, it keeps validated verdicts
-and retries only missing or invalid ones. Analysis treats a valid
+The judge command checkpoints `judged_results.json` after each case. An odd
+`-lme-judge-runs` value greater than one records every independent vote and
+uses a strict majority. When resuming from that file with the same judge model
+and run count, it keeps validated verdicts and retries only missing or invalid
+ones. Analysis treats a valid
 semantic-judge result as the primary correctness signal and falls back to exact
 match when no judge result is available. It writes `analysis.md` and
 `bad_cases.tsv`, including raw pipeline stages, evidence status, backend
@@ -382,6 +386,7 @@ LongMemEval-specific options:
 | `-lme-implementation`    | (env)   | Reproducible implementation label            |
 | `-lme-reanswer-results`   |         | Re-answer using saved ranked retrieval hits  |
 | `-lme-judge-results`     |         | Add semantic judge results to `results.json` |
+| `-lme-judge-runs`        | 1       | Odd number of independent semantic votes     |
 | `-lme-analyze-results`   |         | Analyze one saved LongMemEval `results.json` |
 | `-lme-compare-results`   |         | Compare baseline,candidate `results.json`    |
 | `-mem0-host`             | (env)   | Self-hosted mem0 OSS host                    |

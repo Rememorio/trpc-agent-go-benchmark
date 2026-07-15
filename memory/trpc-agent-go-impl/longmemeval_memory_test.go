@@ -1086,8 +1086,9 @@ func TestShouldReuseLongMemEvalJudge(t *testing.T) {
 
 	valid := &backendResult{Judge: &lmeJudgeResult{
 		Model: "judge-model", Raw: "VERDICT: yes", Correct: true,
+		RequestedRuns: 3,
 	}}
-	if !shouldReuseLongMemEvalJudge(valid, "judge-model") {
+	if !shouldReuseLongMemEvalJudge(valid, "judge-model", 3) {
 		t.Fatal("valid verdict from the same model should be reused")
 	}
 	for _, result := range []*backendResult{
@@ -1096,10 +1097,69 @@ func TestShouldReuseLongMemEvalJudge(t *testing.T) {
 		{Judge: &lmeJudgeResult{Model: "other-model", Raw: "VERDICT: yes", Correct: true}},
 		{Judge: &lmeJudgeResult{Model: "judge-model", Raw: "VERDICT: yes", Correct: true, Error: "failed"}},
 		{Judge: &lmeJudgeResult{Model: "judge-model", Raw: "VERDICT: yes", Correct: false}},
+		{Judge: &lmeJudgeResult{Model: "judge-model", Raw: "VERDICT: yes", Correct: true, RequestedRuns: 1}},
 	} {
-		if shouldReuseLongMemEvalJudge(result, "judge-model") {
+		if shouldReuseLongMemEvalJudge(result, "judge-model", 3) {
 			t.Fatalf("invalid or incompatible judge was reused: %#v", result)
 		}
+	}
+	legacy := &backendResult{Judge: &lmeJudgeResult{
+		Model: "judge-model", Raw: "VERDICT: no",
+	}}
+	if !shouldReuseLongMemEvalJudge(legacy, "judge-model", 1) {
+		t.Fatal("legacy single-run verdict should be reused for one requested run")
+	}
+}
+
+func TestJudgeLongMemEvalConsensusMajority(t *testing.T) {
+	t.Parallel()
+
+	llm := &queuedJudgeModel{
+		responses: []string{"VERDICT: yes", "VERDICT: no", "VERDICT: yes"},
+		usage: &model.Usage{
+			PromptTokens: 10, CompletionTokens: 2, TotalTokens: 12,
+		},
+	}
+	judge := judgeLongMemEvalConsensus(
+		context.Background(), llm, "judge-model", &caseResult{
+			QuestionType: "single-session-user",
+			Question:     "Which option?",
+			Answer:       "Option B",
+		}, "Option B", 3,
+	)
+	if judge.Error != "" || !judge.Correct || judge.ValidRuns != 3 {
+		t.Fatalf("unexpected consensus: %#v", judge)
+	}
+	if judge.RequestedRuns != 3 || len(judge.Attempts) != 3 {
+		t.Fatalf("unexpected attempts: %#v", judge)
+	}
+	if judge.TokenUsage == nil || judge.TokenUsage.LLMCalls != 3 ||
+		judge.TokenUsage.TotalTokens != 36 {
+		t.Fatalf("unexpected usage: %#v", judge.TokenUsage)
+	}
+}
+
+func TestJudgeLongMemEvalConsensusRequiresStrictMajority(t *testing.T) {
+	t.Parallel()
+
+	llm := &queuedJudgeModel{responses: []string{
+		"VERDICT: yes",
+		"VERDICT: no",
+		"missing verdict",
+		`{"unexpected":true}`,
+	}}
+	judge := judgeLongMemEvalConsensus(
+		context.Background(), llm, "judge-model", &caseResult{
+			QuestionType: "single-session-user",
+			Question:     "Which option?",
+			Answer:       "Option B",
+		}, "Option B", 3,
+	)
+	if judge.Error == "" || judge.ValidRuns != 2 {
+		t.Fatalf("expected no strict majority: %#v", judge)
+	}
+	if len(judge.Attempts) != 3 || judge.Attempts[2].Error == "" {
+		t.Fatalf("expected failed vote to be retained: %#v", judge.Attempts)
 	}
 }
 
@@ -1555,6 +1615,7 @@ func testLongMemEvalComparisonMetadata(implementation string) map[string]any {
 		"embedding_model":       "embedding-model",
 		"answer_prompt_version": lmeAnswerPromptVersion,
 		"judge_prompt_version":  lmeJudgePromptVersion,
+		"judge_runs":            3,
 	}
 }
 
@@ -1600,6 +1661,35 @@ func TestValidateLongMemEvalComparisonRejectsProtocolDrift(t *testing.T) {
 	err := validateLongMemEvalComparison(baseline, candidate)
 	if err == nil || !strings.Contains(err.Error(), "protocol_sha256") {
 		t.Fatalf("protocol mismatch error = %v", err)
+	}
+}
+
+func TestValidateLongMemEvalComparisonRejectsJudgeRunDrift(t *testing.T) {
+	t.Parallel()
+
+	baseline := &runResult{
+		Metadata: testLongMemEvalComparisonMetadata("upstream-main"),
+		Cases: []*caseResult{{
+			QuestionID: "q1",
+			BackendResults: map[string]*backendResult{
+				"pgvector": {Backend: "pgvector"},
+				"mem0":     {Backend: "mem0"},
+			},
+		}},
+	}
+	candidate := &runResult{
+		Metadata: testLongMemEvalComparisonMetadata("candidate-2196"),
+		Cases: []*caseResult{{
+			QuestionID: "q1",
+			BackendResults: map[string]*backendResult{
+				"pgvector": {Backend: "pgvector"},
+			},
+		}},
+	}
+	candidate.Metadata["judge_runs"] = 1
+	err := validateLongMemEvalComparison(baseline, candidate)
+	if err == nil || !strings.Contains(err.Error(), "judge_runs") {
+		t.Fatalf("judge run mismatch error = %v", err)
 	}
 }
 

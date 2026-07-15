@@ -236,7 +236,18 @@ type backendResult struct {
 }
 
 type lmeJudgeResult struct {
-	Model      string         `json:"model"`
+	Model         string            `json:"model"`
+	Correct       bool              `json:"correct"`
+	Raw           string            `json:"raw"`
+	RequestedRuns int               `json:"requested_runs,omitempty"`
+	ValidRuns     int               `json:"valid_runs,omitempty"`
+	Attempts      []lmeJudgeAttempt `json:"attempts,omitempty"`
+	TokenUsage    *lmeTokenUsage    `json:"token_usage,omitempty"`
+	DurationMs    int64             `json:"duration_ms,omitempty"`
+	Error         string            `json:"error,omitempty"`
+}
+
+type lmeJudgeAttempt struct {
 	Correct    bool           `json:"correct"`
 	Raw        string         `json:"raw"`
 	TokenUsage *lmeTokenUsage `json:"token_usage,omitempty"`
@@ -1338,6 +1349,7 @@ func reanswerLongMemEvalResult(
 		"judge_model",
 		"judge_model_variant",
 		"judge_build",
+		"judge_runs",
 		"judged_at",
 		"judge_note",
 	} {
@@ -1428,6 +1440,10 @@ func replaceLongMemEvalAnswerUsage(br *backendResult, usage lmeTokenUsage) {
 }
 
 func judgeLongMemEvalResults(ctx context.Context, path, outputDir string) error {
+	judgeRuns := *flagLMEJudgeRuns
+	if judgeRuns <= 0 || judgeRuns%2 == 0 {
+		return fmt.Errorf("lme-judge-runs must be a positive odd number, got %d", judgeRuns)
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("read results: %w", err)
@@ -1449,8 +1465,9 @@ func judgeLongMemEvalResults(ctx context.Context, path, outputDir string) error 
 	result.Metadata["judge_model_variant"] = modelVariant
 	result.Metadata["judge_build"] = currentLongMemEvalBuildProvenance()
 	result.Metadata["judge_prompt_version"] = lmeJudgePromptVersion
+	result.Metadata["judge_runs"] = judgeRuns
 	result.Metadata["judged_at"] = time.Now().UTC().Format(time.RFC3339)
-	result.Metadata["judge_note"] = "LLM semantic correctness judge adapted from the official LongMemEval QA evaluator; only an explicit final VERDICT is accepted."
+	result.Metadata["judge_note"] = "LLM semantic correctness judge adapted from the official LongMemEval QA evaluator; only explicit final VERDICT votes are accepted, and multiple requested runs use strict majority voting."
 	result.Metadata["answer_scoring"] = "raw model output; no retrieval-assisted answer post-processing"
 	if err := os.MkdirAll(outputDir, 0755); err != nil {
 		return fmt.Errorf("create judge output dir: %w", err)
@@ -1462,46 +1479,36 @@ func judgeLongMemEvalResults(ctx context.Context, path, outputDir string) error 
 			continue
 		}
 		log.Printf("judging %s type=%s", cr.QuestionID, cr.QuestionType)
-		for backendName, br := range cr.BackendResults {
+		backendNames := make([]string, 0, len(cr.BackendResults))
+		for backendName := range cr.BackendResults {
+			backendNames = append(backendNames, backendName)
+		}
+		sort.Strings(backendNames)
+		for _, backendName := range backendNames {
+			br := cr.BackendResults[backendName]
 			if br == nil {
 				continue
 			}
 			restoreLongMemEvalRawAnswer(cr, br)
-			if shouldReuseLongMemEvalJudge(br, modelName) {
+			if shouldReuseLongMemEvalJudge(br, modelName, judgeRuns) {
 				log.Printf("  %s judge already valid; skipping", backendName)
 				continue
 			}
 			if strings.TrimSpace(br.Answer) == "" {
 				br.Judge = &lmeJudgeResult{
-					Model: modelName,
-					Error: "missing answer",
+					Model:         modelName,
+					RequestedRuns: judgeRuns,
+					Error:         "missing answer",
 				}
 				continue
 			}
-			tracker := &lmeTokenTracker{}
-			llm := &lmeTrackingModel{
-				base:    baseLLM,
-				tracker: tracker,
-				timeout: *flagLMEModelCallTimeout,
-			}
-			start := time.Now()
-			raw, err := judgeLongMemEvalAnswer(ctx, llm, cr, br.Answer)
-			usage := tracker.Snapshot()
-			judge := &lmeJudgeResult{
-				Model:      modelName,
-				Raw:        raw,
-				TokenUsage: tokenUsagePtr(usage),
-				DurationMs: time.Since(start).Milliseconds(),
-			}
-			if err == nil {
-				judge.Correct, err = parseLongMemEvalJudge(raw)
-			}
-			if err != nil {
-				judge.Error = err.Error()
-			}
+			judge := judgeLongMemEvalConsensus(
+				ctx, baseLLM, modelName, cr, br.Answer, judgeRuns,
+			)
 			br.Judge = judge
-			log.Printf("  %s judge correct=%v raw=%q err=%s",
-				backendName, judge.Correct, truncate(judge.Raw, 80), judge.Error)
+			log.Printf("  %s judge correct=%v votes=%d/%d raw=%q err=%s",
+				backendName, judge.Correct, judge.ValidRuns, judge.RequestedRuns,
+				truncate(judge.Raw, 80), judge.Error)
 		}
 		result.Summary = buildLongMemEvalSummary(result.Cases)
 		if err := writeLongMemEvalResults(outPath, &result); err != nil {
@@ -1514,8 +1521,85 @@ func judgeLongMemEvalResults(ctx context.Context, path, outputDir string) error 
 	return nil
 }
 
-func shouldReuseLongMemEvalJudge(br *backendResult, modelName string) bool {
+func judgeLongMemEvalConsensus(
+	ctx context.Context,
+	baseLLM model.Model,
+	modelName string,
+	cr *caseResult,
+	answer string,
+	runs int,
+) *lmeJudgeResult {
+	judge := &lmeJudgeResult{
+		Model:         modelName,
+		RequestedRuns: runs,
+		Attempts:      make([]lmeJudgeAttempt, 0, runs),
+	}
+	var totalUsage lmeTokenUsage
+	var yesVotes, noVotes int
+	var yesRaw, noRaw string
+	for range runs {
+		tracker := &lmeTokenTracker{}
+		llm := &lmeTrackingModel{
+			base:    baseLLM,
+			tracker: tracker,
+			timeout: *flagLMEModelCallTimeout,
+		}
+		start := time.Now()
+		raw, err := judgeLongMemEvalAnswer(ctx, llm, cr, answer)
+		usage := tracker.Snapshot()
+		duration := time.Since(start).Milliseconds()
+		attempt := lmeJudgeAttempt{
+			Raw:        raw,
+			TokenUsage: tokenUsagePtr(usage),
+			DurationMs: duration,
+		}
+		if err == nil {
+			attempt.Correct, err = parseLongMemEvalJudge(raw)
+		}
+		if err != nil {
+			attempt.Error = err.Error()
+		} else if attempt.Correct {
+			yesVotes++
+			if yesRaw == "" {
+				yesRaw = raw
+			}
+		} else {
+			noVotes++
+			if noRaw == "" {
+				noRaw = raw
+			}
+		}
+		judge.Attempts = append(judge.Attempts, attempt)
+		judge.DurationMs += duration
+		totalUsage.Add(usage)
+	}
+	judge.ValidRuns = yesVotes + noVotes
+	judge.TokenUsage = tokenUsagePtr(totalUsage)
+	required := runs/2 + 1
+	switch {
+	case yesVotes >= required:
+		judge.Correct = true
+		judge.Raw = yesRaw
+	case noVotes >= required:
+		judge.Raw = noRaw
+	default:
+		judge.Error = fmt.Sprintf(
+			"judge did not reach strict majority: yes=%d no=%d required=%d",
+			yesVotes, noVotes, required,
+		)
+	}
+	return judge
+}
+
+func shouldReuseLongMemEvalJudge(br *backendResult, modelName string, runs int) bool {
 	if br == nil || br.Judge == nil || br.Judge.Model != modelName {
+		return false
+	}
+	savedRuns := br.Judge.RequestedRuns
+	if savedRuns == 0 {
+		savedRuns = 1
+	}
+	if savedRuns != runs {
 		return false
 	}
 	_, valid := longMemEvalJudgeCorrect(br)

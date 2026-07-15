@@ -182,6 +182,11 @@ var (
 		"",
 		"Run an LLM semantic judge over an existing LongMemEval results.json",
 	)
+	flagLMEJudgeRuns = flag.Int(
+		"lme-judge-runs",
+		1,
+		"Odd number of independent LongMemEval judge votes",
+	)
 	flagLMECompareResults = flag.String(
 		"lme-compare-results",
 		"",
