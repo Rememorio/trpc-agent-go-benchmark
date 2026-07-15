@@ -27,7 +27,7 @@ const (
 	lmePGVectorModulePath = "trpc.group/trpc-go/trpc-agent-go/memory/pgvector"
 
 	lmeAnswerPrimaryMaxTokens = 512
-	lmeAnswerRetryMaxTokens   = 1024
+	lmeAnswerRetryMaxTokens   = 4096
 	lmeAnswerMaxAttempts      = 2
 
 	// These versions are part of the experiment contract. Bump the relevant
