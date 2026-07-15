@@ -477,13 +477,12 @@ func (b *mem0Backend) ingestPairOSS(ctx context.Context, sess *session.Session, 
 	messages := latestPairMessages(sess)
 	apiMsgs := make([]map[string]string, 0, len(messages))
 	for _, msg := range messages {
-		content := strings.TrimSpace(msg.Content)
-		if content == "" {
+		if strings.TrimSpace(msg.Content) == "" {
 			continue
 		}
 		apiMsgs = append(apiMsgs, map[string]string{
 			"role":    msg.Role.String(),
-			"content": content,
+			"content": msg.Content,
 		})
 	}
 	if len(apiMsgs) == 0 {

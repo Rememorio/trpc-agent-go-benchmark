@@ -358,8 +358,8 @@ func TestMem0OSSIngestPassesObservationDateWithoutChangingMessages(t *testing.T)
 
 	sess := session.NewSession(lmeAppName, "user", "session")
 	appendMessages(sess, []model.Message{
-		{Role: model.RoleUser, Content: "hello"},
-		{Role: model.RoleAssistant, Content: "hi"},
+		{Role: model.RoleUser, Content: "hello "},
+		{Role: model.RoleAssistant, Content: " hi"},
 	}, "source", 0)
 	backend := &mem0Backend{
 		host:       server.URL,
@@ -373,8 +373,8 @@ func TestMem0OSSIngestPassesObservationDateWithoutChangingMessages(t *testing.T)
 	if err != nil {
 		t.Fatalf("ingest pair: %v", err)
 	}
-	if len(payload.Messages) != 2 || payload.Messages[0]["content"] != "hello" ||
-		payload.Messages[1]["content"] != "hi" {
+	if len(payload.Messages) != 2 || payload.Messages[0]["content"] != "hello " ||
+		payload.Messages[1]["content"] != " hi" {
 		t.Fatalf("messages were changed: %#v", payload.Messages)
 	}
 	if got := payload.Metadata["observation_date"]; got != "2023-04-10" {
