@@ -28,12 +28,30 @@ tool usage.
 
 ## Latest Snapshot
 
-The current sources of truth are the **v19 three-run batch** (answers
-"does evolution help at all?") and the **v20 three-run batch**
-(answers "can we trust it under a quality gate?"). See
-[`results/REPORT.md`](results/REPORT.md) (English) and
-[`results/REPORT.zh_CN.md`](results/REPORT.zh_CN.md) (中文) for the
-full write-up.
+The current reflective-optimization source of truth is the paired five-family
+matrix in
+[`results/gepa_reflective_optimization/REPORT.md`](results/gepa_reflective_optimization/REPORT.md)
+([中文](results/gepa_reflective_optimization/REPORT.zh_CN.md)). It contains
+three root seeds, all six scales, and three arms: 90 tasks per arm and 270
+arm-cases total.
+
+- Baseline: 97.78% pass rate, 96.06% quality.
+- Evolution: 100% pass rate, 98.24% quality, and 9.36% more end-to-end tokens
+  than baseline.
+- Optimized evolution: 100% pass rate, 98.16% quality, and 5.79% more
+  end-to-end tokens than evolution.
+
+The optimized overlay passed safety and non-regression limits but failed the
+fixed meaningful-benefit gate. It is not eligible for runtime promotion. The
+same evidence package records both accepted frozen candidates and an important
+rejection: a Recipe candidate saved tokens on validation but lost a deliverable
+on untouched holdout.
+
+The older **v19** and **v20** batches below remain the source of historical
+online-evolution behavior. They use a different model, task subset, budget, and
+protocol, so their headline values are not directly comparable with the new
+matrix. See [`results/REPORT.md`](results/REPORT.md) and
+[`results/REPORT.zh_CN.md`](results/REPORT.zh_CN.md) for that write-up.
 
 ### v19 headline (runtime changes, no quality gate)
 
@@ -167,9 +185,9 @@ validator:
 
 ```bash
 go run ./cmd/aggregate \
-  -input ../results/reflective_full_seed_101/results.json \
-  -input ../results/reflective_full_seed_102/results.json \
-  -input ../results/reflective_full_seed_103/results.json \
+  -input ../results/reflective_full_matrix_601/results.json \
+  -input ../results/reflective_full_matrix_602/results.json \
+  -input ../results/reflective_full_matrix_603/results.json \
   -output ../results/gepa_reflective_optimization/full_matrix_evidence.json
 ```
 
@@ -181,6 +199,10 @@ quality non-regression, and at least one meaningful benefit (quality +0.5pp or
 end-to-end tokens -5%). This full matrix is operational evidence, not a strict
 holdout: candidate search may already have used some of its scales. Strict
 frozen holdout remains a separate `optimize`-mode comparison below.
+
+The checked-in aggregate fails only the meaningful-benefit gate. That outcome
+is intentional evidence: passing frozen confirmation does not by itself make a
+candidate a default runtime overlay.
 
 ## Reflective Skill Optimization
 
@@ -277,10 +299,13 @@ go run . \
 ```
 
 The frozen comparison still uses validation as a non-regression check and
-holdout for the final promotion decision. A validation regression stops the run
-before holdout, saving evaluation cost and leaving that split unconsumed. The
-comparison never invokes the reflection model or mutates either input spec. Set
-the tool-iteration budget high enough for the largest case;
+holdout for the final promotion decision. Once this confirmation run starts, it
+evaluates both splits even when the validation scalar regresses; otherwise the
+holdout could not expose whether the same candidate also fails outside the
+selection split. The comparison never invokes the reflection model or mutates
+either input spec. To leave holdout unconsumed during discovery, omit it from
+the earlier search run as described above. Set the tool-iteration budget high
+enough for the largest case;
 `recipe-cookbook-builder/h1` alone declares 25 domain calls before skill loading,
 artifact writing, validation, and completion, and its task configuration allows
 up to 80 model turns for retries.
@@ -312,18 +337,16 @@ Use repeated cases and multiple optimizer seeds for effectiveness claims:
 the optimizer seed makes sampling reproducible, but an OpenAI-compatible
 model endpoint may still be nondeterministic.
 
-A sanitized GLM-5.2 search record is kept under
+A sanitized reflective search and operational replay record is kept under
 [`results/gepa_reflective_optimization`](results/gepa_reflective_optimization/README.md),
 with full reports in
 [`REPORT.md`](results/gepa_reflective_optimization/REPORT.md) and
 [`REPORT.zh_CN.md`](results/gepa_reflective_optimization/REPORT.zh_CN.md).
-It starts from a reviewer-generated legacy skill and records the complete
-failure-and-repair cycle. The final frozen candidate passed two independent
-validation/holdout comparisons: across 8 holdout pairs it produced 4 quality
-wins, 4 ties, no losses, and no pass-rate regressions. Pooled holdout quality
-improved from 95.50% to 98.35%, while agent tokens decreased 6.57%. The report
-also identifies which scale remained untouched and which hard scale became a
-regression set after exposing a development failure.
+It records the five-family search, accepted and rejected frozen candidates,
+and the complete three-arm matrix. The optimizer repaired one
+reviewer-generated Recipe skill and accepted a World Bank efficiency candidate
+under frozen confirmation, but their combined runtime overlay did not pass the
+operational promotion gate. The report keeps those two conclusions separate.
 
 ## Key Flags
 

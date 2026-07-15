@@ -34,6 +34,13 @@ func TestAggregatePassesCompleteImprovingMatrix(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, evidence.PromotionEligible)
 	require.Equal(t, 3, evidence.Coverage.Runs)
+	require.Len(t, evidence.Runs, 3)
+	require.Equal(t, int64(10), evidence.Runs[0].RootSeed)
+	require.Equal(t, 30, evidence.Runs[0].Arms[armOptimized].Tasks)
+	require.InDelta(t, -11.11,
+		evidence.Runs[0].OptimizedEvolutionVsEvolution.Delta.EndToEndTokensPC,
+		0.001,
+	)
 	require.Equal(t, 30, evidence.Coverage.TasksPerArm)
 	require.Equal(t, 90, evidence.OptimizedEvolutionVsEvolution.Pairs.Pairs)
 	require.Equal(t, 90, evidence.OptimizedEvolutionVsEvolution.Pairs.QualityWins)

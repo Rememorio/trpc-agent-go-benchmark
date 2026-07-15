@@ -115,11 +115,15 @@ type GateCheck struct {
 	Details string `json:"details"`
 }
 
-// Source identifies one input without retaining machine-specific paths.
-type Source struct {
-	Name     string   `json:"name"`
-	RootSeed int64    `json:"rootSeed"`
-	RunOrder []string `json:"runOrder"`
+// RunSummary keeps one input run auditable without retaining machine-specific
+// paths or task transcripts.
+type RunSummary struct {
+	Name                          string             `json:"name"`
+	RootSeed                      int64              `json:"rootSeed"`
+	RunOrder                      []string           `json:"runOrder"`
+	Arms                          map[string]Metrics `json:"arms"`
+	EvolutionVsBaseline           Comparison         `json:"evolutionVsBaseline"`
+	OptimizedEvolutionVsEvolution Comparison         `json:"optimizedEvolutionVsEvolution"`
 }
 
 // Coverage records the realized matrix.
@@ -134,7 +138,7 @@ type Coverage struct {
 // Evidence is the machine-readable aggregate and gate verdict.
 type Evidence struct {
 	Protocol                      Protocol                      `json:"protocol"`
-	Sources                       []Source                      `json:"sources"`
+	Runs                          []RunSummary                  `json:"runs"`
 	Coverage                      Coverage                      `json:"coverage"`
 	Arms                          map[string]Metrics            `json:"arms"`
 	Families                      map[string]map[string]Metrics `json:"families"`
@@ -191,8 +195,7 @@ func Aggregate(paths []string, protocol Protocol) (*Evidence, error) {
 	if len(paths) == 0 {
 		return nil, errors.New("experiment: no input result files")
 	}
-	inputs := make([]inputResult, 0, len(paths))
-	sources := make([]Source, 0, len(paths))
+	runs := make([]RunSummary, 0, len(paths))
 	seenSeeds := make(map[int64]struct{}, len(paths))
 	all := make(map[string][]collectedCase, 3)
 	for idx, path := range paths {
@@ -210,25 +213,23 @@ func Aggregate(paths []string, protocol Protocol) (*Evidence, error) {
 		if err := validateInput(input, protocol); err != nil {
 			return nil, fmt.Errorf("experiment: %s: %w", path, err)
 		}
-		inputs = append(inputs, input)
-		sources = append(sources, Source{
-			Name:     filepath.Base(filepath.Dir(path)),
-			RootSeed: *input.EvaluationSeed,
-			RunOrder: append([]string(nil), input.RunOrder...),
-		})
+		runCases := make(map[string][]collectedCase, 3)
 		for arm, cases := range inputArms(input) {
 			for _, item := range cases {
-				all[arm] = append(all[arm], collectedCase{arm: arm, run: idx, data: item})
+				collected := collectedCase{arm: arm, run: idx, data: item}
+				all[arm] = append(all[arm], collected)
+				runCases[arm] = append(runCases[arm], collected)
 			}
 		}
+		runs = append(runs, summarizeRun(path, input, runCases))
 	}
-	sort.Slice(sources, func(i, j int) bool { return sources[i].RootSeed < sources[j].RootSeed })
+	sort.Slice(runs, func(i, j int) bool { return runs[i].RootSeed < runs[j].RootSeed })
 
 	evidence := &Evidence{
 		Protocol: protocol,
-		Sources:  sources,
+		Runs:     runs,
 		Coverage: Coverage{
-			Runs:          len(inputs),
+			Runs:          len(runs),
 			TasksPerArm:   len(protocol.ExpectedFamilies) * len(protocol.ExpectedScales),
 			TotalArmCases: len(all[armBaseline]) + len(all[armEvolution]) + len(all[armOptimized]),
 			Families:      append([]string(nil), protocol.ExpectedFamilies...),
@@ -266,6 +267,29 @@ func Aggregate(paths []string, protocol Protocol) (*Evidence, error) {
 		evidence.PromotionReason = "one or more preregistered gates failed; inspect gates for details"
 	}
 	return evidence, nil
+}
+
+func summarizeRun(
+	path string,
+	input inputResult,
+	cases map[string][]collectedCase,
+) RunSummary {
+	arms := make(map[string]Metrics, len(cases))
+	for arm, items := range cases {
+		arms[arm] = summarize(items)
+	}
+	return RunSummary{
+		Name:     filepath.Base(filepath.Dir(path)),
+		RootSeed: *input.EvaluationSeed,
+		RunOrder: append([]string(nil), input.RunOrder...),
+		Arms:     arms,
+		EvolutionVsBaseline: compare(
+			armBaseline, armEvolution, cases[armBaseline], cases[armEvolution],
+		),
+		OptimizedEvolutionVsEvolution: compare(
+			armEvolution, armOptimized, cases[armEvolution], cases[armOptimized],
+		),
+	}
 }
 
 func validateProtocol(p Protocol) error {
