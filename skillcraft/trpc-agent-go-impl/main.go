@@ -1470,9 +1470,8 @@ func executeTaskWithContext(
 	if hasSkills {
 		availableSkills = summariesToNames(repo.Summaries())
 	}
-	maxTokens := completionTokenBudget(task, mode, cfg.MaxTokens)
 	genConfig := model.GenerationConfig{
-		MaxTokens: intPtr(maxTokens),
+		MaxTokens: intPtr(cfg.MaxTokens),
 		Stream:    false,
 	}
 	if cfg.EvaluationTemperature != nil {
@@ -1549,12 +1548,9 @@ func executeTaskWithContext(
 
 	stats = consumeEvents(eventCh)
 	if finalizationIssue := taskFinalizationIssue(task, workspace, stats); finalizationIssue != "" {
-		retryPrompt := model.NewUserMessage(
-			"The task is not complete: " + finalizationIssue + ". " +
-				"Continue from the existing tool results. Do not repeat domain calls whose " +
-				"results are already in the conversation. Write and verify the complete required " +
-				"artifact, then call local-claim_done.",
-		)
+		retryPrompt := model.NewUserMessage(finalizationRetryPrompt(
+			workspace, finalizationIssue,
+		))
 		retryEvents, retryErr := run.Run(ctx, userID, sessionID, retryPrompt)
 		if retryErr != nil {
 			return stats, retryErr
@@ -1572,6 +1568,22 @@ func executeTaskWithContext(
 		return stats, fmt.Errorf(strings.Join(stats.EventErrors, "; "))
 	}
 	return stats, nil
+}
+
+func finalizationRetryPrompt(workspace, issue string) string {
+	var b strings.Builder
+	b.WriteString("The task is not complete: ")
+	b.WriteString(issue)
+	b.WriteString(". This is a finalize-only retry. Do not call any domain or API tool, " +
+		"even if an earlier result is no longer visible in the conversation. ")
+	if info, err := os.Stat(filepath.Join(workspace, "working_notes.json")); err == nil && !info.IsDir() {
+		b.WriteString("Read working_notes.json now; it contains the collected task data. ")
+	} else {
+		b.WriteString("Use the existing conversation and workspace files as the collected task data. ")
+	}
+	b.WriteString("Assemble the complete required artifact, write it with local-write_final_json, " +
+		"read it back to verify it, then call local-claim_done.")
+	return b.String()
 }
 
 func taskFinalizationIssue(
@@ -1922,8 +1934,9 @@ func buildInstructionForMode(
 	if taskNeedsWorkingNotes(task) {
 		parts = append(parts,
 			"For larger multi-entity tasks, do not rely on raw tool outputs staying in context forever.",
-			"After finishing one entity, you may keep a single compact helper JSON file such as working_notes.json with only derived summaries and required fields for completed entities.",
-			"If you use working_notes.json, keep it compact, rewrite it with valid JSON, and read it back later instead of depending on full earlier tool outputs.",
+			"Process exactly one entity end-to-end at a time. Do not batch the same endpoint across several entities, even if a loaded skill suggests parallel calls.",
+			"After completing each entity, update one compact working_notes.json file with only its derived summaries and required fields. This is mandatory before starting the next entity.",
+			"Keep working_notes.json valid JSON and read it back when assembling the final artifact instead of depending on full earlier tool outputs.",
 			"Do not store raw arrays or raw tool dumps in helper notes, and do not treat helper notes as the final deliverable.",
 		)
 	}
@@ -1966,8 +1979,9 @@ func buildUserPrompt(task *taskDefinition, workspace string, availableSkills []s
 	if taskNeedsWorkingNotes(task) {
 		b.WriteString("\n## Context Management\n")
 		b.WriteString("- This is a larger multi-entity task. Raw tool outputs may become too large to keep in context.\n")
-		b.WriteString("- After completing an entity, you may keep a single compact helper JSON file such as `working_notes.json` with only derived summaries and required fields.\n")
-		b.WriteString("- If you use `working_notes.json`, keep it valid JSON and read it back later instead of relying on full earlier tool outputs.\n")
+		b.WriteString("- Process exactly one entity end-to-end at a time. Do not batch the same endpoint across several entities, even if a loaded skill suggests parallel calls.\n")
+		b.WriteString("- After completing each entity, update one compact `working_notes.json` file with only its derived summaries and required fields. This is mandatory before starting the next entity.\n")
+		b.WriteString("- Keep `working_notes.json` valid JSON and read it back when assembling the final artifact instead of relying on full earlier tool outputs.\n")
 		b.WriteString("- Do not store raw arrays or raw tool dumps in helper notes.\n")
 	}
 	if taskDocMayContainPreviewMarkers(task.TaskDoc) {
@@ -2138,23 +2152,6 @@ func taskNeedsWorkingNotes(task *taskDefinition) bool {
 	lower := strings.ToLower(task.TaskDoc)
 	return strings.Contains(lower, "output only summary statistics") ||
 		strings.Contains(lower, "summarize large datasets")
-}
-
-func taskNeedsLowerCompletionBudget(task *taskDefinition) bool {
-	if task == nil {
-		return false
-	}
-	if task.MaxTurns >= 100 {
-		return true
-	}
-	return taskNeedsWorkingNotes(task)
-}
-
-func completionTokenBudget(task *taskDefinition, mode runMode, configured int) int {
-	if mode != modeOptimize && taskNeedsLowerCompletionBudget(task) && configured > 2048 {
-		return 2048
-	}
-	return configured
 }
 
 func titleCaseASCII(s string) string {

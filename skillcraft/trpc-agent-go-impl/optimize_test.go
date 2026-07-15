@@ -469,10 +469,6 @@ func TestOptimizationOutputs(t *testing.T) {
 }
 
 func TestOptimizationRuntimeBehavior(t *testing.T) {
-	task := &taskDefinition{MaxTurns: 100}
-	require.Equal(t, 8192, completionTokenBudget(task, modeOptimize, 8192))
-	require.Equal(t, 2048, completionTokenBudget(task, modeEvolution, 8192))
-
 	instruction := buildInstructionForMode(
 		&taskDefinition{}, "workspace", []string{"Recipe Cookbook"}, modeOptimize,
 	)

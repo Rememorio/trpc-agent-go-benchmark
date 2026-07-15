@@ -412,11 +412,30 @@ Output ONLY summary statistics, NOT raw data arrays!`,
 	prompt := buildInstruction(task, "/tmp/workspace", nil)
 
 	require.Contains(t, prompt, "do not rely on raw tool outputs staying in context forever")
-	require.Contains(t, prompt, "single compact helper JSON file such as working_notes.json")
-	require.Contains(t, prompt, "read it back later")
+	require.Contains(t, prompt, "Process exactly one entity end-to-end at a time")
+	require.Contains(t, prompt, "Do not batch the same endpoint across several entities")
+	require.Contains(t, prompt, "After completing each entity")
+	require.Contains(t, prompt, "This is mandatory before starting the next entity")
+	require.Contains(t, prompt, "read it back when assembling the final artifact")
 	require.Contains(t, prompt, "Do not store raw arrays or raw tool dumps")
 	require.True(t, taskNeedsWorkingNotes(task))
-	require.True(t, taskNeedsLowerCompletionBudget(task))
+}
+
+func TestFinalizationRetryUsesWorkingNotesWithoutDomainCalls(t *testing.T) {
+	workspace := t.TempDir()
+	require.NoError(t, os.WriteFile(
+		filepath.Join(workspace, "working_notes.json"), []byte(`{"items":[]}`), 0o644,
+	))
+
+	prompt := finalizationRetryPrompt(
+		workspace, "required output result.json is missing",
+	)
+
+	require.Contains(t, prompt, "finalize-only retry")
+	require.Contains(t, prompt, "Do not call any domain or API tool")
+	require.Contains(t, prompt, "Read working_notes.json now")
+	require.Contains(t, prompt, "local-write_final_json")
+	require.Contains(t, prompt, "local-claim_done")
 }
 
 func TestResultStatusFromEvaluation(t *testing.T) {
