@@ -634,19 +634,19 @@ func executeBenchmark(
 
 	result.RunOrder = benchmarkRunOrder(cfg)
 	for _, mode := range result.RunOrder {
-		modeResult, err := runModeTasks(cfg, mode, tasks, onProgress)
+		modeResult, err := runModeTasks(
+			cfg,
+			mode,
+			tasks,
+			func(partial *modeResult) {
+				setModeResult(result, mode, partial)
+				onProgress()
+			},
+		)
+		setModeResult(result, mode, modeResult)
 		if err != nil {
 			return fmt.Errorf("%s: %w", mode, err)
 		}
-		switch mode {
-		case modeBaseline:
-			result.Baseline = modeResult
-		case modeEvolution:
-			result.Evolution = modeResult
-		case modeOptimizedEvolution:
-			result.OptimizedEvolution = modeResult
-		}
-		onProgress()
 	}
 	if result.Baseline != nil && result.Evolution != nil {
 		result.Comparison = buildComparison(result.Baseline, result.Evolution)
@@ -658,6 +658,20 @@ func executeBenchmark(
 		)
 	}
 	return nil
+}
+
+func setModeResult(result *benchmarkResult, mode runMode, value *modeResult) {
+	if result == nil {
+		return
+	}
+	switch mode {
+	case modeBaseline:
+		result.Baseline = value
+	case modeEvolution:
+		result.Evolution = value
+	case modeOptimizedEvolution:
+		result.OptimizedEvolution = value
+	}
 }
 
 func benchmarkRunOrder(cfg *benchmarkConfig) []runMode {
@@ -943,7 +957,7 @@ func runModeTasks(
 	cfg *benchmarkConfig,
 	mode runMode,
 	tasks []*taskDefinition,
-	onProgress func(),
+	onProgress func(*modeResult),
 ) (*modeResult, error) {
 	log.Printf("=== Running %s ===", mode)
 
@@ -978,7 +992,7 @@ func runModeTasks(
 		modeRes.Cases = results
 		modeRes.Summary = summarizeMode(results, currentSkillNames(mode, skillsDir))
 		if onProgress != nil {
-			onProgress()
+			onProgress(modeRes)
 		}
 	}
 
@@ -1531,6 +1545,19 @@ func executeTaskWithContext(
 	}
 
 	stats = consumeEvents(eventCh)
+	if finalizationIssue := taskFinalizationIssue(task, workspace, stats); finalizationIssue != "" {
+		retryPrompt := model.NewUserMessage(
+			"The task is not complete: " + finalizationIssue + ". " +
+				"Continue from the existing tool results. Do not repeat domain calls whose " +
+				"results are already in the conversation. Write and verify the complete required " +
+				"artifact, then call local-claim_done.",
+		)
+		retryEvents, retryErr := run.Run(ctx, userID, sessionID, retryPrompt)
+		if retryErr != nil {
+			return stats, retryErr
+		}
+		stats = mergeRunStats(stats, consumeEvents(retryEvents))
+	}
 	if err := run.Close(); err != nil {
 		return stats, err
 	}
@@ -1542,6 +1569,49 @@ func executeTaskWithContext(
 		return stats, fmt.Errorf(strings.Join(stats.EventErrors, "; "))
 	}
 	return stats, nil
+}
+
+func taskFinalizationIssue(
+	task *taskDefinition,
+	workspace string,
+	stats *runStats,
+) string {
+	if task == nil || stats == nil {
+		return "the agent run did not produce completion state"
+	}
+	var issues []string
+	if output := extractRequiredOutputFile(task.TaskDoc); output != "" {
+		path := filepath.Join(workspace, filepath.Clean(output))
+		if info, err := os.Stat(path); err != nil || info.IsDir() {
+			issues = append(issues, fmt.Sprintf("required output %s is missing", output))
+		}
+	}
+	if containsString(task.NeededLocalTools, "claim_done") && !stats.ClaimDoneCalled {
+		issues = append(issues, "local-claim_done was not called")
+	}
+	return strings.Join(issues, "; ")
+}
+
+func mergeRunStats(first, second *runStats) *runStats {
+	if first == nil {
+		return second
+	}
+	if second == nil {
+		return first
+	}
+	return &runStats{
+		PromptTokens:       first.PromptTokens + second.PromptTokens,
+		CompletionTokens:   first.CompletionTokens + second.CompletionTokens,
+		TotalTokens:        first.TotalTokens + second.TotalTokens,
+		ToolCalls:          append(append([]string(nil), first.ToolCalls...), second.ToolCalls...),
+		ToolCallSignatures: append(append([]string(nil), first.ToolCallSignatures...), second.ToolCallSignatures...),
+		SkillToolCalls:     append(append([]string(nil), first.SkillToolCalls...), second.SkillToolCalls...),
+		LoadedSkillNames:   appendUniqueStrings(first.LoadedSkillNames, second.LoadedSkillNames...),
+		ClaimDoneCalled:    first.ClaimDoneCalled || second.ClaimDoneCalled,
+		SkillToolInvoked:   first.SkillToolInvoked || second.SkillToolInvoked,
+		FinalResponse:      second.FinalResponse,
+		EventErrors:        append(append([]string(nil), first.EventErrors...), second.EventErrors...),
+	}
 }
 
 func evaluationSeedModelOptions(seed *int64) []openai.Option {
@@ -1930,6 +2000,8 @@ func extractTaskEntities(doc string) *taskEntities {
 		"cities to analyze":    "cities",
 		"countries to analyze": "countries",
 		"dishes to include":    "dishes",
+		"pokemon to analyze":   "pokemon",
+		"featured breeds":      "breeds",
 	}
 	for i, line := range lines {
 		header := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "##")))
@@ -1954,6 +2026,8 @@ func extractTableColumnValues(lines []string, label string) []string {
 		"cities":    "city",
 		"countries": "country",
 		"dishes":    "dish",
+		"pokemon":   "name",
+		"breeds":    "breed",
 	}[label]
 	if targetColumn == "" {
 		return nil
@@ -2713,6 +2787,14 @@ func appendUniqueString(items []string, value string) []string {
 		}
 	}
 	return append(items, value)
+}
+
+func appendUniqueStrings(items []string, values ...string) []string {
+	result := append([]string(nil), items...)
+	for _, value := range values {
+		result = appendUniqueString(result, value)
+	}
+	return result
 }
 
 func sanitizeName(value string) string {

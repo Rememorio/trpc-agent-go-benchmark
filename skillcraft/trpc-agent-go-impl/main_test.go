@@ -147,6 +147,59 @@ func TestManagedSkillInputsAreIsolatedByArm(t *testing.T) {
 	require.Equal(t, "/optimized", managedSkillsSeed(cfg, modeOptimizedEvolution))
 }
 
+func TestSetModeResultPublishesPartialArmState(t *testing.T) {
+	result := &benchmarkResult{}
+	partial := &modeResult{Mode: modeOptimizedEvolution}
+
+	setModeResult(result, modeOptimizedEvolution, partial)
+
+	require.Same(t, partial, result.OptimizedEvolution)
+	require.Nil(t, result.Baseline)
+	require.Nil(t, result.Evolution)
+}
+
+func TestTaskFinalizationIssueRequiresArtifactAndClaim(t *testing.T) {
+	workspace := t.TempDir()
+	task := &taskDefinition{
+		TaskDoc:          "Save results to `result.json`:",
+		NeededLocalTools: []string{"claim_done"},
+	}
+	stats := &runStats{}
+
+	require.Equal(
+		t,
+		"required output result.json is missing; local-claim_done was not called",
+		taskFinalizationIssue(task, workspace, stats),
+	)
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, "result.json"), []byte("{}"), 0o644))
+	stats.ClaimDoneCalled = true
+	require.Empty(t, taskFinalizationIssue(task, workspace, stats))
+}
+
+func TestMergeRunStatsPreservesBothAttempts(t *testing.T) {
+	merged := mergeRunStats(
+		&runStats{
+			TotalTokens:      10,
+			ToolCalls:        []string{"domain"},
+			LoadedSkillNames: []string{"shared", "first"},
+			FinalResponse:    "unfinished",
+		},
+		&runStats{
+			TotalTokens:      7,
+			ToolCalls:        []string{"write", "claim"},
+			LoadedSkillNames: []string{"shared", "second"},
+			ClaimDoneCalled:  true,
+			FinalResponse:    "done",
+		},
+	)
+
+	require.Equal(t, 17, merged.TotalTokens)
+	require.Equal(t, []string{"domain", "write", "claim"}, merged.ToolCalls)
+	require.Equal(t, []string{"shared", "first", "second"}, merged.LoadedSkillNames)
+	require.True(t, merged.ClaimDoneCalled)
+	require.Equal(t, "done", merged.FinalResponse)
+}
+
 func TestBuildInstructionPrioritizesTaskSpecOverSkills(t *testing.T) {
 	task := &taskDefinition{
 		TaskDoc:          "SEQ_01: ATGC...\n\nSave results to `dna_results.json`:",
@@ -216,6 +269,28 @@ func TestExtractTaskEntitiesParsesPrimaryTaskTable(t *testing.T) {
 	require.NotNil(t, entities)
 	require.Equal(t, "cities", entities.Label)
 	require.Equal(t, []string{"Tokyo", "New York", "London", "Sydney"}, entities.Values)
+}
+
+func TestExtractTaskEntitiesParsesPokemonAndBreedTables(t *testing.T) {
+	pokemon := extractTaskEntities(`## Pokemon to Analyze
+
+| # | ID | Name | Type |
+|---|----|------|------|
+| 1 | 25 | Pikachu | Electric |
+| 2 | 6 | Charizard | Fire/Flying |`)
+	require.NotNil(t, pokemon)
+	require.Equal(t, "pokemon", pokemon.Label)
+	require.Equal(t, []string{"Pikachu", "Charizard"}, pokemon.Values)
+
+	breeds := extractTaskEntities(`## Featured Breeds
+
+| # | Breed | Country | Coat |
+|---|-------|---------|------|
+| 1 | Persian | Iran | Long |
+| 2 | Siamese | Thailand | Short |`)
+	require.NotNil(t, breeds)
+	require.Equal(t, "breeds", breeds.Label)
+	require.Equal(t, []string{"Persian", "Siamese"}, breeds.Values)
 }
 
 func TestBuildInstructionEnforcesExactTaskEntitiesOverInitialFiles(t *testing.T) {
