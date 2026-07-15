@@ -169,7 +169,8 @@ func buildLongMemEvalRerankPrompt(
 	for i, hit := range hits {
 		fmt.Fprintf(&candidates, "%d. %s", i+1, hit.Memory)
 		if meta := formatMemoryMetadata(
-			hit.Kind, hit.EventTime, hit.Participants, hit.Location,
+			hit.Kind, hit.EventTime, hit.Topics,
+			hit.Participants, hit.Location,
 		); meta != "" {
 			fmt.Fprintf(&candidates, " [%s]", meta)
 		}

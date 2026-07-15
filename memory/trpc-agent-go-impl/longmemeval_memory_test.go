@@ -898,6 +898,7 @@ func TestBuildLongMemEvalAnswerPromptPreferenceGuidance(t *testing.T) {
 	}
 	prompt := buildLongMemEvalAnswerPrompt(inst, []memoryHit{{
 		Memory:       "Attended a language exchange event focused on French and Spanish practice.",
+		Topics:       []string{"language exchange", "French", "Spanish"},
 		Score:        0.9876,
 		Kind:         "episode",
 		EventTime:    "2023-05-20",
@@ -929,7 +930,7 @@ func TestBuildLongMemEvalAnswerPromptPreferenceGuidance(t *testing.T) {
 	if !strings.Contains(prompt, "do not invent missing personal context") {
 		t.Fatalf("missing unsupported-context guard: %s", prompt)
 	}
-	if !strings.Contains(prompt, "[kind=episode; event_time=2023-05-20; participants=Alice; location=Community Center]") {
+	if !strings.Contains(prompt, "[kind=episode; event_time=2023-05-20; topics=language exchange,French,Spanish; participants=Alice; location=Community Center]") {
 		t.Fatalf("missing memory metadata: %s", prompt)
 	}
 }
@@ -1501,6 +1502,7 @@ func TestHitsFromEntriesIncludesEpisodicMetadata(t *testing.T) {
 		ID: "mem-1",
 		Memory: &memory.Memory{
 			Memory:       "Visited the Natural History Museum on 2023-03-04.",
+			Topics:       []string{"museum", "family outing"},
 			Kind:         memory.KindEpisode,
 			EventTime:    &eventTime,
 			Participants: []string{"niece"},
@@ -1520,11 +1522,30 @@ func TestHitsFromEntriesIncludesEpisodicMetadata(t *testing.T) {
 	if hit.EventTime != "2023-03-04" {
 		t.Fatalf("missing event_time: %+v", hit)
 	}
+	if strings.Join(hit.Topics, ",") != "museum,family outing" {
+		t.Fatalf("missing topics: %+v", hit)
+	}
 	if strings.Join(hit.Participants, ",") != "niece" {
 		t.Fatalf("missing participants: %+v", hit)
 	}
 	if hit.Location != "Natural History Museum" {
 		t.Fatalf("missing location: %+v", hit)
+	}
+}
+
+func TestDiffSnapshotsIncludesMetadataOnlyChanges(t *testing.T) {
+	t.Parallel()
+
+	before := []memorySnapshot{{
+		ID: "mem-1", Memory: "Had Domino's Pizza three times.",
+		Topics: []string{"pizza"}, Kind: "episode",
+	}}
+	after := append([]memorySnapshot(nil), before...)
+	after[0].Topics = []string{"pizza", "food delivery"}
+
+	got := diffSnapshots(before, after)
+	if len(got) != 1 || len(got[0].Topics) != 2 {
+		t.Fatalf("metadata-only change was not captured: %+v", got)
 	}
 }
 

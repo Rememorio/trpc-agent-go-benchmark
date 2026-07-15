@@ -27,6 +27,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -126,6 +127,7 @@ type ingestMeta struct {
 type memoryHit struct {
 	ID              string    `json:"id,omitempty"`
 	Memory          string    `json:"memory"`
+	Topics          []string  `json:"topics,omitempty"`
 	Score           float64   `json:"score,omitempty"`
 	SourceSessions  []string  `json:"source_sessions,omitempty"`
 	SourceHasAnswer bool      `json:"source_has_answer,omitempty"`
@@ -140,6 +142,7 @@ type memoryHit struct {
 type memorySnapshot struct {
 	ID              string    `json:"id,omitempty"`
 	Memory          string    `json:"memory"`
+	Topics          []string  `json:"topics,omitempty"`
 	Score           float64   `json:"score,omitempty"`
 	SourceSessions  []string  `json:"source_sessions,omitempty"`
 	SourceHasAnswer bool      `json:"source_has_answer,omitempty"`
@@ -2115,7 +2118,10 @@ func buildLongMemEvalAnswerPrompt(inst *lmeInstance, hits []memoryHit) string {
 	} else {
 		for i, hit := range hits {
 			fmt.Fprintf(&b, "%d. %s", i+1, hit.Memory)
-			if meta := formatMemoryMetadata(hit.Kind, hit.EventTime, hit.Participants, hit.Location); meta != "" {
+			if meta := formatMemoryMetadata(
+				hit.Kind, hit.EventTime, hit.Topics,
+				hit.Participants, hit.Location,
+			); meta != "" {
 				fmt.Fprintf(&b, " [%s]", meta)
 			}
 			b.WriteByte('\n')
@@ -2731,6 +2737,7 @@ func snapshotsFromEntries(entries []*memory.Entry) []memorySnapshot {
 		out = append(out, memorySnapshot{
 			ID:           e.ID,
 			Memory:       e.Memory.Memory,
+			Topics:       append([]string(nil), e.Memory.Topics...),
 			Score:        e.Score,
 			Kind:         string(e.Memory.Kind),
 			EventTime:    formatEventTime(e.Memory.EventTime),
@@ -2752,6 +2759,7 @@ func hitsFromEntries(entries []*memory.Entry) []memoryHit {
 		out = append(out, memoryHit{
 			ID:           e.ID,
 			Memory:       e.Memory.Memory,
+			Topics:       append([]string(nil), e.Memory.Topics...),
 			Score:        e.Score,
 			Kind:         string(e.Memory.Kind),
 			EventTime:    formatEventTime(e.Memory.EventTime),
@@ -2771,13 +2779,22 @@ func formatEventTime(t *time.Time) string {
 	return t.UTC().Format(time.DateOnly)
 }
 
-func formatMemoryMetadata(kind, eventTime string, participants []string, location string) string {
+func formatMemoryMetadata(
+	kind string,
+	eventTime string,
+	topics []string,
+	participants []string,
+	location string,
+) string {
 	var parts []string
 	if kind != "" {
 		parts = append(parts, "kind="+kind)
 	}
 	if eventTime != "" {
 		parts = append(parts, "event_time="+eventTime)
+	}
+	if len(topics) > 0 {
+		parts = append(parts, "topics="+strings.Join(topics, ","))
 	}
 	if len(participants) > 0 {
 		parts = append(parts, "participants="+strings.Join(participants, ","))
@@ -2796,11 +2813,20 @@ func diffSnapshots(before, after []memorySnapshot) []memorySnapshot {
 	var out []memorySnapshot
 	for _, mem := range after {
 		prev, ok := seen[memoryIdentity(mem)]
-		if !ok || prev.Memory != mem.Memory {
+		if !ok || !equalMemorySnapshotContent(prev, mem) {
 			out = append(out, mem)
 		}
 	}
 	return out
+}
+
+func equalMemorySnapshotContent(left, right memorySnapshot) bool {
+	return left.Memory == right.Memory &&
+		slices.Equal(left.Topics, right.Topics) &&
+		left.Kind == right.Kind &&
+		left.EventTime == right.EventTime &&
+		slices.Equal(left.Participants, right.Participants) &&
+		left.Location == right.Location
 }
 
 func recordProvenance(
