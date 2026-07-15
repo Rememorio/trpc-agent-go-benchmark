@@ -1037,6 +1037,9 @@ func TestReanswerLongMemEvalResult(t *testing.T) {
 	if _, ok := got.Metadata["answer_generation"]; !ok {
 		t.Fatalf("missing answer generation metadata: %+v", got.Metadata)
 	}
+	if got.Metadata["answer_prompt_version"] != lmeAnswerPromptVersion {
+		t.Fatalf("stale answer prompt version: %+v", got.Metadata)
+	}
 	mem0 := got.Cases[0].BackendResults["mem0"]
 	pgvector := got.Cases[0].BackendResults["pgvector"]
 	if mem0.Answer != "Option B" || !mem0.ExactMatch || mem0.FailureStage != "ok" || mem0.Judge != nil {
@@ -1901,6 +1904,26 @@ func TestValidateLongMemEvalComparisonRequiresPinnedReanswerBuild(t *testing.T) 
 	err := validateLongMemEvalComparison(baseline, candidate)
 	if err == nil || !strings.Contains(err.Error(), "reanswer_build provenance is missing benchmark_revision") {
 		t.Fatalf("reanswer build provenance error = %v", err)
+	}
+}
+
+func TestValidateLongMemEvalComparisonRejectsRerankDrift(t *testing.T) {
+	t.Parallel()
+
+	baseline := &runResult{Metadata: testLongMemEvalComparisonMetadata("upstream-main")}
+	candidate := &runResult{Metadata: testLongMemEvalComparisonMetadata("candidate-2196")}
+	for _, metadata := range []map[string]any{baseline.Metadata, candidate.Metadata} {
+		metadata["rerank_model"] = "answer-model"
+		metadata["rerank_model_variant"] = "glm"
+		metadata["rerank_prompt_version"] = lmeRerankPromptVersion
+		metadata["rerank_generation"] = currentLongMemEvalRerankGeneration()
+		metadata["rerank_top_n"] = 12
+		metadata["rerank_build"] = testLongMemEvalBuildProvenance("rerank-revision")
+	}
+	candidate.Metadata["rerank_top_n"] = 8
+	err := validateLongMemEvalComparison(baseline, candidate)
+	if err == nil || !strings.Contains(err.Error(), "rerank_top_n") {
+		t.Fatalf("rerank protocol mismatch error = %v", err)
 	}
 }
 

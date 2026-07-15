@@ -300,17 +300,17 @@ go run . \
   -vector-topk 30 \
   -output ../results/lme-candidate
 
-# Optionally add one model-based relevance-selection pass over the refreshed
-# top-k. The pre-rerank hits, selected hits, model calls, errors, latency, and
-# token usage are retained for diagnosis.
+# Optionally add one model-based relevance-selection pass over every backend's
+# saved top-k. Running this on a combined PGVector/Mem0 result applies the same
+# model, prompt, and Top-N to both arms. Pre-rerank hits, selected hits, model
+# calls, errors, latency, and token usage are retained for diagnosis. Treat this
+# as an ablation: compare reranked arms only when their recorded rerank protocol
+# matches, and do not mix them with the frozen non-reranked baseline.
 go run . \
   -dataset-format longmemeval \
-  -lme-refresh-retrieval-results ../results/lme-candidate/results.json \
-  -lme-refresh-rerank \
+  -lme-rerank-results ../results/lme-upstream/results.json \
   -lme-rerank-topn 12 \
-  -table-suffix _lme_candidate \
-  -vector-topk 30 \
-  -output ../results/lme-candidate
+  -output ../results/lme-upstream
 
 # Analyze judged results without making model calls.
 go run . \
@@ -355,11 +355,13 @@ token counters, clears stale judge results, and does not rerun ingestion or
 retrieval.
 Retrieval refresh first verifies that canonical memories in the recorded
 pgvector table exactly match the source run, then writes
-`retrieval_refreshed_results.json`. Enabling reranking instead writes
-`retrieval_reranked_results.json`; a malformed or failed rerank call falls back
-to the original hits while retaining the failure trace. Refresh preserves the
-recorded ingestion and original query-embedding cost, replaces answer usage,
-and adds rerank usage when enabled.
+`retrieval_refreshed_results.json`. It preserves the recorded ingestion and
+original query-embedding cost and replaces answer usage. Saved-result reranking
+applies the same relevance-selection protocol to every backend in the source
+file and writes `reranked_results.json`; a malformed or failed rerank call falls
+back to that backend's original hits while retaining the failure trace. It
+preserves ingestion and embedding usage and replaces prior answer and rerank
+usage.
 
 Token counters cover model and embedding calls made by this process, including
 pgvector extraction, retrieval, and answer generation. A self-hosted mem0 can
@@ -414,7 +416,7 @@ LongMemEval-specific options:
 | `-lme-implementation`    | (env)   | Reproducible implementation label            |
 | `-lme-reanswer-results`   |         | Re-answer using saved ranked retrieval hits  |
 | `-lme-refresh-retrieval-results` | | Refresh persisted pgvector retrieval         |
-| `-lme-refresh-rerank`     | false   | Model-rerank hits during retrieval refresh   |
+| `-lme-rerank-results`     |         | Rerank saved hits for every result backend   |
 | `-lme-rerank-topn`        | 12      | Maximum memories selected by the reranker    |
 | `-lme-judge-results`     |         | Add semantic judge results to `results.json` |
 | `-lme-judge-runs`        | 1       | Odd number of independent semantic votes     |

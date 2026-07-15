@@ -855,6 +855,9 @@ func runLongMemEvalMemory(ctx context.Context) error {
 	if path := strings.TrimSpace(*flagLMEReanswerResults); path != "" {
 		return reanswerLongMemEvalResults(ctx, path, longMemEvalAnalysisOutputDir(path))
 	}
+	if path := strings.TrimSpace(*flagLMERerankResults); path != "" {
+		return rerankLongMemEvalResults(ctx, path, longMemEvalAnalysisOutputDir(path))
+	}
 	if path := strings.TrimSpace(*flagLMERefreshRetrievalResults); path != "" {
 		return refreshLongMemEvalRetrievalResults(
 			ctx, path, longMemEvalAnalysisOutputDir(path),
@@ -1516,6 +1519,7 @@ func reanswerLongMemEvalResult(
 	result.Metadata["reanswer_model_variant"] = modelVariant
 	result.Metadata["reanswer_build"] = currentLongMemEvalBuildProvenance()
 	result.Metadata["answer_generation"] = currentLongMemEvalAnswerGeneration()
+	result.Metadata["answer_prompt_version"] = lmeAnswerPromptVersion
 	result.Metadata["judge_prompt_version"] = lmeJudgePromptVersion
 	result.Metadata["judge_generation"] = currentLongMemEvalJudgeGeneration()
 	result.Metadata["reanswered_at"] = time.Now().UTC().Format(time.RFC3339)

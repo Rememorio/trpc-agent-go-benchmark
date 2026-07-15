@@ -93,6 +93,17 @@ type lmeJudgeGenerationProvenance struct {
 	ThinkingEnabled  bool    `json:"thinking_enabled"`
 }
 
+type lmeRerankGenerationProvenance struct {
+	InitialMaxTokens   int      `json:"initial_max_tokens"`
+	RetryMaxTokens     int      `json:"retry_max_tokens"`
+	MaxAttempts        int      `json:"max_attempts"`
+	RetryFinishReasons []string `json:"retry_finish_reasons"`
+	Temperature        float64  `json:"temperature"`
+	ReasoningEffort    string   `json:"reasoning_effort"`
+	ThinkingEnabled    bool     `json:"thinking_enabled"`
+	ResponseFormat     string   `json:"response_format"`
+}
+
 func currentLongMemEvalAnswerGeneration() lmeAnswerGenerationProvenance {
 	return lmeAnswerGenerationProvenance{
 		PrimaryMaxTokens:   lmeAnswerPrimaryMaxTokens,
@@ -113,6 +124,19 @@ func currentLongMemEvalJudgeGeneration() lmeJudgeGenerationProvenance {
 		Temperature:      0,
 		ReasoningEffort:  "low",
 		ThinkingEnabled:  false,
+	}
+}
+
+func currentLongMemEvalRerankGeneration() lmeRerankGenerationProvenance {
+	return lmeRerankGenerationProvenance{
+		InitialMaxTokens:   lmeRerankInitialTokens,
+		RetryMaxTokens:     lmeRerankRetryTokens,
+		MaxAttempts:        lmeRerankMaxAttempts,
+		RetryFinishReasons: []string{"length", "max_tokens", "max_output_tokens"},
+		Temperature:        0,
+		ReasoningEffort:    "low",
+		ThinkingEnabled:    false,
+		ResponseFormat:     "json_object",
 	}
 }
 

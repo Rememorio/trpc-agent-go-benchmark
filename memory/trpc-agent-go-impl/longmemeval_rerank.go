@@ -21,7 +21,7 @@ import (
 const (
 	lmeRerankPromptVersion  = "lme-memory-rerank-v3"
 	lmeRerankInitialTokens  = 512
-	lmeRerankRetryTokens    = 2048
+	lmeRerankRetryTokens    = 4096
 	lmeRerankMaxAttempts    = 2
 	lmeRerankRetryDirective = `Your previous attempt was truncated before the required JSON.
 Return the JSON object before any analysis. The first character must be "{".

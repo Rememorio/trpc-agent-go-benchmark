@@ -201,6 +201,11 @@ func validateLongMemEvalComparison(baseline, candidate *runResult) error {
 	for _, key := range []string{
 		"reanswer_model",
 		"reanswer_model_variant",
+		"rerank_model",
+		"rerank_model_variant",
+		"rerank_prompt_version",
+		"rerank_generation",
+		"rerank_top_n",
 		"judge_model",
 		"judge_model_variant",
 		"judge_runs",
@@ -223,6 +228,17 @@ func validateLongMemEvalComparison(baseline, candidate *runResult) error {
 			baseline.Metadata,
 			candidate.Metadata,
 			"reanswer_build",
+			false,
+		); err != nil {
+			return err
+		}
+	}
+	if longMemEvalMetadataPresent(baseline.Metadata, "rerank_model") ||
+		longMemEvalMetadataPresent(candidate.Metadata, "rerank_model") {
+		if err := validateLongMemEvalBuildPair(
+			baseline.Metadata,
+			candidate.Metadata,
+			"rerank_build",
 			false,
 		); err != nil {
 			return err

@@ -10,7 +10,6 @@ package main
 
 import (
 	"context"
-	"strings"
 	"testing"
 
 	"trpc.group/trpc-go/trpc-agent-go/memory"
@@ -50,7 +49,6 @@ func TestValidateLongMemEvalRetrievalRefresh(t *testing.T) {
 func TestRefreshLongMemEvalRetrievalResult(t *testing.T) {
 	restoreStringFlag(t, flagTableSuffix, "_refresh_test")
 	restoreIntFlag(t, flagVectorTopK, 30)
-	restoreBoolFlag(t, flagLMERefreshRerank, false)
 
 	persisted := memorySnapshot{ID: "memory-1", Memory: "Visited the Science Museum."}
 	saved := persisted
@@ -135,124 +133,12 @@ func TestRefreshLongMemEvalRetrievalResult(t *testing.T) {
 	}
 }
 
-func TestRefreshLongMemEvalRetrievalResultWithRerank(t *testing.T) {
-	restoreStringFlag(t, flagTableSuffix, "_rerank_test")
-	restoreIntFlag(t, flagVectorTopK, 30)
-	restoreBoolFlag(t, flagLMERefreshRerank, true)
-	restoreIntFlag(t, flagLMERerankTopN, 1)
-
-	relevant := memorySnapshot{ID: "memory-1", Memory: "Visited the Science Museum."}
-	irrelevant := memorySnapshot{ID: "memory-2", Memory: "Assistant recommended a database course."}
-	savedRelevant := relevant
-	savedRelevant.SourceSessions = []string{"answer-session"}
-	savedRelevant.SourceHasAnswer = true
-	backend := &refreshTestBackend{
-		hits: []memoryHit{
-			{ID: irrelevant.ID, Memory: irrelevant.Memory, Score: 0.95},
-			{ID: relevant.ID, Memory: relevant.Memory, Score: 0.8},
-		},
-		stored: []memorySnapshot{relevant, irrelevant},
-	}
-	stop := "stop"
-	llm := &queuedAnswerModel{responses: []*model.Response{
-		{
-			Choices: []model.Choice{{
-				Message:      model.NewAssistantMessage(`{"indices":[2]}`),
-				FinishReason: &stop,
-			}},
-			Usage: &model.Usage{PromptTokens: 8, CompletionTokens: 2, TotalTokens: 10},
-		},
-		{
-			Choices: []model.Choice{{
-				Message:      model.NewAssistantMessage("Science Museum"),
-				FinishReason: &stop,
-			}},
-			Usage: &model.Usage{PromptTokens: 4, CompletionTokens: 1, TotalTokens: 5},
-		},
-	}}
-	result := &runResult{
-		Metadata: map[string]any{},
-		Cases: []*caseResult{{
-			QuestionID:       "q1",
-			QuestionType:     "single-session-user",
-			Question:         "Which museum did I visit?",
-			Answer:           "Science Museum",
-			AnswerSessionIDs: []string{"answer-session"},
-			BackendResults: map[string]*backendResult{
-				"pgvector": {
-					Backend:     "pgvector",
-					UserID:      "user-1",
-					TokenUsage:  tokenUsagePtr(lmeTokenUsage{TotalTokens: 100, LLMCalls: 2}),
-					AnswerUsage: tokenUsagePtr(lmeTokenUsage{TotalTokens: 20, LLMCalls: 1}),
-					FinalMemories: []memorySnapshot{
-						savedRelevant, irrelevant,
-					},
-				},
-			},
-		}},
-	}
-	if err := refreshLongMemEvalRetrievalResult(
-		context.Background(), result, backend, llm,
-		"answer-model", "variant", "source-digest", t.TempDir()+"/reranked.json",
-	); err != nil {
-		t.Fatalf("refresh retrieval result with rerank: %v", err)
-	}
-
-	br := result.Cases[0].BackendResults["pgvector"]
-	if len(br.PreRerankRetrieval) != 2 || br.PreRerankRetrieval[0].ID != "memory-2" {
-		t.Fatalf("pre-rerank retrieval = %#v", br.PreRerankRetrieval)
-	}
-	if len(br.Retrieval) != 1 || br.Retrieval[0].ID != "memory-1" {
-		t.Fatalf("reranked retrieval = %#v", br.Retrieval)
-	}
-	if br.RerankRaw != `{"indices":[2]}` || br.RerankError != "" ||
-		len(br.RerankModelCalls) != 1 {
-		t.Fatalf("rerank trace = raw %q error %q calls %#v", br.RerankRaw, br.RerankError, br.RerankModelCalls)
-	}
-	if br.RerankUsage == nil || br.RerankUsage.TotalTokens != 10 ||
-		br.RerankUsage.LLMCalls != 1 {
-		t.Fatalf("rerank usage = %#v", br.RerankUsage)
-	}
-	if br.TokenUsage == nil || br.TokenUsage.TotalTokens != 95 ||
-		br.TokenUsage.LLMCalls != 3 {
-		t.Fatalf("combined token usage = %#v", br.TokenUsage)
-	}
-	if br.Answer != "Science Museum" || !br.ExactMatch {
-		t.Fatalf("reranked answer = %q, exact = %v", br.Answer, br.ExactMatch)
-	}
-	if len(llm.requests) != 2 {
-		t.Fatalf("model requests = %d", len(llm.requests))
-	}
-	for _, message := range llm.requests[1].Messages {
-		if strings.Contains(message.Content, irrelevant.Memory) {
-			t.Fatalf("answer prompt included filtered memory: %s", message.Content)
-		}
-	}
-	refresh, ok := result.Metadata["retrieval_refresh"].(map[string]any)
-	if !ok || refresh["rerank_enabled"] != true ||
-		refresh["rerank_prompt_version"] != lmeRerankPromptVersion ||
-		refresh["rerank_top_n"] != 1 {
-		t.Fatalf("retrieval refresh metadata = %#v", result.Metadata["retrieval_refresh"])
-	}
-}
-
-func TestLongMemEvalRetrievalRefreshOutputName(t *testing.T) {
-	restoreBoolFlag(t, flagLMERefreshRerank, false)
-	if got := longMemEvalRetrievalRefreshOutputName(); got != lmeRetrievalRefreshOutput {
-		t.Fatalf("refresh output = %q", got)
-	}
-	*flagLMERefreshRerank = true
-	if got := longMemEvalRetrievalRefreshOutputName(); got != lmeRetrievalRerankOutput {
-		t.Fatalf("rerank output = %q", got)
-	}
-}
-
 func TestLongMemEvalJudgedOutputName(t *testing.T) {
 	tests := map[string]string{
 		"results.json":                     "judged_results.json",
 		"reanswered_results.json":          "reanswered_judged_results.json",
 		"retrieval_refreshed_results.json": "retrieval_refreshed_judged_results.json",
-		"retrieval_reranked_results.json":  "retrieval_reranked_judged_results.json",
+		"reranked_results.json":            "reranked_judged_results.json",
 		"candidate.json":                   "candidate_judged.json",
 	}
 	for input, want := range tests {
@@ -288,13 +174,6 @@ func restoreStringFlag(t *testing.T, target *string, value string) {
 }
 
 func restoreIntFlag(t *testing.T, target *int, value int) {
-	t.Helper()
-	original := *target
-	*target = value
-	t.Cleanup(func() { *target = original })
-}
-
-func restoreBoolFlag(t *testing.T, target *bool, value bool) {
 	t.Helper()
 	original := *target
 	*target = value
