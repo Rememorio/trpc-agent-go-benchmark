@@ -1086,7 +1086,12 @@ func TestShouldReuseLongMemEvalJudge(t *testing.T) {
 
 	valid := &backendResult{Judge: &lmeJudgeResult{
 		Model: "judge-model", Raw: "VERDICT: yes", Correct: true,
-		RequestedRuns: 3,
+		RequestedRuns: 3, ValidRuns: 3,
+		Attempts: []lmeJudgeAttempt{
+			{Raw: "VERDICT: yes", Correct: true},
+			{Raw: "VERDICT: no"},
+			{Raw: "VERDICT: yes", Correct: true},
+		},
 	}}
 	if !shouldReuseLongMemEvalJudge(valid, "judge-model", 3) {
 		t.Fatal("valid verdict from the same model should be reused")
@@ -1178,6 +1183,10 @@ func TestLongMemEvalJudgeCorrectRequiresValidatedRaw(t *testing.T) {
 		{name: "mismatched saved value", result: &backendResult{Judge: &lmeJudgeResult{Raw: "VERDICT: yes", Correct: false}}},
 		{name: "valid yes", result: &backendResult{Judge: &lmeJudgeResult{Raw: "VERDICT: yes", Correct: true}}, want: true, available: true},
 		{name: "valid no", result: &backendResult{Judge: &lmeJudgeResult{Raw: "VERDICT: no", Correct: false}}, available: true},
+		{name: "incomplete consensus", result: &backendResult{Judge: &lmeJudgeResult{
+			Raw: "VERDICT: yes", Correct: true, RequestedRuns: 3, ValidRuns: 2,
+			Attempts: []lmeJudgeAttempt{{Raw: "VERDICT: yes", Correct: true}},
+		}}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

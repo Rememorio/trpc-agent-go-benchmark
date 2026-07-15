@@ -547,11 +547,45 @@ func longMemEvalJudgeCorrect(br *backendResult) (bool, bool) {
 	if br == nil || br.Judge == nil || strings.TrimSpace(br.Judge.Error) != "" {
 		return false, false
 	}
+	if !validLongMemEvalJudgeConsensus(br.Judge) {
+		return false, false
+	}
 	correct, err := parseLongMemEvalJudge(br.Judge.Raw)
 	if err != nil || correct != br.Judge.Correct {
 		return false, false
 	}
 	return correct, true
+}
+
+func validLongMemEvalJudgeConsensus(judge *lmeJudgeResult) bool {
+	if judge == nil || judge.RequestedRuns == 0 || judge.RequestedRuns == 1 {
+		return true
+	}
+	if judge.RequestedRuns < 1 || judge.RequestedRuns%2 == 0 ||
+		len(judge.Attempts) != judge.RequestedRuns {
+		return false
+	}
+	var yesVotes, noVotes int
+	for _, attempt := range judge.Attempts {
+		if strings.TrimSpace(attempt.Error) != "" {
+			continue
+		}
+		correct, err := parseLongMemEvalJudge(attempt.Raw)
+		if err != nil || correct != attempt.Correct {
+			return false
+		}
+		if correct {
+			yesVotes++
+		} else {
+			noVotes++
+		}
+	}
+	if judge.ValidRuns != yesVotes+noVotes {
+		return false
+	}
+	required := judge.RequestedRuns/2 + 1
+	return (yesVotes >= required && judge.Correct) ||
+		(noVotes >= required && !judge.Correct)
 }
 
 func evidenceStatus(ev *evidenceMetrics) string {
