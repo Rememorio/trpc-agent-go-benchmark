@@ -849,6 +849,11 @@ func runLongMemEvalMemory(ctx context.Context) error {
 	if path := strings.TrimSpace(*flagLMEReanswerResults); path != "" {
 		return reanswerLongMemEvalResults(ctx, path, longMemEvalAnalysisOutputDir(path))
 	}
+	if path := strings.TrimSpace(*flagLMERefreshRetrievalResults); path != "" {
+		return refreshLongMemEvalRetrievalResults(
+			ctx, path, longMemEvalAnalysisOutputDir(path),
+		)
+	}
 	if path := strings.TrimSpace(*flagLMEAnalyzeResults); path != "" {
 		return analyzeLongMemEvalResults(path, longMemEvalAnalysisOutputDir(path))
 	}
@@ -1195,42 +1200,9 @@ func newBackend(
 ) (memoryBackend, error) {
 	switch strings.TrimSpace(name) {
 	case "pgvector":
-		dsn := getPGVectorDSN()
-		if dsn == "" {
-			return nil, fmt.Errorf("pgvector-dsn or PGVECTOR_DSN is required")
-		}
-		emb := newLongMemEvalTrackingEmbedder(
-			newEmbeddingEmbedder(getEmbedModelName()),
+		return newLongMemEvalPGVectorBackend(
+			llm, pgExtractionConfig, false,
 		)
-		tableName := tableNameWithSuffix(lmePGVectorTableBase)
-		tracingExtractor := &lmeTracingExtractor{
-			MemoryExtractor: extractor.NewExtractor(
-				llm,
-				extractor.WithUpdatePolicy(pgExtractionConfig.UpdatePolicy),
-				extractor.WithAssistantResultExtraction(
-					pgExtractionConfig.AssistantResultExtraction,
-				),
-			),
-		}
-		svc, err := memorypgvector.NewService(
-			memorypgvector.WithPGVectorClientDSN(dsn),
-			memorypgvector.WithTableName(tableName),
-			memorypgvector.WithEmbedder(emb),
-			memorypgvector.WithIndexDimension(emb.GetDimensions()),
-			memorypgvector.WithMaxResults(*flagVectorTopK),
-			memorypgvector.WithExtractor(tracingExtractor),
-			memorypgvector.WithAsyncMemoryNum(1),
-			memorypgvector.WithMemoryQueueSize(1),
-			memorypgvector.WithMemoryJobTimeout(longMemEvalMemoryJobTimeout()),
-		)
-		if err != nil {
-			return nil, err
-		}
-		return &pgvectorBackend{
-			svc:      svc,
-			ext:      tracingExtractor,
-			embedder: emb,
-		}, nil
 	case "mem0":
 		host := getMem0Host()
 		timeout := 90 * time.Second
@@ -1273,6 +1245,56 @@ func newBackend(
 	default:
 		return nil, fmt.Errorf("unsupported backend %q", name)
 	}
+}
+
+func newLongMemEvalPGVectorBackend(
+	llm model.Model,
+	pgExtractionConfig lmePGVectorExtractionConfig,
+	readOnly bool,
+) (*pgvectorBackend, error) {
+	dsn := getPGVectorDSN()
+	if dsn == "" {
+		return nil, fmt.Errorf("pgvector-dsn or PGVECTOR_DSN is required")
+	}
+	emb := newLongMemEvalTrackingEmbedder(
+		newEmbeddingEmbedder(getEmbedModelName()),
+	)
+	opts := []memorypgvector.ServiceOpt{
+		memorypgvector.WithPGVectorClientDSN(dsn),
+		memorypgvector.WithTableName(tableNameWithSuffix(lmePGVectorTableBase)),
+		memorypgvector.WithEmbedder(emb),
+		memorypgvector.WithIndexDimension(emb.GetDimensions()),
+		memorypgvector.WithMaxResults(*flagVectorTopK),
+	}
+	var tracingExtractor *lmeTracingExtractor
+	if readOnly {
+		opts = append(opts, memorypgvector.WithSkipDBInit(true))
+	} else {
+		tracingExtractor = &lmeTracingExtractor{
+			MemoryExtractor: extractor.NewExtractor(
+				llm,
+				extractor.WithUpdatePolicy(pgExtractionConfig.UpdatePolicy),
+				extractor.WithAssistantResultExtraction(
+					pgExtractionConfig.AssistantResultExtraction,
+				),
+			),
+		}
+		opts = append(opts,
+			memorypgvector.WithExtractor(tracingExtractor),
+			memorypgvector.WithAsyncMemoryNum(1),
+			memorypgvector.WithMemoryQueueSize(1),
+			memorypgvector.WithMemoryJobTimeout(longMemEvalMemoryJobTimeout()),
+		)
+	}
+	svc, err := memorypgvector.NewService(opts...)
+	if err != nil {
+		return nil, err
+	}
+	return &pgvectorBackend{
+		svc:      svc,
+		ext:      tracingExtractor,
+		embedder: emb,
+	}, nil
 }
 
 func appendMessages(sess *session.Session, messages []model.Message, sourceSession string, pairIdx int) {
@@ -1618,7 +1640,7 @@ func judgeLongMemEvalResults(ctx context.Context, path, outputDir string) error 
 	if err := os.MkdirAll(outputDir, 0755); err != nil {
 		return fmt.Errorf("create judge output dir: %w", err)
 	}
-	outPath := filepath.Join(outputDir, "judged_results.json")
+	outPath := filepath.Join(outputDir, longMemEvalJudgedOutputName(path))
 
 	for _, cr := range result.Cases {
 		if cr == nil {
@@ -1665,6 +1687,17 @@ func judgeLongMemEvalResults(ctx context.Context, path, outputDir string) error 
 	printLongMemEvalSummary(&result)
 	log.Printf("LongMemEval judged results written to %s", outPath)
 	return nil
+}
+
+func longMemEvalJudgedOutputName(path string) string {
+	stem := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	if stem == "results" {
+		return "judged_results.json"
+	}
+	if strings.HasSuffix(stem, "_results") {
+		return strings.TrimSuffix(stem, "_results") + "_judged_results.json"
+	}
+	return stem + "_judged.json"
 }
 
 func judgeLongMemEvalConsensus(

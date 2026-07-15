@@ -187,6 +187,11 @@ var (
 		"",
 		"Regenerate answers from retrieval hits in an existing LongMemEval results.json",
 	)
+	flagLMERefreshRetrievalResults = flag.String(
+		"lme-refresh-retrieval-results",
+		"",
+		"Re-run PGVector retrieval and answers against memories persisted by an existing LongMemEval results.json",
+	)
 	flagLMEJudgeResults = flag.String(
 		"lme-judge-results",
 		"",
