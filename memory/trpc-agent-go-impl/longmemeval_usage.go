@@ -220,7 +220,11 @@ func (m *lmeTrackingModel) GenerateContent(
 				call.Error = resp.Error.Message
 			}
 			if resp != nil && len(resp.Choices) > 0 {
-				msg := resp.Choices[0].Message
+				choice := resp.Choices[0]
+				if choice.FinishReason != nil {
+					call.FinishReason = *choice.FinishReason
+				}
+				msg := choice.Message
 				if msg.Content != "" {
 					call.Content = msg.Content
 				}

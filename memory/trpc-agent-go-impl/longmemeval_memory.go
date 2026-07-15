@@ -177,9 +177,10 @@ type extractionTrace struct {
 }
 
 type lmeModelCallTrace struct {
-	Content   string             `json:"content,omitempty"`
-	ToolCalls []lmeToolCallTrace `json:"tool_calls,omitempty"`
-	Error     string             `json:"error,omitempty"`
+	Content      string             `json:"content,omitempty"`
+	ToolCalls    []lmeToolCallTrace `json:"tool_calls,omitempty"`
+	FinishReason string             `json:"finish_reason,omitempty"`
+	Error        string             `json:"error,omitempty"`
 }
 
 type lmeToolCallTrace struct {
@@ -209,30 +210,31 @@ type lmePair struct {
 }
 
 type backendResult struct {
-	Backend               string             `json:"backend"`
-	UserID                string             `json:"user_id"`
-	SessionID             string             `json:"session_id"`
-	IngestedPairs         int                `json:"ingested_pairs"`
-	IngestTraces          []ingestTrace      `json:"ingest_traces"`
-	FinalMemories         []memorySnapshot   `json:"final_memories"`
-	Retrieval             []memoryHit        `json:"retrieval"`
-	Answer                string             `json:"answer,omitempty"`
-	RawAnswer             string             `json:"raw_answer,omitempty"`
-	TokenUsage            *lmeTokenUsage     `json:"token_usage,omitempty"`
-	EmbeddingUsage        *lmeEmbeddingUsage `json:"embedding_usage,omitempty"`
-	AnswerUsage           *lmeTokenUsage     `json:"answer_token_usage,omitempty"`
-	ProviderUsageReported bool               `json:"provider_usage_reported,omitempty"`
-	ProviderUsageError    string             `json:"provider_usage_error,omitempty"`
-	Evidence              *evidenceMetrics   `json:"evidence,omitempty"`
-	FailureStage          string             `json:"failure_stage,omitempty"`
-	Judge                 *lmeJudgeResult    `json:"judge,omitempty"`
-	ExactMatch            bool               `json:"exact_match"`
-	F1                    float64            `json:"f1"`
-	BLEU                  float64            `json:"bleu"`
-	IngestDuration        int64              `json:"ingest_duration_ms"`
-	SearchDuration        int64              `json:"search_duration_ms"`
-	AnswerDuration        int64              `json:"answer_duration_ms,omitempty"`
-	Error                 string             `json:"error,omitempty"`
+	Backend               string              `json:"backend"`
+	UserID                string              `json:"user_id"`
+	SessionID             string              `json:"session_id"`
+	IngestedPairs         int                 `json:"ingested_pairs"`
+	IngestTraces          []ingestTrace       `json:"ingest_traces"`
+	FinalMemories         []memorySnapshot    `json:"final_memories"`
+	Retrieval             []memoryHit         `json:"retrieval"`
+	Answer                string              `json:"answer,omitempty"`
+	RawAnswer             string              `json:"raw_answer,omitempty"`
+	AnswerModelCalls      []lmeModelCallTrace `json:"answer_model_calls,omitempty"`
+	TokenUsage            *lmeTokenUsage      `json:"token_usage,omitempty"`
+	EmbeddingUsage        *lmeEmbeddingUsage  `json:"embedding_usage,omitempty"`
+	AnswerUsage           *lmeTokenUsage      `json:"answer_token_usage,omitempty"`
+	ProviderUsageReported bool                `json:"provider_usage_reported,omitempty"`
+	ProviderUsageError    string              `json:"provider_usage_error,omitempty"`
+	Evidence              *evidenceMetrics    `json:"evidence,omitempty"`
+	FailureStage          string              `json:"failure_stage,omitempty"`
+	Judge                 *lmeJudgeResult     `json:"judge,omitempty"`
+	ExactMatch            bool                `json:"exact_match"`
+	F1                    float64             `json:"f1"`
+	BLEU                  float64             `json:"bleu"`
+	IngestDuration        int64               `json:"ingest_duration_ms"`
+	SearchDuration        int64               `json:"search_duration_ms"`
+	AnswerDuration        int64               `json:"answer_duration_ms,omitempty"`
+	Error                 string              `json:"error,omitempty"`
 }
 
 type lmeJudgeResult struct {
@@ -248,11 +250,12 @@ type lmeJudgeResult struct {
 }
 
 type lmeJudgeAttempt struct {
-	Correct    bool           `json:"correct"`
-	Raw        string         `json:"raw"`
-	TokenUsage *lmeTokenUsage `json:"token_usage,omitempty"`
-	DurationMs int64          `json:"duration_ms,omitempty"`
-	Error      string         `json:"error,omitempty"`
+	Correct    bool                `json:"correct"`
+	Raw        string              `json:"raw"`
+	ModelCalls []lmeModelCallTrace `json:"model_calls,omitempty"`
+	TokenUsage *lmeTokenUsage      `json:"token_usage,omitempty"`
+	DurationMs int64               `json:"duration_ms,omitempty"`
+	Error      string              `json:"error,omitempty"`
 }
 
 type caseResult struct {
@@ -1053,6 +1056,7 @@ afterIngest:
 	if *flagLMEAnswer {
 		answerStart := time.Now()
 		rawAnswer, err := answerFromMemories(ctx, llm, inst, hits)
+		br.AnswerModelCalls = tracker.SnapshotCalls()
 		usage, embeddingUsage, providerUsage := snapshotLongMemEvalUsage(
 			tracker,
 			backend,
@@ -1396,6 +1400,7 @@ func reanswerLongMemEvalResult(
 			}
 			start := time.Now()
 			raw, answerErr := answerFromMemories(ctx, llm, inst, br.Retrieval)
+			br.AnswerModelCalls = tracker.SnapshotCalls()
 			usage := tracker.Snapshot()
 			replaceLongMemEvalAnswerUsage(br, usage)
 			br.AnswerDuration = time.Since(start).Milliseconds()
@@ -1550,6 +1555,7 @@ func judgeLongMemEvalConsensus(
 		duration := time.Since(start).Milliseconds()
 		attempt := lmeJudgeAttempt{
 			Raw:        raw,
+			ModelCalls: tracker.SnapshotCalls(),
 			TokenUsage: tokenUsagePtr(usage),
 			DurationMs: duration,
 		}

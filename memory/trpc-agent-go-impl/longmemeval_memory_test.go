@@ -948,6 +948,11 @@ func TestReanswerLongMemEvalResult(t *testing.T) {
 		mem0.AnswerUsage == nil || mem0.AnswerUsage.TotalTokens != 9 {
 		t.Fatalf("unexpected re-answer usage: total=%+v answer=%+v", mem0.TokenUsage, mem0.AnswerUsage)
 	}
+	if len(mem0.AnswerModelCalls) != 1 || mem0.AnswerModelCalls[0].Content != "Option B" ||
+		len(pgvector.AnswerModelCalls) != 1 || pgvector.AnswerModelCalls[0].Content != "Option A" {
+		t.Fatalf("missing re-answer model traces: mem0=%+v pgvector=%+v",
+			mem0.AnswerModelCalls, pgvector.AnswerModelCalls)
+	}
 	if got.Summary == nil || got.Summary.BackendSummaries["mem0"].ExactMatches != 1 {
 		t.Fatalf("unexpected re-answer summary: %+v", got.Summary)
 	}
@@ -1836,6 +1841,7 @@ func TestLongMemEvalTrackingModelRecordsResponseAndToolCalls(t *testing.T) {
 	t.Parallel()
 
 	tracker := &lmeTokenTracker{}
+	finishReason := "length"
 	base := &queuedResponseModel{response: &model.Response{Choices: []model.Choice{{
 		Message: model.Message{
 			Role:    model.RoleAssistant,
@@ -1845,6 +1851,7 @@ func TestLongMemEvalTrackingModelRecordsResponseAndToolCalls(t *testing.T) {
 				Arguments: []byte(`{"memory":"Likes tea"}`),
 			}}},
 		},
+		FinishReason: &finishReason,
 	}}}}
 	wrapped := &lmeTrackingModel{base: base, tracker: tracker}
 
@@ -1858,7 +1865,8 @@ func TestLongMemEvalTrackingModelRecordsResponseAndToolCalls(t *testing.T) {
 	if len(calls) != 1 {
 		t.Fatalf("model calls = %d, want 1", len(calls))
 	}
-	if calls[0].Content != "I will store this." || len(calls[0].ToolCalls) != 1 {
+	if calls[0].Content != "I will store this." || len(calls[0].ToolCalls) != 1 ||
+		calls[0].FinishReason != finishReason {
 		t.Fatalf("unexpected model call trace: %#v", calls[0])
 	}
 	if calls[0].ToolCalls[0].Name != "memory_add" ||
