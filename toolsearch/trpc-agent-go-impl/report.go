@@ -150,8 +150,8 @@ func BuildSummaryFile(cfg BenchmarkConfig, result *evaluation.EvaluationResult, 
 			EmbedModel: cfg.EmbedModel,
 			MaxTools:   cfg.MaxTools,
 			NumRuns:    cfg.NumRuns,
-			DataDir:    cfg.DataDir,
-			OutputDir:  cfg.OutputDir,
+			DataDir:    relativizeToBenchmark(cfg.DataDir),
+			OutputDir:  relativizeToBenchmark(cfg.OutputDir),
 		},
 		Tokens: SummaryTokens{},
 		Cases:  nil,
@@ -252,6 +252,26 @@ func WriteSummaryFile(cfg BenchmarkConfig, result *evaluation.EvaluationResult, 
 		return "", err
 	}
 	return outPath, nil
+}
+
+// relativizeToBenchmark trims an absolute data/output path down to a stable
+// benchmark-relative form (e.g. "toolsearch/data") so the summary file does not
+// leak the machine-specific absolute path. It keeps everything from the last
+// "toolsearch/" path segment onward; if no such segment exists it falls back to
+// the base name (or the original path when empty).
+func relativizeToBenchmark(p string) string {
+	p = filepath.ToSlash(strings.TrimSpace(p))
+	if p == "" {
+		return p
+	}
+	const marker = "toolsearch/"
+	if i := strings.LastIndex(p, marker); i >= 0 {
+		return p[i:]
+	}
+	if filepath.Base(p) == "toolsearch" {
+		return "toolsearch"
+	}
+	return filepath.Base(p)
 }
 
 func parseTurnIndex(invocationID string) int {
