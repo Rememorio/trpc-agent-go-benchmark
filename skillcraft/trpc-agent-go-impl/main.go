@@ -1872,6 +1872,11 @@ func buildInstructionForMode(
 			fmt.Sprintf("Never end your turn with the final JSON only inside an assistant message. The JSON must be persisted to %s via a tool call before you call local-claim_done.", outputFile),
 		)
 	}
+	if taskNeedsSequentialDomainCalls(task) {
+		parts = append(parts,
+			"This task's domain tools may perform several upstream HTTP requests per call. Invoke exactly one domain tool at a time and wait for its result before issuing the next domain call. Do not batch or parallelize these calls.",
+		)
+	}
 	if len(availableSkills) > 0 {
 		parts = append(parts,
 			fmt.Sprintf(
@@ -1973,7 +1978,23 @@ func buildUserPrompt(task *taskDefinition, workspace string, availableSkills []s
 		b.WriteString("- If multiple skills look relevant, prefer the most generic one (for example a `Multi-City` or `Multi-Country` variant) over count-specific siblings.\n")
 		b.WriteString("- After loading, treat the skill as a reusable checklist. The task specification always overrides the skill when they disagree.\n")
 	}
+	if taskNeedsSequentialDomainCalls(task) {
+		b.WriteString("\n## Domain Tool Scheduling\n")
+		b.WriteString("- Call exactly one domain tool at a time and wait for its result before making the next domain call. Do not batch or parallelize these long-running calls.\n")
+	}
 	return b.String()
+}
+
+func taskNeedsSequentialDomainCalls(task *taskDefinition) bool {
+	if task == nil {
+		return false
+	}
+	for _, toolName := range task.ToolsUsed {
+		if strings.HasPrefix(normalizeDomainToolName(toolName), "worldbank_") {
+			return true
+		}
+	}
+	return false
 }
 
 func taskDocMayContainPreviewMarkers(doc string) bool {

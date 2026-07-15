@@ -332,6 +332,20 @@ func TestBuildUserPromptPutsTaskSpecBeforeManagedSkills(t *testing.T) {
 	require.Contains(t, prompt, "task specification always overrides the skill")
 }
 
+func TestWorldBankTasksRequireSequentialDomainCalls(t *testing.T) {
+	task := &taskDefinition{
+		TaskDoc:   "Save results to `economic_report.json`:",
+		ToolsUsed: []string{"worldbank_economic_snapshot", "worldbank_gdp"},
+	}
+
+	require.True(t, taskNeedsSequentialDomainCalls(task))
+	require.Contains(t, buildInstruction(task, "/tmp/workspace", nil), "exactly one domain tool at a time")
+	require.Contains(t, buildUserPrompt(task, "/tmp/workspace", nil), "## Domain Tool Scheduling")
+	require.False(t, taskNeedsSequentialDomainCalls(&taskDefinition{
+		ToolsUsed: []string{"weather_get_current"},
+	}))
+}
+
 func TestBuildUserPromptIncludesExactTaskEntities(t *testing.T) {
 	task := &taskDefinition{
 		TaskDoc: `## Dishes to Include
