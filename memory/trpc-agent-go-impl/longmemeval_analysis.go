@@ -189,6 +189,7 @@ func validateLongMemEvalComparison(baseline, candidate *runResult) error {
 		"model_temperature",
 		"embedding_model",
 		"answer_prompt_version",
+		"answer_generation",
 		"judge_prompt_version",
 	}
 	for _, key := range required {

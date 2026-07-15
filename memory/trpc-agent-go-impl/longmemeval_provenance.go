@@ -26,6 +26,10 @@ const (
 	lmeAgentModulePath    = "trpc.group/trpc-go/trpc-agent-go"
 	lmePGVectorModulePath = "trpc.group/trpc-go/trpc-agent-go/memory/pgvector"
 
+	lmeAnswerPrimaryMaxTokens = 512
+	lmeAnswerRetryMaxTokens   = 1024
+	lmeAnswerMaxAttempts      = 2
+
 	// These versions are part of the experiment contract. Bump the relevant
 	// version whenever replay, prompting, or judging semantics change.
 	lmeProtocolVersion     = "lme-memory-turn-pair-v1"
@@ -66,6 +70,30 @@ type lmeProtocolProvenance struct {
 	IngestWait          string `json:"ingest_wait"`
 	ModelCallTimeout    string `json:"model_call_timeout"`
 	AnswerEnabled       bool   `json:"answer_enabled"`
+}
+
+type lmeAnswerGenerationProvenance struct {
+	PrimaryMaxTokens   int      `json:"primary_max_tokens"`
+	RetryMaxTokens     int      `json:"retry_max_tokens"`
+	MaxAttempts        int      `json:"max_attempts"`
+	RetryFinishReasons []string `json:"retry_finish_reasons"`
+	RetryEmptyResponse bool     `json:"retry_empty_response"`
+	Temperature        float64  `json:"temperature"`
+	ReasoningEffort    string   `json:"reasoning_effort"`
+	ThinkingEnabled    bool     `json:"thinking_enabled"`
+}
+
+func currentLongMemEvalAnswerGeneration() lmeAnswerGenerationProvenance {
+	return lmeAnswerGenerationProvenance{
+		PrimaryMaxTokens:   lmeAnswerPrimaryMaxTokens,
+		RetryMaxTokens:     lmeAnswerRetryMaxTokens,
+		MaxAttempts:        lmeAnswerMaxAttempts,
+		RetryFinishReasons: []string{"length", "max_tokens"},
+		RetryEmptyResponse: true,
+		Temperature:        0,
+		ReasoningEffort:    "low",
+		ThinkingEnabled:    false,
+	}
 }
 
 func currentLongMemEvalProtocol() lmeProtocolProvenance {

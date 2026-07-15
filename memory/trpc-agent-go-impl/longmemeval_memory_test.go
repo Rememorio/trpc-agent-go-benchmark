@@ -936,6 +936,9 @@ func TestReanswerLongMemEvalResult(t *testing.T) {
 	if got.Metadata["reanswer_model"] != "answer-model" || got.Metadata["reanswer_model_variant"] != "glm" {
 		t.Fatalf("missing re-answer metadata: %+v", got.Metadata)
 	}
+	if _, ok := got.Metadata["answer_generation"]; !ok {
+		t.Fatalf("missing answer generation metadata: %+v", got.Metadata)
+	}
 	mem0 := got.Cases[0].BackendResults["mem0"]
 	pgvector := got.Cases[0].BackendResults["pgvector"]
 	if mem0.Answer != "Option B" || !mem0.ExactMatch || mem0.FailureStage != "ok" || mem0.Judge != nil {
@@ -1321,7 +1324,7 @@ func TestNewLongMemEvalAnswerRequestDisablesThinking(t *testing.T) {
 	if len(req.Messages) != 1 || req.Messages[0].Content != "answer this" {
 		t.Fatalf("unexpected messages: %+v", req.Messages)
 	}
-	if req.MaxTokens == nil || *req.MaxTokens != 512 {
+	if req.MaxTokens == nil || *req.MaxTokens != lmeAnswerPrimaryMaxTokens {
 		t.Fatalf("unexpected max tokens: %v", req.MaxTokens)
 	}
 	if req.Temperature == nil || *req.Temperature != 0 {
@@ -1332,6 +1335,43 @@ func TestNewLongMemEvalAnswerRequestDisablesThinking(t *testing.T) {
 	}
 	if req.ReasoningEffort == nil || *req.ReasoningEffort != "low" {
 		t.Fatalf("unexpected reasoning effort: %v", req.ReasoningEffort)
+	}
+}
+
+func TestAnswerFromMemoriesRetriesTruncatedResponse(t *testing.T) {
+	t.Parallel()
+
+	length := "length"
+	stop := "stop"
+	llm := &queuedAnswerModel{responses: []*model.Response{
+		{Choices: []model.Choice{{
+			Message:      model.NewAssistantMessage("reasoning without a final answer"),
+			FinishReason: &length,
+		}}},
+		{Choices: []model.Choice{{
+			Message:      model.NewAssistantMessage("3"),
+			FinishReason: &stop,
+		}}},
+	}}
+	answer, err := answerFromMemories(
+		context.Background(),
+		llm,
+		&lmeInstance{Question: "How many tanks?"},
+		[]memoryHit{{Memory: "There are three tanks."}},
+	)
+	if err != nil || answer != "3" {
+		t.Fatalf("answer = %q, err = %v", answer, err)
+	}
+	if len(llm.requests) != 2 {
+		t.Fatalf("requests = %d, want 2", len(llm.requests))
+	}
+	if llm.requests[0].MaxTokens == nil ||
+		*llm.requests[0].MaxTokens != lmeAnswerPrimaryMaxTokens {
+		t.Fatalf("primary max tokens = %v", llm.requests[0].MaxTokens)
+	}
+	if llm.requests[1].MaxTokens == nil ||
+		*llm.requests[1].MaxTokens != lmeAnswerRetryMaxTokens {
+		t.Fatalf("retry max tokens = %v", llm.requests[1].MaxTokens)
 	}
 }
 
@@ -1630,6 +1670,7 @@ func testLongMemEvalComparisonMetadata(implementation string) map[string]any {
 		"model_temperature":     0,
 		"embedding_model":       "embedding-model",
 		"answer_prompt_version": lmeAnswerPromptVersion,
+		"answer_generation":     currentLongMemEvalAnswerGeneration(),
 		"judge_prompt_version":  lmeJudgePromptVersion,
 		"judge_runs":            3,
 	}
@@ -1975,6 +2016,31 @@ type capturingModel struct {
 type queuedResponseModel struct {
 	response *model.Response
 }
+
+type queuedAnswerModel struct {
+	responses []*model.Response
+	requests  []*model.Request
+}
+
+func (m *queuedAnswerModel) GenerateContent(
+	_ context.Context,
+	req *model.Request,
+) (<-chan *model.Response, error) {
+	m.requests = append(m.requests, req)
+	var response *model.Response
+	if len(m.responses) > 0 {
+		response = m.responses[0]
+		m.responses = m.responses[1:]
+	}
+	ch := make(chan *model.Response, 1)
+	if response != nil {
+		ch <- response
+	}
+	close(ch)
+	return ch, nil
+}
+
+func (*queuedAnswerModel) Info() model.Info { return model.Info{} }
 
 func (m *queuedResponseModel) GenerateContent(
 	_ context.Context,

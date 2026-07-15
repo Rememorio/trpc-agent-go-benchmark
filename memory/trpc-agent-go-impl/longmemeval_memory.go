@@ -813,6 +813,7 @@ func runLongMemEvalMemory(ctx context.Context) error {
 			"protocol_version":        lmeProtocolVersion,
 			"protocol_sha256":         protocolDigest,
 			"answer_prompt_version":   lmeAnswerPromptVersion,
+			"answer_generation":       currentLongMemEvalAnswerGeneration(),
 			"judge_prompt_version":    lmeJudgePromptVersion,
 			"model":                   modelName,
 			"model_variant":           modelVariant,
@@ -1266,15 +1267,20 @@ func waitForAutoMemory(
 
 func answerFromMemories(ctx context.Context, llm model.Model, inst *lmeInstance, hits []memoryHit) (string, error) {
 	prompt := buildLongMemEvalAnswerPrompt(inst, hits)
-	req := newLongMemEvalAnswerRequest(prompt)
 	var lastErr error
-	for attempt := 0; attempt < 2; attempt++ {
+	for attempt := 0; attempt < lmeAnswerMaxAttempts; attempt++ {
+		req := newLongMemEvalAnswerRequest(prompt)
+		if attempt > 0 {
+			maxTokens := lmeAnswerRetryMaxTokens
+			req.MaxTokens = &maxTokens
+		}
 		respCh, err := llm.GenerateContent(ctx, req)
 		if err != nil {
 			return "", err
 		}
 		var out string
 		var delta strings.Builder
+		truncated := false
 		for resp := range respCh {
 			if resp == nil {
 				continue
@@ -1284,6 +1290,10 @@ func answerFromMemories(ctx context.Context, llm model.Model, inst *lmeInstance,
 			}
 			if len(resp.Choices) > 0 {
 				choice := resp.Choices[0]
+				if choice.FinishReason != nil &&
+					isLongMemEvalLengthFinishReason(*choice.FinishReason) {
+					truncated = true
+				}
 				if choice.Delta.Content != "" {
 					delta.WriteString(choice.Delta.Content)
 				}
@@ -1296,13 +1306,29 @@ func answerFromMemories(ctx context.Context, llm model.Model, inst *lmeInstance,
 			out = delta.String()
 		}
 		out = strings.TrimSpace(out)
+		if truncated && attempt+1 < lmeAnswerMaxAttempts {
+			lastErr = errors.New("model answer reached the completion token limit")
+			continue
+		}
 		if out != "" {
+			if truncated {
+				return out, errors.New("model answer remained truncated after retry")
+			}
 			return out, nil
 		}
 		lastErr = errors.New("model returned empty answer")
 		time.Sleep(time.Duration(attempt+1) * time.Second)
 	}
 	return "", lastErr
+}
+
+func isLongMemEvalLengthFinishReason(reason string) bool {
+	switch strings.ToLower(strings.TrimSpace(reason)) {
+	case "length", "max_tokens":
+		return true
+	default:
+		return false
+	}
 }
 
 func reanswerLongMemEvalResults(ctx context.Context, path, outputDir string) error {
@@ -1346,9 +1372,10 @@ func reanswerLongMemEvalResult(
 	result.Metadata["reanswer_model"] = modelName
 	result.Metadata["reanswer_model_variant"] = modelVariant
 	result.Metadata["reanswer_build"] = currentLongMemEvalBuildProvenance()
+	result.Metadata["answer_generation"] = currentLongMemEvalAnswerGeneration()
 	result.Metadata["reanswered_at"] = time.Now().UTC().Format(time.RFC3339)
 	result.Metadata["answer_scoring"] = "raw model output; no retrieval-assisted answer post-processing"
-	result.Metadata["reanswer_note"] = "Answers regenerated from saved ranked retrieval hits; backend-specific similarity scores are not shown to the answer model."
+	result.Metadata["reanswer_note"] = "Answers regenerated from saved ranked retrieval hits; backend-specific similarity scores are not shown to the answer model. Responses ending with a length finish reason are retried once with the recorded larger token limit."
 	for _, key := range []string{
 		"judge_model",
 		"judge_model_variant",
@@ -1883,7 +1910,7 @@ func parseLongMemEvalJudgeRepair(raw string) (string, error) {
 }
 
 func newLongMemEvalAnswerRequest(prompt string) *model.Request {
-	maxTokens := 512
+	maxTokens := lmeAnswerPrimaryMaxTokens
 	temp := 0.0
 	reasoningEffort := "low"
 	thinkingEnabled := false
