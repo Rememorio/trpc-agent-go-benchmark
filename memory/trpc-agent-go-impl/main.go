@@ -152,6 +152,16 @@ var (
 		250*time.Millisecond,
 		"Wait after each LongMemEval pair ingestion before diffing memories",
 	)
+	flagLMEUpdatePolicy = flag.String(
+		"lme-update-policy",
+		"reconcile",
+		"PGVector extraction update policy: reconcile, history-preserving, or add-only",
+	)
+	flagLMEAssistantResultExtraction = flag.Bool(
+		"lme-assistant-result-extraction",
+		false,
+		"Extract concrete assistant-produced results into PGVector memory",
+	)
 	flagLMEModelCallTimeout = flag.Duration(
 		"lme-model-call-timeout",
 		3*time.Minute,

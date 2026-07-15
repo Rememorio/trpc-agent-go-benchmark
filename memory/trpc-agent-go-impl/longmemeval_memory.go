@@ -199,6 +199,11 @@ type extractionOperation struct {
 	Location     string                  `json:"location,omitempty"`
 }
 
+type lmePGVectorExtractionConfig struct {
+	UpdatePolicy              extractor.UpdatePolicy `json:"update_policy"`
+	AssistantResultExtraction bool                   `json:"assistant_result_extraction"`
+}
+
 type traceMessage struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
@@ -738,6 +743,30 @@ func openAIModelOptionsForVariant(variant string) ([]openaimodel.Option, error) 
 	}
 }
 
+func currentLongMemEvalPGVectorExtractionConfig() (
+	lmePGVectorExtractionConfig,
+	error,
+) {
+	var policy extractor.UpdatePolicy
+	switch strings.ToLower(strings.TrimSpace(*flagLMEUpdatePolicy)) {
+	case "", string(extractor.UpdatePolicyReconcile):
+		policy = extractor.UpdatePolicyReconcile
+	case string(extractor.UpdatePolicyHistoryPreserving):
+		policy = extractor.UpdatePolicyHistoryPreserving
+	case string(extractor.UpdatePolicyAddOnly):
+		policy = extractor.UpdatePolicyAddOnly
+	default:
+		return lmePGVectorExtractionConfig{}, fmt.Errorf(
+			"unsupported lme-update-policy %q: expected reconcile, history-preserving, or add-only",
+			*flagLMEUpdatePolicy,
+		)
+	}
+	return lmePGVectorExtractionConfig{
+		UpdatePolicy:              policy,
+		AssistantResultExtraction: *flagLMEAssistantResultExtraction,
+	}, nil
+}
+
 func runLongMemEvalMemory(ctx context.Context) error {
 	if raw := strings.TrimSpace(*flagLMECompareResults); raw != "" {
 		baseline, candidate, err := parseLongMemEvalComparePaths(raw)
@@ -757,6 +786,10 @@ func runLongMemEvalMemory(ctx context.Context) error {
 	}
 	if err := os.MkdirAll(*flagOutput, 0755); err != nil {
 		return fmt.Errorf("create output dir: %w", err)
+	}
+	pgExtractionConfig, err := currentLongMemEvalPGVectorExtractionConfig()
+	if err != nil {
+		return err
 	}
 
 	modelName := getModelName()
@@ -820,6 +853,7 @@ func runLongMemEvalMemory(ctx context.Context) error {
 			"model_temperature":       0,
 			"model_call_timeout":      flagLMEModelCallTimeout.String(),
 			"embedding_model":         getEmbedModelName(),
+			"pgvector_extraction":     pgExtractionConfig,
 			"backends":                backends,
 			"top_k":                   *flagVectorTopK,
 			"table_suffix":            *flagTableSuffix,
@@ -861,7 +895,9 @@ func runLongMemEvalMemory(ctx context.Context) error {
 		}
 	}
 
-	log.Printf("LongMemEval memory run: cases=%d backends=%v model=%s", len(cases), backends, modelName)
+	log.Printf("LongMemEval memory run: cases=%d backends=%v model=%s pgvector_update_policy=%s pgvector_assistant_results=%t",
+		len(cases), backends, modelName, pgExtractionConfig.UpdatePolicy,
+		pgExtractionConfig.AssistantResultExtraction)
 	for i, inst := range cases {
 		log.Printf("[%d/%d] %s type=%s sessions=%d answer=%q",
 			i+1, len(cases), inst.QuestionID, inst.QuestionType, len(inst.HaystackSessions), inst.Answer)
@@ -883,7 +919,7 @@ func runLongMemEvalMemory(ctx context.Context) error {
 				tracker: tracker,
 				timeout: *flagLMEModelCallTimeout,
 			}
-			backend, err := newBackend(backendName, llm)
+			backend, err := newBackend(backendName, llm, pgExtractionConfig)
 			if err != nil {
 				cr.BackendResults[backendName] = &backendResult{Backend: backendName, Error: err.Error()}
 				log.Printf("  %s create failed: %v", backendName, err)
@@ -1084,7 +1120,11 @@ afterIngest:
 	return br
 }
 
-func newBackend(name string, llm model.Model) (memoryBackend, error) {
+func newBackend(
+	name string,
+	llm model.Model,
+	pgExtractionConfig lmePGVectorExtractionConfig,
+) (memoryBackend, error) {
 	switch strings.TrimSpace(name) {
 	case "pgvector":
 		dsn := getPGVectorDSN()
@@ -1096,7 +1136,13 @@ func newBackend(name string, llm model.Model) (memoryBackend, error) {
 		)
 		tableName := tableNameWithSuffix(lmePGVectorTableBase)
 		tracingExtractor := &lmeTracingExtractor{
-			MemoryExtractor: extractor.NewExtractor(llm),
+			MemoryExtractor: extractor.NewExtractor(
+				llm,
+				extractor.WithUpdatePolicy(pgExtractionConfig.UpdatePolicy),
+				extractor.WithAssistantResultExtraction(
+					pgExtractionConfig.AssistantResultExtraction,
+				),
+			),
 		}
 		svc, err := memorypgvector.NewService(
 			memorypgvector.WithPGVectorClientDSN(dsn),

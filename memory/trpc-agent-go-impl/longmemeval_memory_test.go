@@ -1386,6 +1386,43 @@ func TestOpenAIModelOptionsForVariant(t *testing.T) {
 	}
 }
 
+func TestCurrentLongMemEvalPGVectorExtractionConfig(t *testing.T) {
+	oldPolicy := *flagLMEUpdatePolicy
+	oldAssistantResults := *flagLMEAssistantResultExtraction
+	defer func() {
+		*flagLMEUpdatePolicy = oldPolicy
+		*flagLMEAssistantResultExtraction = oldAssistantResults
+	}()
+
+	for _, tt := range []struct {
+		input string
+		want  extractor.UpdatePolicy
+	}{
+		{input: "", want: extractor.UpdatePolicyReconcile},
+		{input: " RECONCILE ", want: extractor.UpdatePolicyReconcile},
+		{input: "history-preserving", want: extractor.UpdatePolicyHistoryPreserving},
+		{input: "ADD-ONLY", want: extractor.UpdatePolicyAddOnly},
+	} {
+		*flagLMEUpdatePolicy = tt.input
+		*flagLMEAssistantResultExtraction = true
+		got, err := currentLongMemEvalPGVectorExtractionConfig()
+		if err != nil {
+			t.Fatalf("policy %q returned error: %v", tt.input, err)
+		}
+		if got.UpdatePolicy != tt.want {
+			t.Fatalf("policy %q = %q, want %q", tt.input, got.UpdatePolicy, tt.want)
+		}
+		if !got.AssistantResultExtraction {
+			t.Fatalf("policy %q lost assistant-result setting", tt.input)
+		}
+	}
+
+	*flagLMEUpdatePolicy = "custom"
+	if _, err := currentLongMemEvalPGVectorExtractionConfig(); err == nil {
+		t.Fatal("expected unsupported update policy error")
+	}
+}
+
 func TestAnalyzeLongMemEvalResults(t *testing.T) {
 	t.Parallel()
 
