@@ -83,12 +83,9 @@ func runComparison(ctx context.Context, request Request) (*Outcome, error) {
 		StopReason:          "fixed_candidate",
 	}
 	comparison := &Comparison{Validation: validation}
-	if reason := summaryRegression(
+	validationReason := summaryRegression(
 		"validation", baselineValidation, candidateValidation,
-	); reason != "" {
-		result.PromotionReason = reason
-		return &Outcome{Search: result, Comparison: comparison}, nil
-	}
+	)
 	holdout, baselineHoldout, candidateHoldout, err := compareCases(
 		ctx, request.Evaluator, request.Seed, request.Candidate,
 		request.Dataset.Holdout, rng,
@@ -99,8 +96,12 @@ func runComparison(ctx context.Context, request Request) (*Outcome, error) {
 	result.BaselineHoldout = baselineHoldout
 	result.CandidateHoldout = candidateHoldout
 	result.MetricCalls += 2 * len(holdout)
-	assessComparison(request.Dataset, holdout, result)
 	comparison.Holdout = holdout
+	if validationReason != "" {
+		result.PromotionReason = validationReason
+	} else {
+		assessComparison(request.Dataset, holdout, result)
+	}
 	return &Outcome{Search: result, Comparison: comparison}, nil
 }
 

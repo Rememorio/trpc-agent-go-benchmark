@@ -132,7 +132,7 @@ func TestFixedComparisonRejectsRegression(t *testing.T) {
 	require.Contains(t, outcome.Search.PromotionReason, "holdout")
 }
 
-func TestFixedComparisonSkipsHoldoutAfterValidationRegression(t *testing.T) {
+func TestFixedComparisonKeepsHoldoutEvidenceAfterValidationRegression(t *testing.T) {
 	seed := testSpec()
 	candidate := testSpec()
 	candidate.Description = "candidate"
@@ -144,9 +144,8 @@ func TestFixedComparisonSkipsHoldoutAfterValidationRegression(t *testing.T) {
 		_ int64,
 	) ([]framework.Evaluation, error) {
 		calls++
-		require.NotContains(t, cases[0].ID, "holdout")
 		score := 0.8
-		if spec.Description == "candidate" {
+		if spec.Description == "candidate" && cases[0].ID == "validation" {
 			score = 0.7
 		}
 		return []framework.Evaluation{{CaseID: cases[0].ID, Score: score}}, nil
@@ -163,10 +162,10 @@ func TestFixedComparisonSkipsHoldoutAfterValidationRegression(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, outcome.Search.PromotionEligible)
 	require.Contains(t, outcome.Search.PromotionReason, "validation")
-	require.Equal(t, 2, outcome.Search.MetricCalls)
-	require.Equal(t, 2, calls)
-	require.Empty(t, outcome.Comparison.Holdout)
-	require.Zero(t, outcome.Search.BaselineHoldout.Cases)
+	require.Equal(t, 4, outcome.Search.MetricCalls)
+	require.Equal(t, 4, calls)
+	require.Len(t, outcome.Comparison.Holdout, 1)
+	require.Equal(t, 1, outcome.Search.BaselineHoldout.Cases)
 }
 
 func TestFixedComparisonRejectsQualityRegressionDespiteHigherScore(t *testing.T) {
@@ -210,8 +209,8 @@ func TestFixedComparisonRejectsQualityRegressionDespiteHigherScore(t *testing.T)
 		"frozen candidate regressed on validation official_quality",
 		outcome.Search.PromotionReason,
 	)
-	require.Equal(t, 2, calls)
-	require.Empty(t, outcome.Comparison.Holdout)
+	require.Equal(t, 4, calls)
+	require.Len(t, outcome.Comparison.Holdout, 1)
 }
 
 func TestFixedComparisonValidation(t *testing.T) {
