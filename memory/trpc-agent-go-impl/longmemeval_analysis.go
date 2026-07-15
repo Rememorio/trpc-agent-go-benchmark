@@ -207,7 +207,125 @@ func validateLongMemEvalComparison(baseline, candidate *runResult) error {
 			return err
 		}
 	}
+	if err := validateLongMemEvalBuildPair(
+		baseline.Metadata,
+		candidate.Metadata,
+		"build",
+		true,
+	); err != nil {
+		return err
+	}
+	if longMemEvalMetadataPresent(baseline.Metadata, "judge_runs") ||
+		longMemEvalMetadataPresent(candidate.Metadata, "judge_runs") {
+		if err := validateLongMemEvalBuildPair(
+			baseline.Metadata,
+			candidate.Metadata,
+			"judge_build",
+			false,
+		); err != nil {
+			return err
+		}
+	}
 	return validateLongMemEvalComparisonArms(baseline, candidate)
+}
+
+func validateLongMemEvalBuildPair(
+	baseline,
+	candidate map[string]any,
+	key string,
+	requireMemoryModules bool,
+) error {
+	baseBuild, err := longMemEvalMetadataBuild(baseline, key)
+	if err != nil {
+		return fmt.Errorf("invalid baseline %s provenance: %w", key, err)
+	}
+	candidateBuild, err := longMemEvalMetadataBuild(candidate, key)
+	if err != nil {
+		return fmt.Errorf("invalid candidate %s provenance: %w", key, err)
+	}
+	for label, build := range map[string]lmeBuildProvenance{
+		"baseline":  baseBuild,
+		"candidate": candidateBuild,
+	} {
+		if strings.TrimSpace(build.Revision) == "" {
+			return fmt.Errorf("%s %s provenance is missing benchmark_revision", label, key)
+		}
+		if build.Modified {
+			return fmt.Errorf("%s %s provenance records a modified benchmark build", label, key)
+		}
+		if strings.TrimSpace(build.GoVersion) == "" {
+			return fmt.Errorf("%s %s provenance is missing go_version", label, key)
+		}
+		if requireMemoryModules {
+			if err := validateLongMemEvalMemoryModules(build.Modules); err != nil {
+				return fmt.Errorf("%s %s provenance: %w", label, key, err)
+			}
+		}
+	}
+	if baseBuild.Revision != candidateBuild.Revision {
+		return fmt.Errorf(
+			"LongMemEval comparison %s benchmark revision mismatch: baseline=%s candidate=%s",
+			key,
+			baseBuild.Revision,
+			candidateBuild.Revision,
+		)
+	}
+	if baseBuild.GoVersion != candidateBuild.GoVersion {
+		return fmt.Errorf(
+			"LongMemEval comparison %s Go version mismatch: baseline=%s candidate=%s",
+			key,
+			baseBuild.GoVersion,
+			candidateBuild.GoVersion,
+		)
+	}
+	return nil
+}
+
+func longMemEvalMetadataBuild(metadata map[string]any, key string) (lmeBuildProvenance, error) {
+	var build lmeBuildProvenance
+	if metadata == nil {
+		return build, fmt.Errorf("missing %s metadata", key)
+	}
+	value, ok := metadata[key]
+	if !ok {
+		return build, fmt.Errorf("missing %s metadata", key)
+	}
+	data, err := json.Marshal(value)
+	if err != nil {
+		return build, fmt.Errorf("encode metadata: %w", err)
+	}
+	if err := json.Unmarshal(data, &build); err != nil {
+		return build, fmt.Errorf("decode metadata: %w", err)
+	}
+	return build, nil
+}
+
+func validateLongMemEvalMemoryModules(modules map[string]lmeModuleProvenance) error {
+	for _, path := range []string{lmeAgentModulePath, lmePGVectorModulePath} {
+		module, ok := modules[path]
+		if !ok {
+			return fmt.Errorf("missing module provenance for %s", path)
+		}
+		if module.LocalReplacement {
+			return fmt.Errorf("module %s uses an unpinned local replacement", path)
+		}
+		version := strings.TrimSpace(module.ReplacementVersion)
+		if version == "" {
+			version = strings.TrimSpace(module.Version)
+		}
+		if version == "" || version == "(devel)" {
+			return fmt.Errorf("module %s is missing a pinned version", path)
+		}
+	}
+	return nil
+}
+
+func longMemEvalMetadataPresent(metadata map[string]any, key string) bool {
+	if metadata == nil {
+		return false
+	}
+	_, ok := metadata[key]
+	return ok
 }
 
 func compareLongMemEvalMetadataValue(

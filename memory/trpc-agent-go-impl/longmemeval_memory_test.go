@@ -1619,6 +1619,8 @@ func testLongMemEvalComparisonMetadata(implementation string) map[string]any {
 	return map[string]any{
 		"implementation":        implementation,
 		"mem0_implementation":   "mem0-oss-test-revision",
+		"build":                 testLongMemEvalBuildProvenance("runner-revision"),
+		"judge_build":           testLongMemEvalBuildProvenance("judge-revision"),
 		"dataset_sha256":        "dataset-digest",
 		"selection_sha256":      "selection-digest",
 		"protocol_version":      lmeProtocolVersion,
@@ -1630,6 +1632,77 @@ func testLongMemEvalComparisonMetadata(implementation string) map[string]any {
 		"answer_prompt_version": lmeAnswerPromptVersion,
 		"judge_prompt_version":  lmeJudgePromptVersion,
 		"judge_runs":            3,
+	}
+}
+
+func testLongMemEvalBuildProvenance(revision string) lmeBuildProvenance {
+	return lmeBuildProvenance{
+		GoVersion: "go-test",
+		Revision:  revision,
+		Modules: map[string]lmeModuleProvenance{
+			lmeAgentModulePath: {
+				Version: "v1.0.0",
+			},
+			lmePGVectorModulePath: {
+				Version: "v1.0.0",
+			},
+		},
+	}
+}
+
+func TestValidateLongMemEvalComparisonRequiresPinnedBuilds(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		mutate    func(map[string]any)
+		wantError string
+	}{
+		{
+			name: "missing runner revision",
+			mutate: func(metadata map[string]any) {
+				metadata["build"] = testLongMemEvalBuildProvenance("")
+			},
+			wantError: "missing benchmark_revision",
+		},
+		{
+			name: "modified runner",
+			mutate: func(metadata map[string]any) {
+				build := testLongMemEvalBuildProvenance("runner-revision")
+				build.Modified = true
+				metadata["build"] = build
+			},
+			wantError: "modified benchmark build",
+		},
+		{
+			name: "local agent replacement",
+			mutate: func(metadata map[string]any) {
+				build := testLongMemEvalBuildProvenance("runner-revision")
+				module := build.Modules[lmeAgentModulePath]
+				module.LocalReplacement = true
+				build.Modules[lmeAgentModulePath] = module
+				metadata["build"] = build
+			},
+			wantError: "unpinned local replacement",
+		},
+		{
+			name: "missing judge revision",
+			mutate: func(metadata map[string]any) {
+				metadata["judge_build"] = testLongMemEvalBuildProvenance("")
+			},
+			wantError: "missing benchmark_revision",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			baseline := &runResult{Metadata: testLongMemEvalComparisonMetadata("upstream-main")}
+			candidate := &runResult{Metadata: testLongMemEvalComparisonMetadata("candidate-2196")}
+			test.mutate(candidate.Metadata)
+			err := validateLongMemEvalComparison(baseline, candidate)
+			if err == nil || !strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf("build provenance error = %v, want %q", err, test.wantError)
+			}
+		})
 	}
 }
 
