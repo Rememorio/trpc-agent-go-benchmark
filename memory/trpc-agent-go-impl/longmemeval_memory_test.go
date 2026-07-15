@@ -66,7 +66,7 @@ func TestLongMemEvalBuildProvenance(t *testing.T) {
 			{
 				Path:    lmePGVectorModulePath,
 				Version: "v1.7.0",
-				Replace: &debug.Module{Path: "/local/checkout"},
+				Replace: &debug.Module{Path: "/local/checkout", Version: "(devel)"},
 			},
 		},
 	}
@@ -110,6 +110,47 @@ func TestLongMemEvalBuildProvenance(t *testing.T) {
 	invalid := applyLongMemEvalInjectedProvenance(empty, "", "not-a-bool")
 	if invalid.Revision != "" || invalid.Modified {
 		t.Fatalf("invalid injected provenance changed result: %+v", invalid)
+	}
+}
+
+func TestLongMemEvalExperimentDigests(t *testing.T) {
+	t.Parallel()
+
+	datasetPath := filepath.Join(t.TempDir(), "dataset.json")
+	if err := os.WriteFile(datasetPath, []byte("abc"), 0644); err != nil {
+		t.Fatalf("write dataset: %v", err)
+	}
+	protocol := lmeProtocolProvenance{
+		Version:             lmeProtocolVersion,
+		AnswerPromptVersion: lmeAnswerPromptVersion,
+		TopK:                30,
+	}
+	dataset, selection, protocolDigest, err := longMemEvalExperimentDigests(
+		datasetPath,
+		[]*lmeInstance{{QuestionID: "q1"}, {QuestionID: "q2"}},
+		protocol,
+	)
+	if err != nil {
+		t.Fatalf("experiment digests: %v", err)
+	}
+	if dataset != "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" {
+		t.Fatalf("dataset digest = %q", dataset)
+	}
+	wantSelection, err := longMemEvalJSONSHA256([]string{"q1", "q2"})
+	if err != nil {
+		t.Fatalf("selection digest: %v", err)
+	}
+	if selection != wantSelection || protocolDigest == "" {
+		t.Fatalf("unexpected digests: selection=%q protocol=%q", selection, protocolDigest)
+	}
+	changed := protocol
+	changed.TopK++
+	changedDigest, err := longMemEvalJSONSHA256(changed)
+	if err != nil {
+		t.Fatalf("changed protocol digest: %v", err)
+	}
+	if changedDigest == protocolDigest {
+		t.Fatal("protocol digest did not change with top-k")
 	}
 }
 
@@ -222,7 +263,7 @@ func TestWaitForAutoMemoryError(t *testing.T) {
 	t.Parallel()
 
 	sess := session.NewSession(lmeAppName, "user", "session")
-	sess.SetState(memory.SessionStateKeyAutoMemoryLastError,
+	sess.SetState(lmeAutoMemoryLastErrorStateKey,
 		[]byte("generate embedding failed"))
 	err := waitForAutoMemory(context.Background(), sess, time.Now().UTC(), 0)
 	if err == nil || !strings.Contains(err.Error(), "generate embedding failed") {
@@ -1341,7 +1382,8 @@ func TestCompareLongMemEvalResults(t *testing.T) {
 	basePath := filepath.Join(baseDir, "results.json")
 	candidatePath := filepath.Join(candidateDir, "results.json")
 	base := &runResult{
-		Summary: &runSummary{TotalCases: 2},
+		Metadata: testLongMemEvalComparisonMetadata("upstream-main"),
+		Summary:  &runSummary{TotalCases: 2},
 		Cases: []*caseResult{{
 			QuestionID:   "q1",
 			QuestionType: "single-session-assistant",
@@ -1370,6 +1412,11 @@ func TestCompareLongMemEvalResults(t *testing.T) {
 			Question:     "Which option was recommended?",
 			Answer:       "Option B",
 			BackendResults: map[string]*backendResult{
+				"mem0": {
+					Backend:      "mem0",
+					FailureStage: "answer_miss",
+					Answer:       "I don't know.",
+				},
 				"pgvector": {
 					Backend:      "pgvector",
 					FailureStage: "answer_miss",
@@ -1381,7 +1428,8 @@ func TestCompareLongMemEvalResults(t *testing.T) {
 		}},
 	}
 	candidate := &runResult{
-		Summary: &runSummary{TotalCases: 2},
+		Metadata: testLongMemEvalComparisonMetadata("candidate-2196"),
+		Summary:  &runSummary{TotalCases: 2},
 		Cases: []*caseResult{{
 			QuestionID:   "q1",
 			QuestionType: "single-session-assistant",
@@ -1433,6 +1481,11 @@ func TestCompareLongMemEvalResults(t *testing.T) {
 		if !strings.Contains(text, "+1.0000") {
 			t.Fatalf("%s missing delta: %s", name, text)
 		}
+		if name == "comparison.md" &&
+			(!strings.Contains(text, "Three-Arm Summary") ||
+				!strings.Contains(text, "self-hosted Mem0")) {
+			t.Fatalf("%s missing three-arm summary: %s", name, text)
+		}
 	}
 	rows := compareLongMemEvalRows(
 		longMemEvalAnalysisRows(base),
@@ -1452,6 +1505,51 @@ func TestCompareLongMemEvalResults(t *testing.T) {
 		if row.QuestionID == "q2" && (!row.BaselineCorrect || row.CandidateCorrect) {
 			t.Fatalf("semantic judge was not preferred for q2: %#v", row)
 		}
+	}
+}
+
+func testLongMemEvalComparisonMetadata(implementation string) map[string]any {
+	return map[string]any{
+		"implementation":        implementation,
+		"dataset_sha256":        "dataset-digest",
+		"selection_sha256":      "selection-digest",
+		"protocol_version":      lmeProtocolVersion,
+		"protocol_sha256":       "protocol-digest",
+		"model":                 "answer-model",
+		"model_variant":         "glm",
+		"model_temperature":     0,
+		"embedding_model":       "embedding-model",
+		"answer_prompt_version": lmeAnswerPromptVersion,
+		"judge_prompt_version":  lmeJudgePromptVersion,
+	}
+}
+
+func TestValidateLongMemEvalComparisonRejectsProtocolDrift(t *testing.T) {
+	t.Parallel()
+
+	baseline := &runResult{
+		Metadata: testLongMemEvalComparisonMetadata("upstream-main"),
+		Cases: []*caseResult{{
+			QuestionID: "q1",
+			BackendResults: map[string]*backendResult{
+				"pgvector": {Backend: "pgvector"},
+				"mem0":     {Backend: "mem0"},
+			},
+		}},
+	}
+	candidate := &runResult{
+		Metadata: testLongMemEvalComparisonMetadata("candidate-2196"),
+		Cases: []*caseResult{{
+			QuestionID: "q1",
+			BackendResults: map[string]*backendResult{
+				"pgvector": {Backend: "pgvector"},
+			},
+		}},
+	}
+	candidate.Metadata["protocol_sha256"] = "different-protocol"
+	err := validateLongMemEvalComparison(baseline, candidate)
+	if err == nil || !strings.Contains(err.Error(), "protocol_sha256") {
+		t.Fatalf("protocol mismatch error = %v", err)
 	}
 }
 

@@ -162,6 +162,11 @@ var (
 		true,
 		"Generate LongMemEval answers from retrieved memories",
 	)
+	flagLMEImplementation = flag.String(
+		"lme-implementation",
+		"",
+		"Implementation label recorded in LongMemEval results (env LME_IMPLEMENTATION)",
+	)
 	flagLMEAnalyzeResults = flag.String(
 		"lme-analyze-results",
 		"",

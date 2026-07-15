@@ -54,6 +54,11 @@ const (
 	lmeAutoMemoryPoll    = 20 * time.Millisecond
 	lmeAutoMemoryGrace   = time.Second
 	lmeAutoMemoryTimeout = 10 * time.Minute
+
+	// This diagnostic state is optional: upstream main does not write it,
+	// while candidate builds can surface asynchronous extraction failures.
+	// Keep the key local so the same benchmark source builds against both.
+	lmeAutoMemoryLastErrorStateKey = "memory:last_extract_error"
 )
 
 type lmeTurn struct {
@@ -741,6 +746,15 @@ func runLongMemEvalMemory(ctx context.Context) error {
 	if len(cases) == 0 {
 		return fmt.Errorf("no cases selected")
 	}
+	protocol := currentLongMemEvalProtocol()
+	datasetDigest, selectionDigest, protocolDigest, err := longMemEvalExperimentDigests(
+		datasetPath,
+		cases,
+		protocol,
+	)
+	if err != nil {
+		return err
+	}
 
 	backends := parseMemoryBackends(*flagMemoryBackends)
 	mem0Config, err := prepareLongMemEvalMem0(ctx, backends)
@@ -751,8 +765,16 @@ func runLongMemEvalMemory(ctx context.Context) error {
 	results := &runResult{
 		Metadata: map[string]any{
 			"benchmark":               "longmemeval-memory",
+			"implementation":          longMemEvalImplementation(),
 			"build":                   currentLongMemEvalBuildProvenance(),
 			"dataset":                 datasetPath,
+			"dataset_sha256":          datasetDigest,
+			"selection_sha256":        selectionDigest,
+			"protocol":                protocol,
+			"protocol_version":        lmeProtocolVersion,
+			"protocol_sha256":         protocolDigest,
+			"answer_prompt_version":   lmeAnswerPromptVersion,
+			"judge_prompt_version":    lmeJudgePromptVersion,
 			"model":                   modelName,
 			"model_variant":           modelVariant,
 			"model_temperature":       0,
@@ -784,6 +806,16 @@ func runLongMemEvalMemory(ctx context.Context) error {
 	}
 	if mem0Config != nil {
 		results.Metadata["mem0_runtime_configuration"] = mem0Config
+	}
+	for _, backend := range backends {
+		if backend == "mem0" {
+			mode := "self-hosted-oss"
+			if *flagMem0Cloud {
+				mode = "hosted"
+			}
+			results.Metadata["mem0_mode"] = mode
+			break
+		}
 	}
 
 	log.Printf("LongMemEval memory run: cases=%d backends=%v model=%s", len(cases), backends, modelName)
@@ -1158,7 +1190,7 @@ func waitForAutoMemory(
 	defer ticker.Stop()
 
 	for {
-		if raw, ok := sess.GetState(memory.SessionStateKeyAutoMemoryLastError); ok &&
+		if raw, ok := sess.GetState(lmeAutoMemoryLastErrorStateKey); ok &&
 			len(raw) > 0 {
 			return fmt.Errorf("auto memory job failed: %s", raw)
 		}
@@ -1381,6 +1413,7 @@ func judgeLongMemEvalResults(ctx context.Context, path, outputDir string) error 
 	result.Metadata["judge_model"] = modelName
 	result.Metadata["judge_model_variant"] = modelVariant
 	result.Metadata["judge_build"] = currentLongMemEvalBuildProvenance()
+	result.Metadata["judge_prompt_version"] = lmeJudgePromptVersion
 	result.Metadata["judged_at"] = time.Now().UTC().Format(time.RFC3339)
 	result.Metadata["judge_note"] = "LLM semantic correctness judge adapted from the official LongMemEval QA evaluator; only an explicit final VERDICT is accepted."
 	result.Metadata["answer_scoring"] = "raw model output; no retrieval-assisted answer post-processing"

@@ -56,7 +56,7 @@ Based on:
 | Subset | Role | mem0 | pgvector |
 |--------|------|-----:|---------:|
 | seed48 | Development | 11/16 | 13/16 drift-normalized (12/16 raw) |
-| seed137 | Unseen holdout | 14/16 | **15/16** |
+| seed137 | Historical holdout (now regression) | 14/16 | **15/16** |
 
 LongMemEval replays each user/assistant pair through the production
 auto-memory path. The 32-question result is diagnostic rather than a
@@ -205,8 +205,10 @@ self-hosted mem0 sends the same pair to its memory API. `results.json` records
 pgvector extraction operations, per-pair memory
 diffs, retrieval hits, answer text, LLM and embedding token usage, prompt-cache
 usage, timings, evidence recall, and build provenance for the benchmark and
-memory modules. This separates extraction, persistence, retrieval, and answer
-failures.
+memory modules. The result metadata also fingerprints the dataset, selected
+question manifest, replay protocol, and prompt versions with SHA-256 digests.
+This separates extraction, persistence, retrieval, and answer failures and
+prevents configuration drift from being reported as an algorithm improvement.
 
 The unified [English](results/REPORT.md) and
 [Chinese](results/REPORT.zh_CN.md) reports include the current pgvector and
@@ -222,6 +224,7 @@ go run . \
   -dataset ../../summary/data/longmemeval-cleaned/longmemeval_oracle.json \
   -memory-backend pgvector,mem0 \
   -lme-question-id 08f4fc43 \
+  -lme-implementation local-smoke \
   -table-suffix _lme_smoke \
   -output ../results/lme-smoke
 
@@ -231,48 +234,63 @@ go run . \
   -dataset ../../summary/data/longmemeval-cleaned/longmemeval_oracle.json \
   -memory-backend pgvector,mem0 \
   -lme-question-ids 07b6f563,35a27287,gpt4_0a05b494 \
+  -lme-implementation local-badcase \
   -table-suffix _lme_badcase \
   -output ../results/lme-badcase
 
-# Stratified baseline subset.
+# Stratified 16-question development baseline plus a frozen Mem0 reference arm.
 go run . \
   -dataset-format longmemeval \
   -dataset ../../summary/data/longmemeval-cleaned/longmemeval_oracle.json \
   -memory-backend pgvector,mem0 \
-  -lme-per-type 10 \
-  -lme-abstention-count 20 \
-  -lme-sample-seed 42 \
+  -lme-per-type 2 \
+  -lme-abstention-count 4 \
+  -lme-sample-seed 48 \
+  -lme-implementation upstream-main-<commit> \
   -mem0-llm-temperature 0 \
-  -table-suffix _lme_baseline \
-  -output ../results/lme-baseline
+  -table-suffix _lme_upstream \
+  -output ../results/lme-upstream
+
+# Run candidate pgvector on the exact same selection. Do not rerun Mem0: the
+# comparison command reuses the frozen reference arm from the upstream run.
+go run . \
+  -dataset-format longmemeval \
+  -dataset ../../summary/data/longmemeval-cleaned/longmemeval_oracle.json \
+  -memory-backend pgvector \
+  -lme-per-type 2 \
+  -lme-abstention-count 4 \
+  -lme-sample-seed 48 \
+  -lme-implementation candidate-<commit> \
+  -table-suffix _lme_candidate \
+  -output ../results/lme-candidate
 
 # Add semantic-judge results to a completed run.
 go run . \
   -dataset-format longmemeval \
-  -lme-judge-results ../results/lme-baseline/results.json \
-  -output ../results/lme-baseline
+  -lme-judge-results ../results/lme-upstream/results.json \
+  -output ../results/lme-upstream
 
 # Regenerate only the answers from saved retrieval hits after changing the
 # shared answer protocol, then judge that output.
 go run . \
   -dataset-format longmemeval \
-  -lme-reanswer-results ../results/lme-baseline/results.json \
-  -output ../results/lme-baseline
+  -lme-reanswer-results ../results/lme-upstream/results.json \
+  -output ../results/lme-upstream
 go run . \
   -dataset-format longmemeval \
-  -lme-judge-results ../results/lme-baseline/reanswered_results.json \
-  -output ../results/lme-baseline
+  -lme-judge-results ../results/lme-upstream/reanswered_results.json \
+  -output ../results/lme-upstream
 
 # Analyze judged results without making model calls.
 go run . \
   -dataset-format longmemeval \
-  -lme-analyze-results ../results/lme-baseline/judged_results.json \
-  -output ../results/lme-baseline
+  -lme-analyze-results ../results/lme-upstream/judged_results.json \
+  -output ../results/lme-upstream
 
 # Compare two LongMemEval runs without making model calls.
 go run . \
   -dataset-format longmemeval \
-  -lme-compare-results ../results/lme-baseline/judged_results.json,../results/lme-candidate/judged_results.json \
+  -lme-compare-results ../results/lme-upstream/judged_results.json,../results/lme-candidate/judged_results.json \
   -output ../results/lme-candidate
 ```
 
@@ -283,8 +301,11 @@ semantic-judge result as the primary correctness signal and falls back to exact
 match when no judge result is available. It writes `analysis.md` and
 `bad_cases.tsv`, including raw pipeline stages, evidence status, backend
 disagreements, and answer-gap diagnostics. Comparison uses the same correctness
-rule and writes `comparison.md` and `comparison.tsv` with correctness, EM, F1,
-BLEU, stage, and answer deltas for question/backend pairs present in both runs.
+rule and rejects runs whose dataset, selection, replay protocol, retrieval
+depth, answer model, embedding model, prompt versions, or judge configuration
+differ. It writes `comparison.md` and `comparison.tsv`, compares upstream and
+candidate pgvector quality and cost, and presents Mem0 from the upstream run as
+a frozen third arm.
 When normalized questions, references, and answers are identical, comparison
 treats conflicting judge verdicts as unchanged and reports the ignored judge
 drift instead of a model regression.
@@ -350,6 +371,7 @@ LongMemEval-specific options:
 | `-lme-ingest-wait`       | 250ms   | Extra delay after completed pair ingestion   |
 | `-lme-model-call-timeout` | 3m      | Model timeout and mem0 OSS request cap       |
 | `-lme-answer`            | true    | Generate answers from retrieved memories     |
+| `-lme-implementation`    | (env)   | Reproducible implementation label            |
 | `-lme-reanswer-results`   |         | Re-answer using saved ranked retrieval hits  |
 | `-lme-judge-results`     |         | Add semantic judge results to `results.json` |
 | `-lme-analyze-results`   |         | Analyze one saved LongMemEval `results.json` |
@@ -373,6 +395,7 @@ LongMemEval-specific options:
 | `OPENAI_EMBEDDING_API_KEY`  | API key for embedding model (optional)    |
 | `OPENAI_EMBEDDING_BASE_URL` | Base URL for embedding API (optional)     |
 | `MEM0_HOST`                 | Self-hosted mem0 OSS host                 |
+| `LME_IMPLEMENTATION`        | LongMemEval implementation label          |
 
 ## Dataset Setup
 
