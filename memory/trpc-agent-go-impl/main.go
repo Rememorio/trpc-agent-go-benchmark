@@ -192,6 +192,16 @@ var (
 		"",
 		"Re-run PGVector retrieval and answers against memories persisted by an existing LongMemEval results.json",
 	)
+	flagLMERefreshRerank = flag.Bool(
+		"lme-refresh-rerank",
+		false,
+		"Rerank PGVector hits with the configured model during retrieval refresh",
+	)
+	flagLMERerankTopN = flag.Int(
+		"lme-rerank-topn",
+		12,
+		"Maximum directly relevant memories selected by the retrieval refresh reranker",
+	)
 	flagLMEJudgeResults = flag.String(
 		"lme-judge-results",
 		"",

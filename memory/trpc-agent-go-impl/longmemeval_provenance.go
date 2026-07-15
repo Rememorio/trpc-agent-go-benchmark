@@ -29,12 +29,14 @@ const (
 	lmeAnswerPrimaryMaxTokens = 512
 	lmeAnswerRetryMaxTokens   = 4096
 	lmeAnswerMaxAttempts      = 2
+	lmeJudgePrimaryMaxTokens  = 1024
+	lmeJudgeRepairMaxTokens   = 2048
 
 	// These versions are part of the experiment contract. Bump the relevant
 	// version whenever replay, prompting, or judging semantics change.
 	lmeProtocolVersion     = "lme-memory-turn-pair-v1"
 	lmeAnswerPromptVersion = "lme-memory-answer-v1"
-	lmeJudgePromptVersion  = "lme-official-adapted-judge-v1"
+	lmeJudgePromptVersion  = "lme-official-adapted-judge-v2"
 )
 
 var (
@@ -83,6 +85,14 @@ type lmeAnswerGenerationProvenance struct {
 	ThinkingEnabled    bool     `json:"thinking_enabled"`
 }
 
+type lmeJudgeGenerationProvenance struct {
+	PrimaryMaxTokens int     `json:"primary_max_tokens"`
+	RepairMaxTokens  int     `json:"repair_max_tokens"`
+	Temperature      float64 `json:"temperature"`
+	ReasoningEffort  string  `json:"reasoning_effort"`
+	ThinkingEnabled  bool    `json:"thinking_enabled"`
+}
+
 func currentLongMemEvalAnswerGeneration() lmeAnswerGenerationProvenance {
 	return lmeAnswerGenerationProvenance{
 		PrimaryMaxTokens:   lmeAnswerPrimaryMaxTokens,
@@ -93,6 +103,16 @@ func currentLongMemEvalAnswerGeneration() lmeAnswerGenerationProvenance {
 		Temperature:        0,
 		ReasoningEffort:    "low",
 		ThinkingEnabled:    false,
+	}
+}
+
+func currentLongMemEvalJudgeGeneration() lmeJudgeGenerationProvenance {
+	return lmeJudgeGenerationProvenance{
+		PrimaryMaxTokens: lmeJudgePrimaryMaxTokens,
+		RepairMaxTokens:  lmeJudgeRepairMaxTokens,
+		Temperature:      0,
+		ReasoningEffort:  "low",
+		ThinkingEnabled:  false,
 	}
 }
 

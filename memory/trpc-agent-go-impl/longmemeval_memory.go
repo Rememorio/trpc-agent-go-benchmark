@@ -224,6 +224,12 @@ type backendResult struct {
 	IngestTraces          []ingestTrace       `json:"ingest_traces"`
 	FinalMemories         []memorySnapshot    `json:"final_memories"`
 	Retrieval             []memoryHit         `json:"retrieval"`
+	PreRerankRetrieval    []memoryHit         `json:"pre_rerank_retrieval,omitempty"`
+	RerankModelCalls      []lmeModelCallTrace `json:"rerank_model_calls,omitempty"`
+	RerankUsage           *lmeTokenUsage      `json:"rerank_token_usage,omitempty"`
+	RerankDuration        int64               `json:"rerank_duration_ms,omitempty"`
+	RerankRaw             string              `json:"rerank_raw,omitempty"`
+	RerankError           string              `json:"rerank_error,omitempty"`
 	Answer                string              `json:"answer,omitempty"`
 	RawAnswer             string              `json:"raw_answer,omitempty"`
 	AnswerModelCalls      []lmeModelCallTrace `json:"answer_model_calls,omitempty"`
@@ -921,6 +927,7 @@ func runLongMemEvalMemory(ctx context.Context) error {
 			"answer_prompt_version":   lmeAnswerPromptVersion,
 			"answer_generation":       currentLongMemEvalAnswerGeneration(),
 			"judge_prompt_version":    lmeJudgePromptVersion,
+			"judge_generation":        currentLongMemEvalJudgeGeneration(),
 			"model":                   modelName,
 			"model_variant":           modelVariant,
 			"model_temperature":       0,
@@ -1509,6 +1516,8 @@ func reanswerLongMemEvalResult(
 	result.Metadata["reanswer_model_variant"] = modelVariant
 	result.Metadata["reanswer_build"] = currentLongMemEvalBuildProvenance()
 	result.Metadata["answer_generation"] = currentLongMemEvalAnswerGeneration()
+	result.Metadata["judge_prompt_version"] = lmeJudgePromptVersion
+	result.Metadata["judge_generation"] = currentLongMemEvalJudgeGeneration()
 	result.Metadata["reanswered_at"] = time.Now().UTC().Format(time.RFC3339)
 	result.Metadata["answer_scoring"] = "raw model output; no retrieval-assisted answer post-processing"
 	result.Metadata["reanswer_note"] = "Answers regenerated from saved ranked retrieval hits; backend-specific similarity scores are not shown to the answer model. Responses ending with a length finish reason are retried once with the recorded larger token limit."
@@ -1633,6 +1642,7 @@ func judgeLongMemEvalResults(ctx context.Context, path, outputDir string) error 
 	result.Metadata["judge_model_variant"] = modelVariant
 	result.Metadata["judge_build"] = currentLongMemEvalBuildProvenance()
 	result.Metadata["judge_prompt_version"] = lmeJudgePromptVersion
+	result.Metadata["judge_generation"] = currentLongMemEvalJudgeGeneration()
 	result.Metadata["judge_runs"] = judgeRuns
 	result.Metadata["judged_at"] = time.Now().UTC().Format(time.RFC3339)
 	result.Metadata["judge_note"] = "LLM semantic correctness judge adapted from the official LongMemEval QA evaluator; only explicit final VERDICT votes are accepted, and multiple requested runs use strict majority voting."
@@ -1893,7 +1903,7 @@ func generateLongMemEvalJudgeResponse(
 }
 
 func newLongMemEvalJudgeRequest(prompt string) *model.Request {
-	maxTokens := 1024
+	maxTokens := lmeJudgePrimaryMaxTokens
 	temp := 0.0
 	reasoningEffort := "low"
 	thinkingEnabled := false
@@ -1913,7 +1923,7 @@ func newLongMemEvalJudgeRequest(prompt string) *model.Request {
 }
 
 func newLongMemEvalJudgeRepairRequest(prompt string) *model.Request {
-	maxTokens := 512
+	maxTokens := lmeJudgeRepairMaxTokens
 	temp := 0.0
 	reasoningEffort := "low"
 	thinkingEnabled := false
@@ -1944,6 +1954,9 @@ func newLongMemEvalJudgeRepairRequest(prompt string) *model.Request {
 					"required": []string{"correct"},
 				},
 			},
+		},
+		ExtraFields: map[string]any{
+			"response_format": map[string]string{"type": "json_object"},
 		},
 	}
 }

@@ -291,6 +291,27 @@ go run . \
   -lme-judge-runs 3 \
   -output ../results/lme-upstream
 
+# Re-run pgvector retrieval and answers against the exact persisted memories
+# from a completed run, without paying the ingestion cost again.
+go run . \
+  -dataset-format longmemeval \
+  -lme-refresh-retrieval-results ../results/lme-candidate/results.json \
+  -table-suffix _lme_candidate \
+  -vector-topk 30 \
+  -output ../results/lme-candidate
+
+# Optionally add one model-based relevance-selection pass over the refreshed
+# top-k. The pre-rerank hits, selected hits, model calls, errors, latency, and
+# token usage are retained for diagnosis.
+go run . \
+  -dataset-format longmemeval \
+  -lme-refresh-retrieval-results ../results/lme-candidate/results.json \
+  -lme-refresh-rerank \
+  -lme-rerank-topn 12 \
+  -table-suffix _lme_candidate \
+  -vector-topk 30 \
+  -output ../results/lme-candidate
+
 # Analyze judged results without making model calls.
 go run . \
   -dataset-format longmemeval \
@@ -332,6 +353,13 @@ whose scales are not comparable. Re-answering writes checkpointed
 `reanswered_results.json`, replaces the prior answer-call usage in aggregate
 token counters, clears stale judge results, and does not rerun ingestion or
 retrieval.
+Retrieval refresh first verifies that canonical memories in the recorded
+pgvector table exactly match the source run, then writes
+`retrieval_refreshed_results.json`. Enabling reranking instead writes
+`retrieval_reranked_results.json`; a malformed or failed rerank call falls back
+to the original hits while retaining the failure trace. Refresh preserves the
+recorded ingestion and original query-embedding cost, replaces answer usage,
+and adds rerank usage when enabled.
 
 Token counters cover model and embedding calls made by this process, including
 pgvector extraction, retrieval, and answer generation. A self-hosted mem0 can
@@ -385,6 +413,9 @@ LongMemEval-specific options:
 | `-lme-answer`            | true    | Generate answers from retrieved memories     |
 | `-lme-implementation`    | (env)   | Reproducible implementation label            |
 | `-lme-reanswer-results`   |         | Re-answer using saved ranked retrieval hits  |
+| `-lme-refresh-retrieval-results` | | Refresh persisted pgvector retrieval         |
+| `-lme-refresh-rerank`     | false   | Model-rerank hits during retrieval refresh   |
+| `-lme-rerank-topn`        | 12      | Maximum memories selected by the reranker    |
 | `-lme-judge-results`     |         | Add semantic judge results to `results.json` |
 | `-lme-judge-runs`        | 1       | Odd number of independent semantic votes     |
 | `-lme-analyze-results`   |         | Analyze one saved LongMemEval `results.json` |

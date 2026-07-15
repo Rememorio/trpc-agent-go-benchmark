@@ -191,6 +191,7 @@ func validateLongMemEvalComparison(baseline, candidate *runResult) error {
 		"answer_prompt_version",
 		"answer_generation",
 		"judge_prompt_version",
+		"judge_generation",
 	}
 	for _, key := range required {
 		if err := compareLongMemEvalMetadataValue(baseline.Metadata, candidate.Metadata, key, true); err != nil {

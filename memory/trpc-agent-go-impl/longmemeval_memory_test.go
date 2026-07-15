@@ -1325,11 +1325,15 @@ func TestJudgeLongMemEvalAnswerRepairsMissingVerdict(t *testing.T) {
 	if len(llm.requests) != 2 || llm.requests[1].StructuredOutput == nil {
 		t.Fatalf("repair request should require structured output: %#v", llm.requests)
 	}
-	if llm.requests[0].MaxTokens == nil || *llm.requests[0].MaxTokens != 1024 {
-		t.Fatalf("primary judge max tokens = %v, want 1024", llm.requests[0].MaxTokens)
+	if llm.requests[0].MaxTokens == nil || *llm.requests[0].MaxTokens != lmeJudgePrimaryMaxTokens {
+		t.Fatalf("primary judge max tokens = %v, want %d", llm.requests[0].MaxTokens, lmeJudgePrimaryMaxTokens)
 	}
-	if llm.requests[1].MaxTokens == nil || *llm.requests[1].MaxTokens != 512 {
-		t.Fatalf("repair judge max tokens = %v, want 512", llm.requests[1].MaxTokens)
+	if llm.requests[1].MaxTokens == nil || *llm.requests[1].MaxTokens != lmeJudgeRepairMaxTokens {
+		t.Fatalf("repair judge max tokens = %v, want %d", llm.requests[1].MaxTokens, lmeJudgeRepairMaxTokens)
+	}
+	responseFormat, ok := llm.requests[1].ExtraFields["response_format"].(map[string]string)
+	if !ok || responseFormat["type"] != "json_object" {
+		t.Fatalf("repair response format = %#v", llm.requests[1].ExtraFields)
 	}
 	if got := llm.requests[1].Messages[1].Content; !strings.Contains(got, `{"correct":true}`) {
 		t.Fatalf("repair request does not require compact JSON: %q", got)
@@ -1807,6 +1811,7 @@ func testLongMemEvalComparisonMetadata(implementation string) map[string]any {
 		"answer_prompt_version": lmeAnswerPromptVersion,
 		"answer_generation":     currentLongMemEvalAnswerGeneration(),
 		"judge_prompt_version":  lmeJudgePromptVersion,
+		"judge_generation":      currentLongMemEvalJudgeGeneration(),
 		"judge_runs":            3,
 	}
 }

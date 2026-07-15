@@ -23,7 +23,10 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
-const lmeRetrievalRefreshOutput = "retrieval_refreshed_results.json"
+const (
+	lmeRetrievalRefreshOutput = "retrieval_refreshed_results.json"
+	lmeRetrievalRerankOutput  = "retrieval_reranked_results.json"
+)
 
 func refreshLongMemEvalRetrievalResults(
 	ctx context.Context,
@@ -65,8 +68,15 @@ func refreshLongMemEvalRetrievalResults(
 		modelName,
 		modelVariant,
 		sourceDigest,
-		filepath.Join(outputDir, lmeRetrievalRefreshOutput),
+		filepath.Join(outputDir, longMemEvalRetrievalRefreshOutputName()),
 	)
+}
+
+func longMemEvalRetrievalRefreshOutputName() string {
+	if *flagLMERefreshRerank {
+		return lmeRetrievalRerankOutput
+	}
+	return lmeRetrievalRefreshOutput
 }
 
 func validateLongMemEvalRetrievalRefresh(result *runResult) error {
@@ -157,26 +167,46 @@ func refreshLongMemEvalRetrievalResult(
 	if baseLLM == nil {
 		return errors.New("retrieval refresh model is nil")
 	}
+	if *flagLMERefreshRerank && *flagLMERerankTopN <= 0 {
+		return fmt.Errorf(
+			"lme-rerank-topn must be positive, got %d",
+			*flagLMERerankTopN,
+		)
+	}
 	if result.Metadata == nil {
 		result.Metadata = make(map[string]any)
 	}
+	rerankPromptVersion := ""
+	preservedCostScope := "ingestion and original query embedding; answer usage is replaced"
+	if *flagLMERefreshRerank {
+		rerankPromptVersion = lmeRerankPromptVersion
+		preservedCostScope += "; rerank usage is added"
+	}
 	refresh := map[string]any{
-		"backend":              backend.Name(),
-		"source_sha256":        sourceDigest,
-		"build":                currentLongMemEvalBuildProvenance(),
-		"model":                modelName,
-		"model_variant":        modelVariant,
-		"embedding_model":      getEmbedModelName(),
-		"table_suffix":         *flagTableSuffix,
-		"top_k":                *flagVectorTopK,
-		"completed_cases":      0,
-		"embedding_usage":      lmeEmbeddingUsage{},
-		"refreshed_at":         time.Now().UTC().Format(time.RFC3339),
-		"memory_verification":  "canonical persisted memories match source final_memories",
-		"preserved_cost_scope": "ingestion and original query embedding; answer usage is replaced",
+		"backend":               backend.Name(),
+		"source_sha256":         sourceDigest,
+		"build":                 currentLongMemEvalBuildProvenance(),
+		"model":                 modelName,
+		"model_variant":         modelVariant,
+		"embedding_model":       getEmbedModelName(),
+		"table_suffix":          *flagTableSuffix,
+		"top_k":                 *flagVectorTopK,
+		"completed_cases":       0,
+		"embedding_usage":       lmeEmbeddingUsage{},
+		"refreshed_at":          time.Now().UTC().Format(time.RFC3339),
+		"memory_verification":   "canonical persisted memories match source final_memories",
+		"preserved_cost_scope":  preservedCostScope,
+		"rerank_enabled":        *flagLMERefreshRerank,
+		"rerank_prompt_version": rerankPromptVersion,
+		"rerank_top_n":          *flagLMERerankTopN,
+		"rerank_max_attempts":   lmeRerankMaxAttempts,
+		"rerank_initial_tokens": lmeRerankInitialTokens,
+		"rerank_retry_tokens":   lmeRerankRetryTokens,
 	}
 	result.Metadata["retrieval_refresh"] = refresh
 	result.Metadata["answer_generation"] = currentLongMemEvalAnswerGeneration()
+	result.Metadata["judge_prompt_version"] = lmeJudgePromptVersion
+	result.Metadata["judge_generation"] = currentLongMemEvalJudgeGeneration()
 	result.Metadata["answer_scoring"] = "raw model output; no retrieval-assisted answer post-processing"
 	for _, key := range []string{
 		"judge_model", "judge_model_variant", "judge_build", "judge_runs",
@@ -235,6 +265,34 @@ func refreshLongMemEvalRetrievalResult(
 		br.SearchDuration = time.Since(searchStart).Milliseconds()
 		providerUsage := backend.SnapshotProviderUsage()
 		embeddingUsage.Add(providerUsage.Embedding)
+		br.PreRerankRetrieval = nil
+		br.RerankModelCalls = nil
+		br.RerankDuration = 0
+		br.RerankRaw = ""
+		br.RerankError = ""
+		if *flagLMERefreshRerank && searchErr == nil {
+			br.PreRerankRetrieval = append([]memoryHit(nil), hits...)
+			tracker := &lmeTokenTracker{}
+			llm := &lmeTrackingModel{
+				base: baseLLM, tracker: tracker, timeout: *flagLMEModelCallTimeout,
+			}
+			rerankStart := time.Now()
+			reranked, raw, rerankErr := rerankLongMemEvalHits(
+				ctx, llm, inst, hits, *flagLMERerankTopN,
+			)
+			br.RerankDuration = time.Since(rerankStart).Milliseconds()
+			br.RerankModelCalls = tracker.SnapshotCalls()
+			rerankUsage := tracker.Snapshot()
+			replaceLongMemEvalRerankUsage(br, rerankUsage)
+			br.RerankRaw = raw
+			if rerankErr != nil {
+				br.RerankError = rerankErr.Error()
+			} else {
+				hits = reranked
+			}
+		} else {
+			replaceLongMemEvalRerankUsage(br, lmeTokenUsage{})
+		}
 		br.Retrieval = hits
 		br.Judge = nil
 		if searchErr != nil {
