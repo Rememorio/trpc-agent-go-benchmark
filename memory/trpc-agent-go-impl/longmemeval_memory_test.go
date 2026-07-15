@@ -933,10 +933,8 @@ func TestBuildLongMemEvalAnswerPromptPreferenceGuidance(t *testing.T) {
 	if !strings.Contains(prompt, "[kind=episode; event_time=2023-05-20; participants=Alice; location=Community Center]") {
 		t.Fatalf("missing memory metadata: %s", prompt)
 	}
-	if !strings.Contains(prompt, "Semantic category memberships: language exchange, French, Spanish") ||
-		!strings.Contains(prompt, "Category memberships can establish what kind of entity") ||
-		!strings.Contains(prompt, "do not add a new entity, action, quantity") {
-		t.Fatalf("missing topic semantics: %s", prompt)
+	if strings.Contains(prompt, "Semantic category memberships:") {
+		t.Fatalf("topic metadata changed the frozen answer protocol: %s", prompt)
 	}
 }
 

@@ -2125,20 +2125,12 @@ func buildLongMemEvalAnswerPrompt(inst *lmeInstance, hits []memoryHit) string {
 				fmt.Fprintf(&b, " [%s]", meta)
 			}
 			b.WriteByte('\n')
-			if len(hit.Topics) > 0 {
-				fmt.Fprintf(&b, "   Semantic category memberships: %s\n",
-					strings.Join(hit.Topics, ", "))
-			}
 		}
 	}
 	guidance := longMemEvalAnswerGuidance(inst)
 	return fmt.Sprintf(`You are answering a LongMemEval memory question.
 
 Use only the retrieved memories below. If the memories do not contain enough information, answer "I don't know".
-Metadata and semantic category memberships belong to the preceding memory.
-Category memberships can establish what kind of entity, action, or event the
-memory describes, but they do not add a new entity, action, quantity, or
-relationship absent from the memory text.
 Output only the final answer. Do not explain, reason step by step, cite
 memory numbers, mention uncertainty analysis, or use markdown. The first token
 must be part of the final answer. If the question asks for an order, list, or
