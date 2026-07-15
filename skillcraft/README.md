@@ -10,6 +10,14 @@ tasks with `trpc-agent-go` across four run modes:
 - `optimize`: run offline reflective search over one seed skill, select on a
   validation split, and make the promotion decision on an unseen holdout split.
 
+When `compare` also receives `-optimized-skills-from`, it runs a controlled
+third arm named `optimized_evolution`. Both evolution arms use the same online
+reviewer, publisher, quality gates, task sequence, and model settings; only the
+warm-start skill library differs. `-evaluation-seed` derives one task-specific
+sampling seed that is reused across all arms, and odd/even root seeds reverse
+the whole-arm order across repeated runs without disturbing online learning
+within an arm.
+
 `trpc-agent-go` intentionally keeps skill management on the
 reviewer-driven async path. The old in-flow `skill_manage` experiment
 was removed after early runs showed prompt overhead without reliable
@@ -147,6 +155,29 @@ The MCP bridge also ships `local-write_final_json`, which writes the
 final JSON deliverable directly to the workspace and recovers from
 common encoding mistakes. Prompts steer the agent to prefer this tool
 for the final deliverable.
+
+## Three-Arm Operational Replay
+
+For the five-family operational replay, run compare at least three times with
+distinct root seeds and aggregate the canonical results with the checked-in
+validator:
+
+```bash
+go run ./cmd/aggregate \
+  -input ../results/reflective_full_seed_101/results.json \
+  -input ../results/reflective_full_seed_102/results.json \
+  -input ../results/reflective_full_seed_103/results.json \
+  -output ../results/gepa_reflective_optimization/full_matrix_evidence.json
+```
+
+The validator requires every run to contain all five families and all six
+scales in all three arms, verifies that matching tasks share a sampling seed,
+and rejects duplicate root seeds. Its promotion protocol is fixed in
+`internal/experiment`: no overall or per-family pass-rate regression, bounded
+quality non-regression, and at least one meaningful benefit (quality +0.5pp or
+end-to-end tokens -5%). This full matrix is operational evidence, not a strict
+holdout: candidate search may already have used some of its scales. Strict
+frozen holdout remains a separate `optimize`-mode comparison below.
 
 ## Reflective Skill Optimization
 
@@ -299,6 +330,9 @@ regression set after exposing a development failure.
 | `-task-timeout-seconds` | Override task timeout |
 | `-max-tool-iterations` | Max tool loops per task |
 | `-load-skills-from` | Warm-start the evolution arm from an existing managed-skill directory |
+| `-optimized-skills-from` | In compare mode, add an optimized-evolution arm with a separate warm-start library; requires `-load-skills-from` |
+| `-evaluation-seed` | Optional root seed used to derive paired per-task seeds across compare arms |
+| `-evaluation-temperature` | Optional shared agent/reviewer sampling temperature for non-optimization modes |
 | `-max-prompt-skills` | Cap the number of full skill summaries rendered into the prompt |
 | `-enable-approval-gate` | Route reviewer output through the Phase A revision store + Phase B deterministic SpecGate / SafetyGate; writes immutable revisions and an audit log under `<output>/managed_skills_revisions/` |
 | `-approval-gate-shadow` | Run the quality gate in shadow mode: still publish even when gates reject, for comparison only |
@@ -322,6 +356,8 @@ The output directory contains:
 - `workspaces/`: per-task workspaces when `-keep-workspaces=true`.
 - `managed_skills/`: learned skills produced during the `evolution` arm
   (this is what agents actually read).
+- `optimized_managed_skills/`: isolated live library for the optional
+  `optimized_evolution` arm.
 - `managed_skills_revisions/`: Phase A revision store, only populated
   when `-enable-approval-gate` is set. Each SkillID gets
   `revisions/<revision-id>/{meta.json, SKILL.md}`, an append-only

@@ -109,6 +109,44 @@ func TestBuildComparisonUsesWarmStartSubset(t *testing.T) {
 	require.InDelta(t, 50.0, comp.SkillToolInvokedDelta, 0.02)
 }
 
+func TestBenchmarkRunOrderIncludesControlledOptimizedArm(t *testing.T) {
+	evenSeed := int64(12)
+	oddSeed := int64(13)
+	cfg := &benchmarkConfig{
+		Mode:                modeCompare,
+		OptimizedSkillsFrom: "/optimized",
+		EvaluationSeed:      &evenSeed,
+	}
+
+	require.Equal(t, []runMode{
+		modeBaseline,
+		modeEvolution,
+		modeOptimizedEvolution,
+	}, benchmarkRunOrder(cfg))
+
+	cfg.EvaluationSeed = &oddSeed
+	require.Equal(t, []runMode{
+		modeOptimizedEvolution,
+		modeEvolution,
+		modeBaseline,
+	}, benchmarkRunOrder(cfg))
+}
+
+func TestManagedSkillInputsAreIsolatedByArm(t *testing.T) {
+	cfg := &benchmarkConfig{
+		LoadSkillsFrom:      "/legacy",
+		OptimizedSkillsFrom: "/optimized",
+	}
+
+	require.True(t, modeLearnsSkills(modeEvolution))
+	require.True(t, modeLearnsSkills(modeOptimizedEvolution))
+	require.False(t, modeLearnsSkills(modeBaseline))
+	require.Equal(t, "managed_skills", managedSkillsDirName(modeEvolution))
+	require.Equal(t, "optimized_managed_skills", managedSkillsDirName(modeOptimizedEvolution))
+	require.Equal(t, "/legacy", managedSkillsSeed(cfg, modeEvolution))
+	require.Equal(t, "/optimized", managedSkillsSeed(cfg, modeOptimizedEvolution))
+}
+
 func TestBuildInstructionPrioritizesTaskSpecOverSkills(t *testing.T) {
 	task := &taskDefinition{
 		TaskDoc:          "SEQ_01: ATGC...\n\nSave results to `dna_results.json`:",
