@@ -15,6 +15,7 @@ revision="$(git -C "${repo_root}" rev-parse HEAD)"
 modfile="${script_dir}/go.mod"
 sumfile="${script_dir}/go.sum"
 go_mod_flags=()
+go_build_flags=()
 temp_dir=""
 
 cleanup() {
@@ -29,6 +30,26 @@ if [[ -n "$(git -C "${repo_root}" status --porcelain --untracked-files=normal)" 
   echo "Commit the experiment code or use a clean Git worktree first." >&2
   exit 1
 fi
+
+build_profile="${LME_AGENT_PROFILE:-}"
+if [[ -z "${build_profile}" ]]; then
+  if [[ -n "${LME_AGENT_REPLACEMENT:-}" ]]; then
+    build_profile="upstream"
+  else
+    build_profile="candidate"
+  fi
+fi
+case "${build_profile}" in
+  candidate)
+    ;;
+  upstream)
+    go_build_flags=(-tags=lme_upstream)
+    ;;
+  *)
+    echo "LME_AGENT_PROFILE must be candidate or upstream." >&2
+    exit 1
+    ;;
+esac
 
 if [[ -n "${LME_AGENT_REPLACEMENT:-}" ]]; then
   replacement="${LME_AGENT_REPLACEMENT}"
@@ -59,5 +80,7 @@ read -r sum_sha _ < <(sha256sum "${sumfile}")
 ldflags="-X=main.lmeInjectedBuildRevision=${revision} -X=main.lmeInjectedBuildModified=false"
 ldflags+=" -X=main.lmeInjectedModuleManifestSHA256=${manifest_sha}"
 ldflags+=" -X=main.lmeInjectedModuleSumSHA256=${sum_sha}"
+ldflags+=" -X=main.lmeInjectedBuildProfile=${build_profile}"
 cd "${script_dir}"
-GOWORK=off go run -mod=readonly "${go_mod_flags[@]}" -ldflags "${ldflags}" . "$@"
+GOWORK=off go run -mod=readonly "${go_build_flags[@]}" \
+  "${go_mod_flags[@]}" -ldflags "${ldflags}" . "$@"

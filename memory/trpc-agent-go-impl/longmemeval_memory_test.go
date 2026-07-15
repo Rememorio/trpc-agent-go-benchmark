@@ -106,17 +106,21 @@ func TestLongMemEvalBuildProvenance(t *testing.T) {
 		t.Fatalf("local replacement path leaked into JSON: %s", encoded)
 	}
 	empty := longMemEvalBuildProvenance(nil, false)
-	if empty.GoVersion != "" || empty.Revision != "" || empty.Modified || empty.Modules != nil {
+	if empty.GoVersion != "" || empty.Revision != "" || empty.Modified ||
+		empty.BuildProfile != "" || empty.ModuleManifestSHA256 != "" ||
+		empty.ModuleSumSHA256 != "" || empty.Modules != nil {
 		t.Fatalf("unexpected unavailable build provenance: %+v", empty)
 	}
 	injected := applyLongMemEvalInjectedProvenance(
 		empty,
 		" injected-sha ",
 		"true",
+		" candidate ",
 		" manifest-sha ",
 		" sum-sha ",
 	)
 	if injected.Revision != "injected-sha" || !injected.Modified ||
+		injected.BuildProfile != "candidate" ||
 		injected.ModuleManifestSHA256 != "manifest-sha" ||
 		injected.ModuleSumSHA256 != "sum-sha" {
 		t.Fatalf("injected provenance was not applied: %+v", injected)
@@ -125,15 +129,18 @@ func TestLongMemEvalBuildProvenance(t *testing.T) {
 		lmeBuildProvenance{
 			Revision:             "native-sha",
 			Modified:             true,
+			BuildProfile:         "candidate",
 			ModuleManifestSHA256: "native-manifest",
 			ModuleSumSHA256:      "native-sum",
 		},
 		"injected-sha",
 		"false",
+		"upstream",
 		"injected-manifest",
 		"injected-sum",
 	)
 	if native.Revision != "native-sha" || native.Modified ||
+		native.BuildProfile != "candidate" ||
 		native.ModuleManifestSHA256 != "native-manifest" ||
 		native.ModuleSumSHA256 != "native-sum" {
 		t.Fatalf("native revision or injected modified state was not preserved: %+v", native)
@@ -142,6 +149,7 @@ func TestLongMemEvalBuildProvenance(t *testing.T) {
 		empty,
 		"",
 		"not-a-bool",
+		"",
 		"",
 		"",
 	)
@@ -155,6 +163,7 @@ func TestLongMemEvalBuildProvenanceIssue(t *testing.T) {
 	pinned := lmeBuildProvenance{
 		GoVersion:            "go-test",
 		Revision:             "benchmark-sha",
+		BuildProfile:         "candidate",
 		ModuleManifestSHA256: "manifest-sha",
 		ModuleSumSHA256:      "sum-sha",
 		Modules: map[string]lmeModuleProvenance{
@@ -188,6 +197,15 @@ func TestLongMemEvalBuildProvenanceIssue(t *testing.T) {
 				Modified: true,
 			},
 			want: "benchmark worktree was modified at build time",
+		},
+		{
+			name: "missing build profile",
+			build: func() lmeBuildProvenance {
+				build := pinned
+				build.BuildProfile = ""
+				return build
+			}(),
+			want: "build profile is missing or unsupported",
 		},
 		{
 			name: "local memory module",
@@ -466,23 +484,23 @@ func TestAssistantResultUpdatePolicy(t *testing.T) {
 	t.Parallel()
 
 	if got := assistantResultUpdatePolicy(
-		extractor.UpdatePolicyReconcile, false,
+		lmeUpdatePolicyReconcile, false,
 	); got != "" {
 		t.Fatalf("disabled policy = %q, want empty", got)
 	}
 	if got := assistantResultUpdatePolicy(
-		extractor.UpdatePolicyReconcile, true,
-	); got != extractor.UpdatePolicyHistoryPreserving {
+		lmeUpdatePolicyReconcile, true,
+	); got != lmeUpdatePolicyHistoryPreserving {
 		t.Fatalf("reconcile result policy = %q", got)
 	}
 	if got := assistantResultUpdatePolicy(
-		extractor.UpdatePolicyHistoryPreserving, true,
-	); got != extractor.UpdatePolicyHistoryPreserving {
+		lmeUpdatePolicyHistoryPreserving, true,
+	); got != lmeUpdatePolicyHistoryPreserving {
 		t.Fatalf("history result policy = %q", got)
 	}
 	if got := assistantResultUpdatePolicy(
-		extractor.UpdatePolicyAddOnly, true,
-	); got != extractor.UpdatePolicyAddOnly {
+		lmeUpdatePolicyAddOnly, true,
+	); got != lmeUpdatePolicyAddOnly {
 		t.Fatalf("add-only result policy = %q", got)
 	}
 }
@@ -1587,12 +1605,12 @@ func TestCurrentLongMemEvalPGVectorExtractionConfig(t *testing.T) {
 
 	for _, tt := range []struct {
 		input string
-		want  extractor.UpdatePolicy
+		want  lmeUpdatePolicy
 	}{
-		{input: "", want: extractor.UpdatePolicyReconcile},
-		{input: " RECONCILE ", want: extractor.UpdatePolicyReconcile},
-		{input: "history-preserving", want: extractor.UpdatePolicyHistoryPreserving},
-		{input: "ADD-ONLY", want: extractor.UpdatePolicyAddOnly},
+		{input: "", want: lmeUpdatePolicyReconcile},
+		{input: " RECONCILE ", want: lmeUpdatePolicyReconcile},
+		{input: "history-preserving", want: lmeUpdatePolicyHistoryPreserving},
+		{input: "ADD-ONLY", want: lmeUpdatePolicyAddOnly},
 	} {
 		*flagLMEUpdatePolicy = tt.input
 		*flagLMEAssistantResultExtraction = true
@@ -1909,6 +1927,7 @@ func testLongMemEvalBuildProvenance(revision string) lmeBuildProvenance {
 	return lmeBuildProvenance{
 		GoVersion:            "go-test",
 		Revision:             revision,
+		BuildProfile:         "candidate",
 		ModuleManifestSHA256: "manifest-sha",
 		ModuleSumSHA256:      "sum-sha",
 		Modules: map[string]lmeModuleProvenance{
@@ -1974,6 +1993,15 @@ func TestValidateLongMemEvalComparisonRequiresPinnedBuilds(t *testing.T) {
 				metadata["build"] = build
 			},
 			wantError: "missing module_sum_sha256",
+		},
+		{
+			name: "missing build profile",
+			mutate: func(metadata map[string]any) {
+				build := testLongMemEvalBuildProvenance("runner-revision")
+				build.BuildProfile = ""
+				metadata["build"] = build
+			},
+			wantError: "missing or unsupported build_profile",
 		},
 		{
 			name: "missing judge revision",

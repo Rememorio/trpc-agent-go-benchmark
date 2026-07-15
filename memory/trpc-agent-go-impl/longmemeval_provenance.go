@@ -42,6 +42,7 @@ const (
 var (
 	lmeInjectedBuildRevision        string
 	lmeInjectedBuildModified        string
+	lmeInjectedBuildProfile         string
 	lmeInjectedModuleManifestSHA256 string
 	lmeInjectedModuleSumSHA256      string
 )
@@ -50,6 +51,7 @@ type lmeBuildProvenance struct {
 	GoVersion            string                         `json:"go_version,omitempty"`
 	Revision             string                         `json:"benchmark_revision,omitempty"`
 	Modified             bool                           `json:"benchmark_modified"`
+	BuildProfile         string                         `json:"build_profile,omitempty"`
 	ModuleManifestSHA256 string                         `json:"module_manifest_sha256,omitempty"`
 	ModuleSumSHA256      string                         `json:"module_sum_sha256,omitempty"`
 	Modules              map[string]lmeModuleProvenance `json:"modules,omitempty"`
@@ -231,6 +233,7 @@ func currentLongMemEvalBuildProvenance() lmeBuildProvenance {
 		result,
 		lmeInjectedBuildRevision,
 		lmeInjectedBuildModified,
+		lmeInjectedBuildProfile,
 		lmeInjectedModuleManifestSHA256,
 		lmeInjectedModuleSumSHA256,
 	)
@@ -242,6 +245,9 @@ func longMemEvalBuildProvenanceIssue(build lmeBuildProvenance) string {
 	}
 	if build.Modified {
 		return "benchmark worktree was modified at build time"
+	}
+	if build.BuildProfile != "candidate" && build.BuildProfile != "upstream" {
+		return "build profile is missing or unsupported"
 	}
 	if strings.TrimSpace(build.ModuleManifestSHA256) == "" {
 		return "module manifest digest is missing"
@@ -287,6 +293,7 @@ func applyLongMemEvalInjectedProvenance(
 	result lmeBuildProvenance,
 	revision string,
 	modified string,
+	buildProfile string,
 	moduleManifestSHA256 string,
 	moduleSumSHA256 string,
 ) lmeBuildProvenance {
@@ -295,6 +302,9 @@ func applyLongMemEvalInjectedProvenance(
 	}
 	if value, err := strconv.ParseBool(strings.TrimSpace(modified)); err == nil {
 		result.Modified = value
+	}
+	if result.BuildProfile == "" {
+		result.BuildProfile = strings.TrimSpace(buildProfile)
 	}
 	if result.ModuleManifestSHA256 == "" {
 		result.ModuleManifestSHA256 = strings.TrimSpace(moduleManifestSHA256)

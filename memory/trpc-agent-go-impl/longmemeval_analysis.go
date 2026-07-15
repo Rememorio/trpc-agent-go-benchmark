@@ -285,6 +285,13 @@ func validateLongMemEvalBuildPair(
 		if strings.TrimSpace(build.GoVersion) == "" {
 			return fmt.Errorf("%s %s provenance is missing go_version", label, key)
 		}
+		if build.BuildProfile != "candidate" && build.BuildProfile != "upstream" {
+			return fmt.Errorf(
+				"%s %s provenance has missing or unsupported build_profile",
+				label,
+				key,
+			)
+		}
 		if strings.TrimSpace(build.ModuleManifestSHA256) == "" {
 			return fmt.Errorf(
 				"%s %s provenance is missing module_manifest_sha256",

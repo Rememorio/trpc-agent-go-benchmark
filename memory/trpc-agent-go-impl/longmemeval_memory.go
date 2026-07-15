@@ -200,10 +200,18 @@ type extractionOperation struct {
 	Location     string                  `json:"location,omitempty"`
 }
 
+type lmeUpdatePolicy string
+
+const (
+	lmeUpdatePolicyReconcile         lmeUpdatePolicy = "reconcile"
+	lmeUpdatePolicyHistoryPreserving lmeUpdatePolicy = "history-preserving"
+	lmeUpdatePolicyAddOnly           lmeUpdatePolicy = "add-only"
+)
+
 type lmePGVectorExtractionConfig struct {
-	UpdatePolicy                extractor.UpdatePolicy `json:"update_policy"`
-	AssistantResultExtraction   bool                   `json:"assistant_result_extraction"`
-	AssistantResultUpdatePolicy extractor.UpdatePolicy `json:"assistant_result_update_policy,omitempty"`
+	UpdatePolicy                lmeUpdatePolicy `json:"update_policy"`
+	AssistantResultExtraction   bool            `json:"assistant_result_extraction"`
+	AssistantResultUpdatePolicy lmeUpdatePolicy `json:"assistant_result_update_policy,omitempty"`
 }
 
 type traceMessage struct {
@@ -805,14 +813,14 @@ func currentLongMemEvalPGVectorExtractionConfig() (
 	lmePGVectorExtractionConfig,
 	error,
 ) {
-	var policy extractor.UpdatePolicy
+	var policy lmeUpdatePolicy
 	switch strings.ToLower(strings.TrimSpace(*flagLMEUpdatePolicy)) {
-	case "", string(extractor.UpdatePolicyReconcile):
-		policy = extractor.UpdatePolicyReconcile
-	case string(extractor.UpdatePolicyHistoryPreserving):
-		policy = extractor.UpdatePolicyHistoryPreserving
-	case string(extractor.UpdatePolicyAddOnly):
-		policy = extractor.UpdatePolicyAddOnly
+	case "", string(lmeUpdatePolicyReconcile):
+		policy = lmeUpdatePolicyReconcile
+	case string(lmeUpdatePolicyHistoryPreserving):
+		policy = lmeUpdatePolicyHistoryPreserving
+	case string(lmeUpdatePolicyAddOnly):
+		policy = lmeUpdatePolicyAddOnly
 	default:
 		return lmePGVectorExtractionConfig{}, fmt.Errorf(
 			"unsupported lme-update-policy %q: expected reconcile, history-preserving, or add-only",
@@ -829,16 +837,16 @@ func currentLongMemEvalPGVectorExtractionConfig() (
 }
 
 func assistantResultUpdatePolicy(
-	policy extractor.UpdatePolicy,
+	policy lmeUpdatePolicy,
 	enabled bool,
-) extractor.UpdatePolicy {
+) lmeUpdatePolicy {
 	if !enabled {
 		return ""
 	}
-	if policy == extractor.UpdatePolicyAddOnly {
-		return extractor.UpdatePolicyAddOnly
+	if policy == lmeUpdatePolicyAddOnly {
+		return lmeUpdatePolicyAddOnly
 	}
-	return extractor.UpdatePolicyHistoryPreserving
+	return lmeUpdatePolicyHistoryPreserving
 }
 
 func runLongMemEvalMemory(ctx context.Context) error {
@@ -1292,14 +1300,12 @@ func newLongMemEvalPGVectorBackend(
 	if readOnly {
 		opts = append(opts, memorypgvector.WithSkipDBInit(true))
 	} else {
+		extractorOptions, err := longMemEvalExtractorOptions(pgExtractionConfig)
+		if err != nil {
+			return nil, err
+		}
 		tracingExtractor = &lmeTracingExtractor{
-			MemoryExtractor: extractor.NewExtractor(
-				llm,
-				extractor.WithUpdatePolicy(pgExtractionConfig.UpdatePolicy),
-				extractor.WithAssistantResultExtraction(
-					pgExtractionConfig.AssistantResultExtraction,
-				),
-			),
+			MemoryExtractor: extractor.NewExtractor(llm, extractorOptions...),
 		}
 		opts = append(opts,
 			memorypgvector.WithExtractor(tracingExtractor),

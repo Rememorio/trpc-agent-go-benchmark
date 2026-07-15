@@ -227,9 +227,11 @@ benchmark commit and module manifest/checksum digests into the result
 provenance. Set `LME_AGENT_REPLACEMENT=<module-path>@<version>` to build an
 upstream arm from a deterministic temporary modfile without editing the
 worktree; the resolved module versions and both temporary manifest digests are
-recorded. Plain `go run .` remains useful for local smoke tests, but its output
-may omit formal provenance and is then intentionally rejected by strict
-comparison.
+recorded. `LME_AGENT_PROFILE=upstream` compiles the same runner without
+candidate-only extractor options and rejects non-default extraction settings;
+the default `candidate` profile enables those options. Plain `go run .` remains
+useful for local smoke tests, but its output may omit formal provenance and is
+then intentionally rejected by strict comparison.
 
 ```bash
 export PGVECTOR_DSN="postgres://user:password@localhost:5432/vectordb?sslmode=disable"
@@ -258,6 +260,7 @@ go run . \
 
 # Stratified 16-question development baseline plus a frozen Mem0 reference arm.
 LME_AGENT_REPLACEMENT="trpc.group/trpc-go/trpc-agent-go@<upstream-pseudo-version>" \
+LME_AGENT_PROFILE=upstream \
 ./run-longmemeval.sh \
   -dataset-format longmemeval \
   -dataset ../../summary/data/longmemeval-cleaned/longmemeval_oracle.json \
@@ -266,7 +269,11 @@ LME_AGENT_REPLACEMENT="trpc.group/trpc-go/trpc-agent-go@<upstream-pseudo-version
   -lme-abstention-count 4 \
   -lme-sample-seed 48 \
   -lme-implementation upstream-main-<commit> \
+  -lme-update-policy reconcile \
+  -lme-assistant-result-extraction=false \
+  -lme-answer=true \
   -mem0-llm-temperature 0 \
+  -vector-topk 30 \
   -table-suffix _lme_upstream \
   -output ../results/lme-upstream
 
@@ -280,6 +287,10 @@ LME_AGENT_REPLACEMENT="trpc.group/trpc-go/trpc-agent-go@<upstream-pseudo-version
   -lme-abstention-count 4 \
   -lme-sample-seed 48 \
   -lme-implementation candidate-<commit> \
+  -lme-update-policy reconcile \
+  -lme-assistant-result-extraction=true \
+  -lme-answer=true \
+  -vector-topk 30 \
   -table-suffix _lme_candidate \
   -output ../results/lme-candidate
 
