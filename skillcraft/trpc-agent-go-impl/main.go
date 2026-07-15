@@ -1576,8 +1576,12 @@ func finalizationRetryPrompt(workspace, issue string) string {
 	b.WriteString(issue)
 	b.WriteString(". This is a finalize-only retry. Do not call any domain or API tool, " +
 		"even if an earlier result is no longer visible in the conversation. ")
-	if info, err := os.Stat(filepath.Join(workspace, "working_notes.json")); err == nil && !info.IsDir() {
+	notesPath := filepath.Join(workspace, "working_notes.json")
+	if raw, err := os.ReadFile(notesPath); err == nil && json.Valid(raw) {
 		b.WriteString("Read working_notes.json now; it contains the collected task data. ")
+	} else if err == nil {
+		b.WriteString("Read working_notes.json now; it contains collected task data but is not one valid JSON document. " +
+			"Merge every object into one JSON object and overwrite the entire file before using it. ")
 	} else {
 		b.WriteString("Use the existing conversation and workspace files as the collected task data. ")
 	}
@@ -1936,7 +1940,8 @@ func buildInstructionForMode(
 			"For larger multi-entity tasks, do not rely on raw tool outputs staying in context forever.",
 			"Process exactly one entity end-to-end at a time. Do not batch the same endpoint across several entities, even if a loaded skill suggests parallel calls.",
 			"After completing each entity, update one compact working_notes.json file with only its derived summaries and required fields. This is mandatory before starting the next entity.",
-			"Keep working_notes.json valid JSON and read it back when assembling the final artifact instead of depending on full earlier tool outputs.",
+			"Before each update, read working_notes.json if it exists, merge the current entity into one top-level object, and overwrite the entire file with exactly one valid JSON document. Never append another JSON object or use JSON Lines.",
+			"Read working_notes.json when assembling the final artifact instead of depending on full earlier tool outputs.",
 			"Do not store raw arrays or raw tool dumps in helper notes, and do not treat helper notes as the final deliverable.",
 		)
 	}
@@ -1981,7 +1986,8 @@ func buildUserPrompt(task *taskDefinition, workspace string, availableSkills []s
 		b.WriteString("- This is a larger multi-entity task. Raw tool outputs may become too large to keep in context.\n")
 		b.WriteString("- Process exactly one entity end-to-end at a time. Do not batch the same endpoint across several entities, even if a loaded skill suggests parallel calls.\n")
 		b.WriteString("- After completing each entity, update one compact `working_notes.json` file with only its derived summaries and required fields. This is mandatory before starting the next entity.\n")
-		b.WriteString("- Keep `working_notes.json` valid JSON and read it back when assembling the final artifact instead of relying on full earlier tool outputs.\n")
+		b.WriteString("- Before each update, read `working_notes.json` if it exists, merge the current entity into one top-level object, and overwrite the entire file with exactly one valid JSON document. Never append another JSON object or use JSON Lines.\n")
+		b.WriteString("- Read `working_notes.json` when assembling the final artifact instead of relying on full earlier tool outputs.\n")
 		b.WriteString("- Do not store raw arrays or raw tool dumps in helper notes.\n")
 	}
 	if taskDocMayContainPreviewMarkers(task.TaskDoc) {

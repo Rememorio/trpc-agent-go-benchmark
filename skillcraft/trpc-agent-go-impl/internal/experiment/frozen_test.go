@@ -82,6 +82,63 @@ func TestAggregateFrozenRejectsCandidateChangedBetweenSeeds(t *testing.T) {
 	require.ErrorContains(t, err, "multiple frozen candidates")
 }
 
+func TestAggregateFrozenV2UsesPrimarySafetyInsteadOfOptimizerScalarGate(t *testing.T) {
+	protocol := DefaultFrozenProtocol()
+	var paths []string
+	for _, seed := range []int64{503, 504} {
+		document := completeFrozenDocument(protocol, seed)
+		document.Optimization.Search.PromotionEligible = false
+		document.Optimization.Search.PromotionReason = "critical case regressed on scalar score"
+		path := filepath.Join(t.TempDir(), fmt.Sprintf("seed-%d", seed), "results.json")
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+		writeFrozenDocument(t, path, document)
+		paths = append(paths, path)
+	}
+
+	evidence, err := AggregateFrozen(paths, protocol)
+	require.NoError(t, err)
+	require.True(t, evidence.PromotionEligible)
+	require.False(t, evidence.Sources[0].OptimizerPromotionEligible)
+	require.True(t, gateByName(t, evidence.Gates, "validation-pair-primary-safety").Passed)
+	require.True(t, gateByName(t, evidence.Gates, "untouched-pair-primary-safety").Passed)
+}
+
+func TestAggregateFrozenV2RejectsUntouchedPrimaryLoss(t *testing.T) {
+	protocol := DefaultFrozenProtocol()
+	var paths []string
+	for _, seed := range []int64{505, 506} {
+		document := completeFrozenDocument(protocol, seed)
+		document.Optimization.Comparison.Holdout[0].Candidate.Objectives["official_quality"] = 0.94
+		path := filepath.Join(t.TempDir(), fmt.Sprintf("seed-%d", seed), "results.json")
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+		writeFrozenDocument(t, path, document)
+		paths = append(paths, path)
+	}
+
+	evidence, err := AggregateFrozen(paths, protocol)
+	require.NoError(t, err)
+	require.False(t, evidence.PromotionEligible)
+	require.False(t, gateByName(t, evidence.Gates, "untouched-pair-primary-safety").Passed)
+}
+
+func TestAggregateFrozenV1PreservesOptimizerPromotionGate(t *testing.T) {
+	protocol := FrozenProtocolV1()
+	var paths []string
+	for _, seed := range []int64{501, 502} {
+		document := completeFrozenDocument(protocol, seed)
+		document.Optimization.Search.PromotionEligible = false
+		path := filepath.Join(t.TempDir(), fmt.Sprintf("seed-%d", seed), "results.json")
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+		writeFrozenDocument(t, path, document)
+		paths = append(paths, path)
+	}
+
+	evidence, err := AggregateFrozen(paths, protocol)
+	require.NoError(t, err)
+	require.False(t, evidence.PromotionEligible)
+	require.False(t, gateByName(t, evidence.Gates, "per-run-promotion").Passed)
+}
+
 func completeFrozenDocument(protocol FrozenProtocol, seed int64) frozenTestDocument {
 	document := frozenTestDocument{Optimization: frozenTestOptimization{
 		RandomSeed:       seed,

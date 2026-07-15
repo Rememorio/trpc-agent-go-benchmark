@@ -416,7 +416,9 @@ Output ONLY summary statistics, NOT raw data arrays!`,
 	require.Contains(t, prompt, "Do not batch the same endpoint across several entities")
 	require.Contains(t, prompt, "After completing each entity")
 	require.Contains(t, prompt, "This is mandatory before starting the next entity")
-	require.Contains(t, prompt, "read it back when assembling the final artifact")
+	require.Contains(t, prompt, "overwrite the entire file with exactly one valid JSON document")
+	require.Contains(t, prompt, "Never append another JSON object or use JSON Lines")
+	require.Contains(t, prompt, "when assembling the final artifact")
 	require.Contains(t, prompt, "Do not store raw arrays or raw tool dumps")
 	require.True(t, taskNeedsWorkingNotes(task))
 }
@@ -436,6 +438,22 @@ func TestFinalizationRetryUsesWorkingNotesWithoutDomainCalls(t *testing.T) {
 	require.Contains(t, prompt, "Read working_notes.json now")
 	require.Contains(t, prompt, "local-write_final_json")
 	require.Contains(t, prompt, "local-claim_done")
+}
+
+func TestFinalizationRetryNormalizesInvalidWorkingNotes(t *testing.T) {
+	workspace := t.TempDir()
+	require.NoError(t, os.WriteFile(
+		filepath.Join(workspace, "working_notes.json"), []byte(`{"US":{}}{"CHN":{}}`), 0o644,
+	))
+
+	prompt := finalizationRetryPrompt(
+		workspace, "required output result.json is missing",
+	)
+
+	require.Contains(t, prompt, "not one valid JSON document")
+	require.Contains(t, prompt, "Merge every object into one JSON object")
+	require.Contains(t, prompt, "overwrite the entire file")
+	require.Contains(t, prompt, "Do not call any domain or API tool")
 }
 
 func TestResultStatusFromEvaluation(t *testing.T) {

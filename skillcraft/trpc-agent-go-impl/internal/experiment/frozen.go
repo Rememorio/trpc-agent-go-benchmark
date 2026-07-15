@@ -25,28 +25,44 @@ import (
 // frozen candidate confirmation. Known regression cases remain visible but are
 // not mislabeled as untouched holdout.
 type FrozenProtocol struct {
-	Name                     string   `json:"name"`
-	ValidationScales         []string `json:"validationScales"`
-	HoldoutScales            []string `json:"holdoutScales"`
-	Repeats                  int      `json:"repeats"`
-	MinimumSeedsPerFamily    int      `json:"minimumSeedsPerFamily"`
-	KnownRegressionCases     []string `json:"knownRegressionCases"`
-	MeaningfulQualityBenefit float64  `json:"meaningfulQualityBenefitPP"`
-	MeaningfulTokenReduction float64  `json:"meaningfulTokenReduction"`
+	Name                      string   `json:"name"`
+	ValidationScales          []string `json:"validationScales"`
+	HoldoutScales             []string `json:"holdoutScales"`
+	Repeats                   int      `json:"repeats"`
+	MinimumSeedsPerFamily     int      `json:"minimumSeedsPerFamily"`
+	KnownRegressionCases      []string `json:"knownRegressionCases"`
+	MeaningfulQualityBenefit  float64  `json:"meaningfulQualityBenefitPP"`
+	MeaningfulTokenReduction  float64  `json:"meaningfulTokenReduction"`
+	RequireOptimizerPromotion bool     `json:"requireOptimizerPromotion"`
+	RequirePairPrimarySafety  bool     `json:"requirePairPrimarySafety"`
+}
+
+// FrozenProtocolV1 preserves the original confirmation protocol. It treats the
+// optimizer's internal scalar-score promotion verdict as a deployment gate.
+func FrozenProtocolV1() FrozenProtocol {
+	return FrozenProtocol{
+		Name:                      "skillcraft-frozen-holdout-v1",
+		ValidationScales:          []string{"e2", "m2"},
+		HoldoutScales:             []string{"e3", "h1"},
+		Repeats:                   2,
+		MinimumSeedsPerFamily:     2,
+		KnownRegressionCases:      []string{"recipe-cookbook-builder/h1"},
+		MeaningfulQualityBenefit:  0.5,
+		MeaningfulTokenReduction:  0.05,
+		RequireOptimizerPromotion: true,
+	}
 }
 
 // DefaultFrozenProtocol is fixed before strict confirmation runs are read.
+// It uses primary evaluator outcomes for per-case safety and evaluates token
+// efficiency only after pooling independent seeds. This avoids treating tiny
+// per-case efficiency noise in an optimizer's scalar score as a quality loss.
 func DefaultFrozenProtocol() FrozenProtocol {
-	return FrozenProtocol{
-		Name:                     "skillcraft-frozen-holdout-v1",
-		ValidationScales:         []string{"e2", "m2"},
-		HoldoutScales:            []string{"e3", "h1"},
-		Repeats:                  2,
-		MinimumSeedsPerFamily:    2,
-		KnownRegressionCases:     []string{"recipe-cookbook-builder/h1"},
-		MeaningfulQualityBenefit: 0.5,
-		MeaningfulTokenReduction: 0.05,
-	}
+	protocol := FrozenProtocolV1()
+	protocol.Name = "skillcraft-frozen-holdout-v2"
+	protocol.RequireOptimizerPromotion = false
+	protocol.RequirePairPrimarySafety = true
+	return protocol
 }
 
 // FrozenMetrics pools evaluator objectives from paired candidate comparisons.
@@ -82,11 +98,12 @@ type FrozenComparison struct {
 
 // FrozenSource identifies one canonical fixed-comparison result.
 type FrozenSource struct {
-	Name          string `json:"name"`
-	Family        string `json:"family"`
-	RandomSeed    int64  `json:"randomSeed"`
-	CandidateHash string `json:"candidateHash"`
-	Promoted      bool   `json:"promoted"`
+	Name                       string `json:"name"`
+	Family                     string `json:"family"`
+	RandomSeed                 int64  `json:"randomSeed"`
+	CandidateHash              string `json:"candidateHash"`
+	OptimizerPromotionEligible bool   `json:"optimizerPromotionEligible"`
+	OptimizerPromotionReason   string `json:"optimizerPromotionReason,omitempty"`
 }
 
 // FrozenEvidence is the machine-readable strict confirmation verdict.
@@ -184,11 +201,12 @@ func AggregateFrozen(paths []string, protocol FrozenProtocol) (*FrozenEvidence, 
 		promoted := input.Optimization.Search.PromotionEligible
 		allPromoted = allPromoted && promoted
 		sources = append(sources, FrozenSource{
-			Name:          filepath.Base(filepath.Dir(path)),
-			Family:        family,
-			RandomSeed:    input.Optimization.RandomSeed,
-			CandidateHash: hash,
-			Promoted:      promoted,
+			Name:                       filepath.Base(filepath.Dir(path)),
+			Family:                     family,
+			RandomSeed:                 input.Optimization.RandomSeed,
+			CandidateHash:              hash,
+			OptimizerPromotionEligible: promoted,
+			OptimizerPromotionReason:   input.Optimization.Search.PromotionReason,
 		})
 		validation = append(validation, sourceFrozenPairs(input.Optimization.Comparison.Validation)...)
 		for _, pair := range sourceFrozenPairs(input.Optimization.Comparison.Holdout) {
@@ -413,13 +431,33 @@ func frozenGates(e *FrozenEvidence, allPromoted bool) []GateCheck {
 		e.Untouched.Candidate.AverageQuality >= e.Untouched.Seed.AverageQuality
 	qualityBenefit := e.Holdout.Delta.QualityPP >= e.Protocol.MeaningfulQualityBenefit
 	tokenBenefit := e.Holdout.Delta.AgentTokensPC <= -e.Protocol.MeaningfulTokenReduction*100
-	return []GateCheck{
-		{Name: "per-run-promotion", Passed: allPromoted, Details: "every canonical fixed comparison must pass its validation and holdout gate"},
+	gates := []GateCheck{
 		{Name: "holdout-pass-non-regression", Passed: passNonRegression, Details: fmt.Sprintf("candidate %.2f%% vs seed %.2f%%", e.Holdout.Candidate.PassRate, e.Holdout.Seed.PassRate)},
 		{Name: "holdout-quality-non-regression", Passed: qualityNonRegression, Details: fmt.Sprintf("candidate %.2f vs seed %.2f", e.Holdout.Candidate.AverageQuality, e.Holdout.Seed.AverageQuality)},
 		{Name: "untouched-non-regression", Passed: untouchedNonRegression, Details: fmt.Sprintf("%d untouched pair(s)", e.Untouched.Seed.Pairs)},
 		{Name: "meaningful-benefit", Passed: qualityBenefit || tokenBenefit, Details: fmt.Sprintf("quality delta %.2fpp or token delta %.2f%%", e.Holdout.Delta.QualityPP, e.Holdout.Delta.AgentTokensPC)},
 	}
+	if e.Protocol.RequireOptimizerPromotion {
+		gates = append([]GateCheck{{
+			Name: "per-run-promotion", Passed: allPromoted,
+			Details: "every canonical fixed comparison must pass its optimizer promotion gate",
+		}}, gates...)
+	}
+	if e.Protocol.RequirePairPrimarySafety {
+		gates = append([]GateCheck{
+			{
+				Name:    "validation-pair-primary-safety",
+				Passed:  e.Validation.Outcomes.PassLosses == 0 && e.Validation.Outcomes.QualityLosses == 0,
+				Details: fmt.Sprintf("%d pass loss(es), %d quality loss(es)", e.Validation.Outcomes.PassLosses, e.Validation.Outcomes.QualityLosses),
+			},
+			{
+				Name:    "untouched-pair-primary-safety",
+				Passed:  e.Untouched.Outcomes.PassLosses == 0 && e.Untouched.Outcomes.QualityLosses == 0,
+				Details: fmt.Sprintf("%d pass loss(es), %d quality loss(es)", e.Untouched.Outcomes.PassLosses, e.Untouched.Outcomes.QualityLosses),
+			},
+		}, gates...)
+	}
+	return gates
 }
 
 func sameStrings(left, right []string) bool {
