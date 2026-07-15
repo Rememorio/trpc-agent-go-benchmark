@@ -7,12 +7,11 @@ require (
 	trpc.group/trpc-go/trpc-agent-go/evaluation v1.7.0
 )
 
-// Point at the local trpc-agent-go checkout so the benchmark exercises the
-// refactored tool_search plugin (namespace catalog + tool_search function)
-// rather than the published v1.7.0 module.
+// Pin the public revision used by this benchmark until the corresponding
+// toolsearch changes are released by trpc-agent-go.
 replace (
-	trpc.group/trpc-go/trpc-agent-go => ../../../trpc-agent-go
-	trpc.group/trpc-go/trpc-agent-go/evaluation => ../../../trpc-agent-go/evaluation
+	trpc.group/trpc-go/trpc-agent-go => github.com/qiefengying/trpc-agent-go v0.0.0-20260715064755-1d9c8ca2c432
+	trpc.group/trpc-go/trpc-agent-go/evaluation => github.com/qiefengying/trpc-agent-go/evaluation v0.0.0-20260715064755-1d9c8ca2c432
 )
 
 require (
