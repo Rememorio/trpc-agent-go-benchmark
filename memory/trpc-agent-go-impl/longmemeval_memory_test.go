@@ -126,6 +126,66 @@ func TestLongMemEvalBuildProvenance(t *testing.T) {
 	}
 }
 
+func TestLongMemEvalBuildProvenanceIssue(t *testing.T) {
+	t.Parallel()
+	pinned := lmeBuildProvenance{
+		GoVersion: "go-test",
+		Revision:  "benchmark-sha",
+		Modules: map[string]lmeModuleProvenance{
+			lmeAgentModulePath: {
+				Version: "v1.7.0",
+			},
+			lmePGVectorModulePath: {
+				ReplacementPath:    "github.com/example/trpc-agent-go/memory/pgvector",
+				ReplacementVersion: "v0.0.0-test",
+			},
+		},
+	}
+	if issue := longMemEvalBuildProvenanceIssue(pinned); issue != "" {
+		t.Fatalf("pinned build reported an issue: %s", issue)
+	}
+
+	tests := []struct {
+		name  string
+		build lmeBuildProvenance
+		want  string
+	}{
+		{
+			name:  "missing revision",
+			build: lmeBuildProvenance{},
+			want:  "benchmark revision is missing",
+		},
+		{
+			name: "modified",
+			build: lmeBuildProvenance{
+				Revision: "benchmark-sha",
+				Modified: true,
+			},
+			want: "benchmark worktree was modified at build time",
+		},
+		{
+			name: "local memory module",
+			build: lmeBuildProvenance{
+				Revision: "benchmark-sha",
+				Modules: map[string]lmeModuleProvenance{
+					lmeAgentModulePath: {
+						LocalReplacement: true,
+					},
+				},
+			},
+			want: "uses an unpinned local replacement",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			if issue := longMemEvalBuildProvenanceIssue(test.build); !strings.Contains(issue, test.want) {
+				t.Fatalf("issue = %q, want substring %q", issue, test.want)
+			}
+		})
+	}
+}
+
 func TestLongMemEvalExperimentDigests(t *testing.T) {
 	t.Parallel()
 

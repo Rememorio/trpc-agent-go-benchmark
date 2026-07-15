@@ -230,6 +230,47 @@ func currentLongMemEvalBuildProvenance() lmeBuildProvenance {
 	)
 }
 
+func longMemEvalBuildProvenanceIssue(build lmeBuildProvenance) string {
+	if strings.TrimSpace(build.Revision) == "" {
+		return "benchmark revision is missing"
+	}
+	if build.Modified {
+		return "benchmark worktree was modified at build time"
+	}
+	if err := validateLongMemEvalMemoryModules(build.Modules); err != nil {
+		return err.Error()
+	}
+	return ""
+}
+
+func validateLongMemEvalMemoryModules(
+	modules map[string]lmeModuleProvenance,
+) error {
+	for _, path := range []string{lmeAgentModulePath, lmePGVectorModulePath} {
+		module, ok := modules[path]
+		if !ok {
+			return fmt.Errorf("missing module provenance for %s", path)
+		}
+		if module.LocalReplacement {
+			return fmt.Errorf(
+				"module %s uses an unpinned local replacement",
+				path,
+			)
+		}
+		version := strings.TrimSpace(module.ReplacementVersion)
+		if version == "" {
+			version = strings.TrimSpace(module.Version)
+		}
+		if version == "" || version == "(devel)" {
+			return fmt.Errorf(
+				"module %s is missing a pinned version",
+				path,
+			)
+		}
+	}
+	return nil
+}
+
 func applyLongMemEvalInjectedProvenance(
 	result lmeBuildProvenance,
 	revision string,

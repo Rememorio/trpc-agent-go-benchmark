@@ -842,6 +842,18 @@ func assistantResultUpdatePolicy(
 }
 
 func runLongMemEvalMemory(ctx context.Context) error {
+	if strings.TrimSpace(*flagLMECompareResults) == "" &&
+		strings.TrimSpace(*flagLMEAnalyzeResults) == "" {
+		if issue := longMemEvalBuildProvenanceIssue(
+			currentLongMemEvalBuildProvenance(),
+		); issue != "" {
+			log.Printf(
+				"WARNING: LongMemEval build provenance is not suitable for strict comparison: %s; "+
+					"use ./run-longmemeval.sh from a clean worktree for formal runs",
+				issue,
+			)
+		}
+	}
 	if raw := strings.TrimSpace(*flagLMECompareResults); raw != "" {
 		baseline, candidate, err := parseLongMemEvalComparePaths(raw)
 		if err != nil {

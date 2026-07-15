@@ -221,6 +221,12 @@ The unified [English](results/REPORT.md) and
 [Chinese](results/REPORT.zh_CN.md) reports include the current pgvector and
 self-hosted mem0 comparison.
 
+Use `./run-longmemeval.sh` for every formal ingestion, answer, rerank, refresh,
+or judge run. It rejects a modified benchmark worktree and injects the exact
+benchmark commit into the result provenance. Plain `go run .` remains useful
+for local smoke tests, but its output may omit `benchmark_revision` and is then
+intentionally rejected by strict comparison.
+
 ```bash
 export PGVECTOR_DSN="postgres://user:password@localhost:5432/vectordb?sslmode=disable"
 export MEM0_HOST="http://localhost:8888"
@@ -247,7 +253,7 @@ go run . \
   -output ../results/lme-badcase
 
 # Stratified 16-question development baseline plus a frozen Mem0 reference arm.
-go run . \
+./run-longmemeval.sh \
   -dataset-format longmemeval \
   -dataset ../../summary/data/longmemeval-cleaned/longmemeval_oracle.json \
   -memory-backend pgvector,mem0 \
@@ -261,7 +267,7 @@ go run . \
 
 # Run candidate pgvector on the exact same selection. Do not rerun Mem0: the
 # comparison command reuses the frozen reference arm from the upstream run.
-go run . \
+./run-longmemeval.sh \
   -dataset-format longmemeval \
   -dataset ../../summary/data/longmemeval-cleaned/longmemeval_oracle.json \
   -memory-backend pgvector \
@@ -273,7 +279,7 @@ go run . \
   -output ../results/lme-candidate
 
 # Add semantic-judge results to a completed run.
-go run . \
+./run-longmemeval.sh \
   -dataset-format longmemeval \
   -lme-judge-results ../results/lme-upstream/results.json \
   -lme-judge-runs 3 \
@@ -281,11 +287,11 @@ go run . \
 
 # Regenerate only the answers from saved retrieval hits after changing the
 # shared answer protocol, then judge that output.
-go run . \
+./run-longmemeval.sh \
   -dataset-format longmemeval \
   -lme-reanswer-results ../results/lme-upstream/results.json \
   -output ../results/lme-upstream
-go run . \
+./run-longmemeval.sh \
   -dataset-format longmemeval \
   -lme-judge-results ../results/lme-upstream/reanswered_results.json \
   -lme-judge-runs 3 \
@@ -293,7 +299,7 @@ go run . \
 
 # Re-run pgvector retrieval and answers against the exact persisted memories
 # from a completed run, without paying the ingestion cost again.
-go run . \
+./run-longmemeval.sh \
   -dataset-format longmemeval \
   -lme-refresh-retrieval-results ../results/lme-candidate/results.json \
   -table-suffix _lme_candidate \
@@ -306,7 +312,7 @@ go run . \
 # calls, errors, latency, and token usage are retained for diagnosis. Treat this
 # as an ablation: compare reranked arms only when their recorded rerank protocol
 # matches, and do not mix them with the frozen non-reranked baseline.
-go run . \
+./run-longmemeval.sh \
   -dataset-format longmemeval \
   -lme-rerank-results ../results/lme-upstream/results.json \
   -lme-rerank-topn 12 \

@@ -329,26 +329,6 @@ func longMemEvalMetadataBuild(metadata map[string]any, key string) (lmeBuildProv
 	return build, nil
 }
 
-func validateLongMemEvalMemoryModules(modules map[string]lmeModuleProvenance) error {
-	for _, path := range []string{lmeAgentModulePath, lmePGVectorModulePath} {
-		module, ok := modules[path]
-		if !ok {
-			return fmt.Errorf("missing module provenance for %s", path)
-		}
-		if module.LocalReplacement {
-			return fmt.Errorf("module %s uses an unpinned local replacement", path)
-		}
-		version := strings.TrimSpace(module.ReplacementVersion)
-		if version == "" {
-			version = strings.TrimSpace(module.Version)
-		}
-		if version == "" || version == "(devel)" {
-			return fmt.Errorf("module %s is missing a pinned version", path)
-		}
-	}
-	return nil
-}
-
 func longMemEvalMetadataPresent(metadata map[string]any, key string) bool {
 	if metadata == nil {
 		return false
