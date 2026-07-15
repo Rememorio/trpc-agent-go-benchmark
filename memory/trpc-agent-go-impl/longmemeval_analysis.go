@@ -215,6 +215,17 @@ func validateLongMemEvalComparison(baseline, candidate *runResult) error {
 	); err != nil {
 		return err
 	}
+	if longMemEvalMetadataPresent(baseline.Metadata, "reanswer_model") ||
+		longMemEvalMetadataPresent(candidate.Metadata, "reanswer_model") {
+		if err := validateLongMemEvalBuildPair(
+			baseline.Metadata,
+			candidate.Metadata,
+			"reanswer_build",
+			false,
+		); err != nil {
+			return err
+		}
+	}
 	if longMemEvalMetadataPresent(baseline.Metadata, "judge_runs") ||
 		longMemEvalMetadataPresent(candidate.Metadata, "judge_runs") {
 		if err := validateLongMemEvalBuildPair(

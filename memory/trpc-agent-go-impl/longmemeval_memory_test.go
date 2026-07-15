@@ -1706,6 +1706,23 @@ func TestValidateLongMemEvalComparisonRequiresPinnedBuilds(t *testing.T) {
 	}
 }
 
+func TestValidateLongMemEvalComparisonRequiresPinnedReanswerBuild(t *testing.T) {
+	t.Parallel()
+
+	baseline := &runResult{Metadata: testLongMemEvalComparisonMetadata("upstream-main")}
+	candidate := &runResult{Metadata: testLongMemEvalComparisonMetadata("candidate-2196")}
+	for _, metadata := range []map[string]any{baseline.Metadata, candidate.Metadata} {
+		metadata["reanswer_model"] = "answer-model"
+		metadata["reanswer_model_variant"] = "glm"
+		metadata["reanswer_build"] = testLongMemEvalBuildProvenance("reanswer-revision")
+	}
+	candidate.Metadata["reanswer_build"] = testLongMemEvalBuildProvenance("")
+	err := validateLongMemEvalComparison(baseline, candidate)
+	if err == nil || !strings.Contains(err.Error(), "reanswer_build provenance is missing benchmark_revision") {
+		t.Fatalf("reanswer build provenance error = %v", err)
+	}
+}
+
 func TestValidateLongMemEvalComparisonRequiresMem0Implementation(t *testing.T) {
 	t.Parallel()
 
