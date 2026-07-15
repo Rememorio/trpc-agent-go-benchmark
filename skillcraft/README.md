@@ -199,9 +199,16 @@ adapts SkillCraft workspaces, agent execution, and the official evaluator to
 that internal contract.
 
 The default scaled-task split trains on `e1,e2`, selects on `e3,m1`, and
-holds out `m2,h1`. Splits must be disjoint. The included seed specs are JSON
-representations of managed skills so experiments do not need a lossy
-SKILL.md parser.
+holds out `m2,h1`. Splits must be disjoint. The included seed inputs are either
+strict `SkillSpec` JSON documents or immutable evolution `Revision` documents
+containing a spec. This preserves reviewer provenance without requiring a
+lossy `SKILL.md` parser.
+
+The five-family controlled inputs live under
+[`seeds/reflective_full`](seeds/reflective_full/README.md). Four are direct
+approval-gate revision snapshots from the online reviewer; the World Bank seed
+predates revision storage and is the structured equivalent of the repository's
+existing generic managed skill.
 
 `weather_multi_city_legacy.json` is a conservative control for checking that
 unhelpful rewrites are rejected instead of being promoted merely because they

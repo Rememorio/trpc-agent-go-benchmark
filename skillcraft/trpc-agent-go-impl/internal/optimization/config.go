@@ -12,6 +12,7 @@
 package optimization
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -175,25 +176,47 @@ func BuildDataset(tasks []Task, cfg Config) (framework.Dataset, error) {
 	}, nil
 }
 
-// LoadSpec decodes one strict SkillSpec JSON document.
+// LoadSpec decodes one strict SkillSpec JSON document or an immutable
+// evolution Revision document containing a spec. Accepting revision metadata
+// lets experiments retain the exact provenance of reviewer-generated seeds.
 func LoadSpec(path string) (*evolution.SkillSpec, error) {
-	file, err := os.Open(path)
+	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("open skill spec: %w", err)
 	}
-	defer file.Close()
-	decoder := json.NewDecoder(file)
-	decoder.DisallowUnknownFields()
-	var spec evolution.SkillSpec
-	if err := decoder.Decode(&spec); err != nil {
+	var probe map[string]json.RawMessage
+	if err := json.NewDecoder(bytes.NewReader(raw)).Decode(&probe); err != nil {
 		return nil, fmt.Errorf("decode skill spec: %w", err)
+	}
+	if _, revision := probe["spec"]; revision {
+		var envelope evolution.Revision
+		if err := decodeStrictJSON(raw, &envelope); err != nil {
+			return nil, fmt.Errorf("decode skill revision: %w", err)
+		}
+		if envelope.Spec == nil {
+			return nil, errors.New("skill revision has no spec")
+		}
+		return envelope.Spec, nil
+	}
+	var spec evolution.SkillSpec
+	if err := decodeStrictJSON(raw, &spec); err != nil {
+		return nil, fmt.Errorf("decode skill spec: %w", err)
+	}
+	return &spec, nil
+}
+
+func decodeStrictJSON(raw []byte, dst any) error {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(dst); err != nil {
+		return err
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
 		if err == nil {
-			return nil, errors.New("skill spec contains trailing JSON values")
+			return errors.New("contains trailing JSON values")
 		}
-		return nil, fmt.Errorf("decode skill spec trailer: %w", err)
+		return fmt.Errorf("decode trailer: %w", err)
 	}
-	return &spec, nil
+	return nil
 }
