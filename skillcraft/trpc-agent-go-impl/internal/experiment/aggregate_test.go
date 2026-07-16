@@ -36,6 +36,10 @@ func TestAggregatePassesCompleteImprovingMatrix(t *testing.T) {
 	require.Equal(t, 3, evidence.Coverage.Runs)
 	require.Len(t, evidence.Runs, 3)
 	require.Equal(t, int64(10), evidence.Runs[0].RootSeed)
+	require.Equal(t, "test-model", evidence.Runs[0].RequestedModel)
+	require.Equal(t, "test-model", evidence.Runs[0].RequestedReviewerModel)
+	require.Equal(t, 80, evidence.Runs[0].MaxToolIterations)
+	require.InDelta(t, 0, *evidence.Runs[0].EvaluationTemperature, 0)
 	require.Equal(t, 30, evidence.Runs[0].Arms[armOptimized].Tasks)
 	require.InDelta(t, -11.11,
 		evidence.Runs[0].OptimizedEvolutionVsEvolution.Delta.EndToEndTokensPC,
@@ -80,13 +84,37 @@ func TestAggregateRejectsUnpairedTaskSeed(t *testing.T) {
 	require.ErrorContains(t, err, "not seed-paired across arms")
 }
 
+func TestAggregateRejectsMixedRuntimeModels(t *testing.T) {
+	protocol := DefaultProtocol()
+	first := completeInput(protocol, 10)
+	second := completeInput(protocol, 11)
+	second.Model = "other-model"
+	var paths []string
+	for run, input := range []inputResult{first, second} {
+		path := filepath.Join(t.TempDir(), fmt.Sprintf("run-%d", run), "results.json")
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+		writeInput(t, path, input)
+		paths = append(paths, path)
+	}
+
+	_, err := Aggregate(paths, protocol)
+	require.ErrorContains(t, err, "runtime configuration differs")
+}
+
 func completeInput(protocol Protocol, rootSeed int64) inputResult {
+	temperature := 0.0
+	maxTokens := 8192
 	input := inputResult{
-		EvaluationSeed:     &rootSeed,
-		RunOrder:           []string{armBaseline, armEvolution, armOptimized},
-		Baseline:           &inputArm{},
-		Evolution:          &inputArm{},
-		OptimizedEvolution: &inputArm{},
+		Model:                 "test-model",
+		ReviewerModel:         "test-model",
+		EvaluationSeed:        &rootSeed,
+		EvaluationTemperature: &temperature,
+		MaxToolIterations:     80,
+		MaxTokens:             &maxTokens,
+		RunOrder:              []string{armBaseline, armEvolution, armOptimized},
+		Baseline:              &inputArm{},
+		Evolution:             &inputArm{},
+		OptimizedEvolution:    &inputArm{},
 	}
 	index := int64(0)
 	for _, family := range protocol.ExpectedFamilies {

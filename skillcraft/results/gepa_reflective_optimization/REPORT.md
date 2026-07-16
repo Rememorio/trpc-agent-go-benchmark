@@ -16,11 +16,12 @@ The two answers are deliberately different:
   repaired a reviewer-produced recipe skill, found a World Bank efficiency
   candidate, and rejected another recipe candidate that looked cheaper on
   validation but failed an untouched holdout.
-- **The current optimized overlay is not eligible for runtime promotion.** In a
-  preregistered 5-family, 3-seed, 3-arm replay, optimized evolution preserved
-  pass rate and stayed within the quality tolerance, but quality changed by
-  `-0.08pp` and end-to-end tokens increased by `5.79%` relative to evolution.
-  The required meaningful benefit was therefore absent.
+- **The current optimized overlay is not eligible for promotion on the tested
+  GPT-5.2 runtime.** In a preregistered 5-family, 3-seed, 3-arm replay,
+  optimized evolution preserved pass rate and stayed within the quality
+  tolerance, but quality changed by `-0.08pp` and end-to-end tokens increased
+  by `5.79%` relative to evolution. The required meaningful benefit was
+  therefore absent. This is not yet a same-model GLM-5.2 runtime verdict.
 
 **Table 1: Full operational replay (3 runs, n = 90 per arm)**
 
@@ -35,7 +36,7 @@ The two answers are deliberately different:
 Evolution rescued two baseline failures, but cost `9.36%` more end to end.
 Adding the offline overlay did not rescue any additional failure and cost a
 further `5.79%`. This supports reviewing the framework API while withholding
-the tested overlay from promotion.
+the tested overlay from promotion on that runtime.
 
 ## 2. Experimental Design
 
@@ -52,10 +53,25 @@ The evaluation separates discovery, confirmation, and operational use:
    `optimized_evolution` over the same five families and six scales used by the
    existing evolution benchmark.
 
-All operational arms used the same `gpt-5.2` model, temperature zero, 8,192
-maximum response tokens, 80 tool iterations, and task-specific paired sampling
-seeds. Odd and even root seeds reversed whole-arm order. Provider-side sampling
+The search and frozen-confirmation stages used the self-deployed GLM-5.2 route
+requested as `glm52`; this is recorded in the frozen evidence. The operational
+matrix instead requested `gpt-5.2` from the same internal OpenAI-compatible
+endpoint. A post-run routing probe returned `gpt-5.2-2025-12-11` for that ID and
+`glm52` for `glm52`, so the two IDs are distinct routes rather than aliases.
+
+All three operational arms therefore used the same GPT-5.2 route, temperature
+zero, 80 tool iterations, and task-specific paired sampling seeds. The launch
+configuration set the maximum response to 8,192 tokens; the historical result
+schema did not persist that flag, and the runner now records it for future
+runs. Odd and even root seeds reversed whole-arm order. Provider-side sampling
 seed support remains best effort, so repeated root seeds are still necessary.
+
+This preserves the internal validity of the three-arm operational comparison,
+but the complete pipeline is a cross-model transfer test: GLM-5.2 produced and
+confirmed the candidates, while GPT-5.2 consumed them. It does not answer
+whether those candidates improve an online GLM-5.2 evolution loop. The routing
+probe is retained in
+[`model_routing_evidence.json`](model_routing_evidence.json).
 
 The five families were `cat-facts-collector`, `openmeteo-weather`,
 `pokeapi-pokedex`, `recipe-cookbook-builder`, and
@@ -208,13 +224,15 @@ catch: validation quality tied and tokens improved, but an untouched scale lost
 the final artifact. A selector based only on the validation scalar would have
 published it.
 
-### 5.2 Frozen Benefit Did Not Guarantee Online Benefit
+### 5.2 Frozen GLM-5.2 Benefit Did Not Transfer to the GPT-5.2 Loop
 
 World Bank improved on isolated frozen holdout but regressed on cost in the
-full online loop. The operational setting adds sequential managed-skill state,
-reviewer calls, different task scales, and model trajectory variance. Frozen
-confirmation is therefore necessary evidence, not sufficient evidence for a
-default runtime overlay.
+full online loop. That replay changed both the execution setting and the model:
+it added sequential managed-skill state, reviewer calls, more task scales, and
+GPT-5.2 trajectories to a candidate confirmed with GLM-5.2. Frozen confirmation
+is therefore necessary evidence, not sufficient evidence for a default runtime
+overlay or for cross-model portability. The experiment cannot isolate which of
+those changes caused the transfer failure.
 
 ### 5.3 Completion Failures Were Real Reliability Failures
 
@@ -263,17 +281,19 @@ be deployed.
 The benchmark supports a bounded claim:
 
 > Reflective optimization is useful for offline skill repair, candidate search,
-> and evidence-based rejection. It has not demonstrated a generally beneficial
-> runtime overlay across SkillCraft's five families.
+> and evidence-based rejection under GLM-5.2. The accepted candidates did not
+> produce a beneficial transfer to the tested GPT-5.2 runtime. A same-model
+> GLM-5.2 operational replay has not yet been run.
 
 The correct action for the current evidence is:
 
 1. review the pure-Go optimizer API;
-2. keep the current Recipe and World Bank overlay out of default promotion;
+2. keep the current Recipe and World Bank overlay out of default promotion on
+   the tested GPT-5.2 runtime;
 3. retain the accepted candidates as research artifacts; and
-4. if runtime improvement remains a goal, begin a new search with fresh
-   candidates and new operational root seeds rather than tuning against seeds
-   `601`--`603`.
+4. before making a GLM-5.2 runtime claim, repeat the operational protocol with
+   explicit `-model glm52 -reviewer-model glm52` and fresh root seeds rather
+   than relabeling or tuning against seeds `601`--`603`.
 
 Exact aggregate values, per-run summaries, family metrics, paired outcomes,
 and gate verdicts are in

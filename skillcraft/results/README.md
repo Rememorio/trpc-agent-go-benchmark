@@ -27,9 +27,12 @@ root seeds produce 90 tasks per arm and 270 arm-cases in total.
 Online evolution rescued two baseline failures and improved quality, at a
 9.36% end-to-end token cost. The optimized overlay preserved pass rate but did
 not improve quality and cost another 5.79%, so it failed the fixed
-meaningful-benefit gate. This is a negative runtime-promotion result, not a
-failure of holdout gating: the offline process also caught and rejected a
-Recipe candidate that regressed badly outside validation.
+meaningful-benefit gate on the tested runtime. Search and frozen confirmation
+used the self-deployed GLM-5.2 route (`glm52`), while this operational matrix
+requested GPT-5.2. The result is therefore a negative cross-model transfer
+result, not a same-model GLM-5.2 runtime verdict or a failure of holdout gating:
+the offline process also caught and rejected a Recipe candidate that regressed
+badly outside validation.
 
 The exact per-run, per-family, paired, and gate results are in
 [`gepa_reflective_optimization/full_matrix_evidence.json`](gepa_reflective_optimization/full_matrix_evidence.json).
@@ -47,6 +50,7 @@ results/
 |   |-- REPORT.zh_CN.md
 |   |-- evidence.json                 # accepted Recipe repair
 |   |-- recipe_candidate.json
+|   |-- model_routing_evidence.json   # proves gpt-5.2 != glm52 routing
 |   |-- full_matrix_evidence.json     # 3 x 5 x 6 x 3 aggregate
 |   +-- full_matrix/
 |       |-- generic_candidate_frozen_evidence.json

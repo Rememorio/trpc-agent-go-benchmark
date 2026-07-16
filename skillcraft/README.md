@@ -41,11 +41,13 @@ arm-cases total.
 - Optimized evolution: 100% pass rate, 98.16% quality, and 5.79% more
   end-to-end tokens than evolution.
 
-The optimized overlay passed safety and non-regression limits but failed the
-fixed meaningful-benefit gate. It is not eligible for runtime promotion. The
-same evidence package records both accepted frozen candidates and an important
-rejection: a Recipe candidate saved tokens on validation but lost a deliverable
-on untouched holdout.
+The search and frozen stages used the self-deployed GLM-5.2 route (`glm52`),
+while this operational matrix requested GPT-5.2. The optimized overlay passed
+safety and non-regression limits but failed the fixed meaningful-benefit gate
+on GPT-5.2. This is a cross-model transfer result, not a same-model GLM-5.2
+runtime verdict. The same evidence package records both accepted frozen
+candidates and an important rejection: a Recipe candidate saved tokens on
+validation but lost a deliverable on untouched holdout.
 
 The older **v19** and **v20** batches below remain the source of historical
 online-evolution behavior. They use a different model, task subset, budget, and
@@ -200,9 +202,10 @@ end-to-end tokens -5%). This full matrix is operational evidence, not a strict
 holdout: candidate search may already have used some of its scales. Strict
 frozen holdout remains a separate `optimize`-mode comparison below.
 
-The checked-in aggregate fails only the meaningful-benefit gate. That outcome
-is intentional evidence: passing frozen confirmation does not by itself make a
-candidate a default runtime overlay.
+The checked-in aggregate fails only the meaningful-benefit gate. Because its
+candidates were confirmed with GLM-5.2 and replayed with GPT-5.2, that outcome
+shows the overlay did not transfer to the tested runtime. It does not replace a
+same-model GLM-5.2 operational replay.
 
 ## Reflective Skill Optimization
 

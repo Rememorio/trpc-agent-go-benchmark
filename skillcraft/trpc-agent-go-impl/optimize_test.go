@@ -435,6 +435,7 @@ func TestOptimizationOutputs(t *testing.T) {
 		RequestedMode: modeOptimize,
 		Model:         "model",
 		ReviewerModel: "reviewer",
+		MaxTokens:     8192,
 		Optimization:  result,
 	}
 	outputDir := filepath.Join(t.TempDir(), "nested", "output")
@@ -447,6 +448,7 @@ func TestOptimizationOutputs(t *testing.T) {
 	var saved benchmarkResult
 	require.NoError(t, json.Unmarshal(payload, &saved))
 	require.Equal(t, "seed.json", saved.Optimization.SeedSpec)
+	require.Equal(t, 8192, saved.MaxTokens)
 	report, err := os.ReadFile(filepath.Join(outputDir, "REPORT.md"))
 	require.NoError(t, err)
 	require.Contains(t, string(report), "Promotion eligible: `true`")

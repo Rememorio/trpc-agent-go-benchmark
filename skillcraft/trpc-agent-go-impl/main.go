@@ -317,6 +317,7 @@ type benchmarkResult struct {
 	OutputDir             string                    `json:"outputDir"`
 	KeepWorkspaces        bool                      `json:"keepWorkspaces"`
 	MaxToolIterations     int                       `json:"maxToolIterations"`
+	MaxTokens             int                       `json:"maxTokens"`
 	TaskTimeoutSec        int                       `json:"taskTimeoutSeconds"`
 }
 
@@ -580,6 +581,7 @@ func main() {
 		OutputDir:             cfg.OutputDir,
 		KeepWorkspaces:        cfg.KeepWorkspaces,
 		MaxToolIterations:     cfg.MaxToolIterations,
+		MaxTokens:             cfg.MaxTokens,
 		TaskTimeoutSec:        int(cfg.TaskTimeout.Seconds()),
 		EvaluationSeed:        cfg.EvaluationSeed,
 		EvaluationTemperature: cfg.EvaluationTemperature,

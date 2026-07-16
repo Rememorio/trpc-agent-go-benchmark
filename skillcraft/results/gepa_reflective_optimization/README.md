@@ -21,14 +21,19 @@ decision it supports:
 - [`full_matrix_evidence.json`](full_matrix_evidence.json) aggregates the final
   operational replay: 3 root seeds, 5 task families, 6 scales, and 3 arms, for
   270 arm-cases.
+- [`model_routing_evidence.json`](model_routing_evidence.json) records the
+  post-run check showing that `gpt-5.2` and `glm52` are distinct routes on the
+  configured OpenAI-compatible endpoint.
 - [`recipe_candidate.json`](recipe_candidate.json) is the accepted Recipe
   candidate used as one of the runtime overlays.
 
-The operational replay is deliberately stricter than the individual frozen
-comparisons. `optimized_evolution` retained a 100% pass rate, but quality moved
-by -0.08 percentage points and end-to-end tokens increased 5.79% relative to
-`evolution`. It therefore failed the preregistered meaningful-benefit gate and
-is not eligible for runtime promotion.
+The search and frozen comparisons used the self-deployed GLM-5.2 route
+(`glm52`). The operational replay requested GPT-5.2 and is therefore a
+cross-model transfer test, not a same-model GLM-5.2 runtime evaluation.
+`optimized_evolution` retained a 100% pass rate on GPT-5.2, but quality moved by
+-0.08 percentage points and end-to-end tokens increased 5.79% relative to
+`evolution`. It failed the preregistered meaningful-benefit gate for that
+runtime. A GLM-5.2 operational replay remains to be run.
 
 Raw model transcripts, task workspaces, endpoint configuration, credentials,
 and machine-specific paths are intentionally excluded.

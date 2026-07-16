@@ -31,6 +31,10 @@
         "evolution",
         "baseline"
       ],
+      "requestedModel": "gpt-5.2",
+      "requestedReviewerModel": "gpt-5.2",
+      "evaluationTemperature": 0,
+      "maxToolIterations": 80,
       "arms": {
         "baseline": {
           "tasks": 30,
@@ -121,6 +125,10 @@
         "evolution",
         "optimized_evolution"
       ],
+      "requestedModel": "gpt-5.2",
+      "requestedReviewerModel": "gpt-5.2",
+      "evaluationTemperature": 0,
+      "maxToolIterations": 80,
       "arms": {
         "baseline": {
           "tasks": 30,
@@ -211,6 +219,10 @@
         "evolution",
         "baseline"
       ],
+      "requestedModel": "gpt-5.2",
+      "requestedReviewerModel": "gpt-5.2",
+      "evaluationTemperature": 0,
+      "maxToolIterations": 80,
       "arms": {
         "baseline": {
           "tasks": 30,

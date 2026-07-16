@@ -121,6 +121,11 @@ type RunSummary struct {
 	Name                          string             `json:"name"`
 	RootSeed                      int64              `json:"rootSeed"`
 	RunOrder                      []string           `json:"runOrder"`
+	RequestedModel                string             `json:"requestedModel"`
+	RequestedReviewerModel        string             `json:"requestedReviewerModel"`
+	EvaluationTemperature         *float64           `json:"evaluationTemperature"`
+	MaxToolIterations             int                `json:"maxToolIterations"`
+	MaxTokens                     *int               `json:"maxTokens,omitempty"`
 	Arms                          map[string]Metrics `json:"arms"`
 	EvolutionVsBaseline           Comparison         `json:"evolutionVsBaseline"`
 	OptimizedEvolutionVsEvolution Comparison         `json:"optimizedEvolutionVsEvolution"`
@@ -150,11 +155,16 @@ type Evidence struct {
 }
 
 type inputResult struct {
-	EvaluationSeed     *int64    `json:"evaluationSeed"`
-	RunOrder           []string  `json:"runOrder"`
-	Baseline           *inputArm `json:"baseline"`
-	Evolution          *inputArm `json:"evolution"`
-	OptimizedEvolution *inputArm `json:"optimizedEvolution"`
+	Model                 string    `json:"model"`
+	ReviewerModel         string    `json:"reviewerModel"`
+	EvaluationSeed        *int64    `json:"evaluationSeed"`
+	EvaluationTemperature *float64  `json:"evaluationTemperature"`
+	MaxToolIterations     int       `json:"maxToolIterations"`
+	MaxTokens             *int      `json:"maxTokens"`
+	RunOrder              []string  `json:"runOrder"`
+	Baseline              *inputArm `json:"baseline"`
+	Evolution             *inputArm `json:"evolution"`
+	OptimizedEvolution    *inputArm `json:"optimizedEvolution"`
 }
 
 type inputArm struct {
@@ -221,7 +231,13 @@ func Aggregate(paths []string, protocol Protocol) (*Evidence, error) {
 				runCases[arm] = append(runCases[arm], collected)
 			}
 		}
-		runs = append(runs, summarizeRun(path, input, runCases))
+		run := summarizeRun(path, input, runCases)
+		if len(runs) > 0 {
+			if err := validateMatchingRuntime(runs[0], run); err != nil {
+				return nil, fmt.Errorf("experiment: %s: %w", path, err)
+			}
+		}
+		runs = append(runs, run)
 	}
 	sort.Slice(runs, func(i, j int) bool { return runs[i].RootSeed < runs[j].RootSeed })
 
@@ -279,10 +295,15 @@ func summarizeRun(
 		arms[arm] = summarize(items)
 	}
 	return RunSummary{
-		Name:     filepath.Base(filepath.Dir(path)),
-		RootSeed: *input.EvaluationSeed,
-		RunOrder: append([]string(nil), input.RunOrder...),
-		Arms:     arms,
+		Name:                   filepath.Base(filepath.Dir(path)),
+		RootSeed:               *input.EvaluationSeed,
+		RunOrder:               append([]string(nil), input.RunOrder...),
+		RequestedModel:         input.Model,
+		RequestedReviewerModel: input.ReviewerModel,
+		EvaluationTemperature:  input.EvaluationTemperature,
+		MaxToolIterations:      input.MaxToolIterations,
+		MaxTokens:              input.MaxTokens,
+		Arms:                   arms,
 		EvolutionVsBaseline: compare(
 			armBaseline, armEvolution, cases[armBaseline], cases[armEvolution],
 		),
@@ -290,6 +311,25 @@ func summarizeRun(
 			armEvolution, armOptimized, cases[armEvolution], cases[armOptimized],
 		),
 	}
+}
+
+func validateMatchingRuntime(reference, candidate RunSummary) error {
+	if candidate.RequestedModel != reference.RequestedModel ||
+		candidate.RequestedReviewerModel != reference.RequestedReviewerModel ||
+		candidate.MaxToolIterations != reference.MaxToolIterations ||
+		!equalOptionalFloat(candidate.EvaluationTemperature, reference.EvaluationTemperature) ||
+		!equalOptionalInt(candidate.MaxTokens, reference.MaxTokens) {
+		return errors.New("runtime configuration differs from the first run")
+	}
+	return nil
+}
+
+func equalOptionalFloat(a, b *float64) bool {
+	return a == nil && b == nil || a != nil && b != nil && *a == *b
+}
+
+func equalOptionalInt(a, b *int) bool {
+	return a == nil && b == nil || a != nil && b != nil && *a == *b
 }
 
 func validateProtocol(p Protocol) error {
@@ -328,6 +368,10 @@ func inputArms(input inputResult) map[string][]inputCase {
 func validateInput(input inputResult, p Protocol) error {
 	if input.Baseline == nil || input.Evolution == nil || input.OptimizedEvolution == nil {
 		return errors.New("requires baseline, evolution, and optimizedEvolution arms")
+	}
+	if strings.TrimSpace(input.Model) == "" || strings.TrimSpace(input.ReviewerModel) == "" ||
+		input.EvaluationTemperature == nil || input.MaxToolIterations <= 0 {
+		return errors.New("requires complete runtime model and budget metadata")
 	}
 	expected := make(map[string]struct{}, len(p.ExpectedFamilies)*len(p.ExpectedScales))
 	for _, family := range p.ExpectedFamilies {

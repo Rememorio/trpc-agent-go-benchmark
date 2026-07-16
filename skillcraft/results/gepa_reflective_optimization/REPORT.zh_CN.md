@@ -15,10 +15,10 @@
 - **Optimizer 作为有门禁的离线搜索与修复原语是有用的。** 它修复了 reviewer
   产出的 Recipe skill，找到 World Bank 效率候选，也拒绝了一个 validation 上更省
   token、但在 untouched holdout 上失败的 Recipe 候选。
-- **当前 optimized overlay 不具备运行时晋升资格。** 在预注册的 5 族、3 seed、
-  3 arm 全量回放中，optimized evolution 保持了通过率，并满足质量容忍门槛；但相对
-  evolution 的质量变化为 `-0.08pp`，端到端 tokens 增加 `5.79%`，没有达到“有意义
-  收益”要求。
+- **当前 optimized overlay 不具备在本次 GPT-5.2 运行时晋升的资格。** 在预注册的
+  5 族、3 seed、3 arm 全量回放中，optimized evolution 保持了通过率，并满足质量
+  容忍门槛；但相对 evolution 的质量变化为 `-0.08pp`，端到端 tokens 增加 `5.79%`，
+  没有达到“有意义收益”要求。这还不是同模型 GLM-5.2 运行时结论。
 
 **表 1：完整运行时回放（3 轮，每个 arm n = 90）**
 
@@ -32,7 +32,7 @@
 
 Evolution 挽救了两个 baseline 失败，但端到端成本增加 `9.36%`；加入离线 overlay
 没有再挽救额外失败，成本又增加 `5.79%`。因此，当前证据支持评审框架 API，但不支持
-晋升这组 overlay。
+在该 GPT-5.2 运行时晋升这组 overlay。
 
 ## 2. 实验设计
 
@@ -47,9 +47,22 @@ Evolution 挽救了两个 baseline 失败，但端到端成本增加 `9.36%`；�
 3. **Operational replay：** 在现有 evolution benchmark 使用的同一套 5 个任务族、
    6 个尺度上比较 `baseline`、`evolution`、`optimized_evolution`。
 
-运行时三个 arm 使用相同的 `gpt-5.2` 模型、temperature 0、8,192 最大响应 tokens、
-80 次工具迭代，以及按任务配对的 sampling seed。奇偶 root seed 会反转整个 arm 的执行
-顺序。模型端对 sampling seed 的支持仍是 best effort，因此必须保留多轮 root seed。
+Search 与 frozen confirmation 阶段使用自部署 GLM-5.2 路由，请求 model ID 为
+`glm52`，frozen 机器证据也记录了该值。完整运行时矩阵则通过同一个内部
+OpenAI-compatible endpoint 请求了 `gpt-5.2`。事后路由探针显示，`gpt-5.2` 的响应
+model 为 `gpt-5.2-2025-12-11`，而 `glm52` 的响应仍为 `glm52`；二者是不同路由，
+不能当作别名。
+
+因此，运行时三个 arm 彼此仍使用相同的 GPT-5.2 路由、temperature 0、80 次工具迭代，
+以及按任务配对的 sampling seed。启动参数将最大响应 tokens 设为 8,192；历史结果
+schema 没有持久化该 flag，runner 现在已补充记录，供后续实验审计。奇偶 root seed 会
+反转整个 arm 的执行顺序。模型端对 sampling seed 的支持仍是 best effort，因此必须
+保留多轮 root seed。
+
+这保证了三臂运行时比较内部仍然公平，但完整链路实际上是跨模型迁移测试：GLM-5.2
+生成并 frozen 确认候选，GPT-5.2 再消费这些候选。它不能回答这些候选是否会改善在线
+GLM-5.2 evolution loop。路由确认记录在
+[`model_routing_evidence.json`](model_routing_evidence.json)。
 
 五个任务族为 `cat-facts-collector`、`openmeteo-weather`、
 `pokeapi-pokedex`、`recipe-cookbook-builder` 和
@@ -186,11 +199,13 @@ Optimized evolution 在三个 root seed 上都更贵。只有 seed `601` 出现�
 下降，但 untouched scale 丢失最终产物。如果 selector 只看 validation scalar，它会
 错误发布该候选。
 
-### 5.2 Frozen 收益不保证 Online 收益
+### 5.2 GLM-5.2 Frozen 收益没有迁移到 GPT-5.2 Loop
 
 World Bank 在隔离 frozen holdout 上改善，但在完整在线 loop 中成本回退。运行时还
-包含顺序 managed-skill 状态、reviewer 调用、更多任务尺度和模型轨迹方差。因此，
-frozen confirmation 是必要证据，但不足以支持默认 runtime overlay。
+同时改变了执行环境和模型：它在 GLM-5.2 确认候选之后，加入顺序 managed-skill 状态、
+reviewer 调用、更多任务尺度和 GPT-5.2 轨迹。因此，frozen confirmation 是必要证据，
+但不足以支持默认 runtime overlay 或跨模型可迁移性；本实验无法进一步分离是哪项变化
+导致迁移失败。
 
 ### 5.3 产物收尾失败是真实可靠性问题
 
@@ -231,16 +246,18 @@ Benchmark 不需要 Python GEPA bridge，也不需要公开 optimizer 内部结�
 
 当前 benchmark 支持一个有边界的结论：
 
-> 反思式优化对离线 skill 修复、候选搜索和基于证据的拒绝是有用的；它尚未证明在
-> SkillCraft 五个任务族上形成普遍有益的运行时 overlay。
+> 反思式优化在 GLM-5.2 下对离线 skill 修复、候选搜索和基于证据的拒绝是有用的；
+> 已接受候选没有成功迁移到本次 GPT-5.2 运行时。同模型 GLM-5.2 operational replay
+> 尚未执行。
 
 基于当前证据，正确动作是：
 
 1. 评审纯 Go optimizer API；
-2. 不把当前 Recipe 与 World Bank overlay 设为默认晋升结果；
+2. 不在本次 GPT-5.2 运行时把当前 Recipe 与 World Bank overlay 设为默认晋升结果；
 3. 保留已接受 candidate 作为研究产物；
-4. 如果仍要追求运行时收益，应从新的候选和新的 operational root seed 开始，而不是
-   继续针对 `601`--`603` 调参。
+4. 在给出 GLM-5.2 运行时结论前，使用显式
+   `-model glm52 -reviewer-model glm52` 和全新 root seed 重跑 operational protocol，
+   而不是重命名已有结果或针对 `601`--`603` 调参。
 
 精确聚合数值、逐轮摘要、逐族指标、配对结果和门禁判定见
 [`full_matrix_evidence.json`](full_matrix_evidence.json)。
