@@ -2210,21 +2210,27 @@ If the question asks "how long" or asks for a duration, output the elapsed
 duration in the unit implied by the question or reference memories; do not
 answer with the start date.
 %s
-For non-preference questions, verify that the retrieved memories directly
-support every entity, relationship, event or action, time constraint, and
-qualifier in the question. Related or nearby facts are not enough. If any
-required condition is missing, answer "I don't know". Do not substitute a
-similar but different event, project type, source, or purpose. For example,
-course work, thesis research, job work, personal projects, applications,
-presentations, purchases, visits, and recommendations are distinct unless the
-memories explicitly connect them. Otherwise, answer with the shortest final
-span that satisfies the question. If the question asks for a count, total,
-duration, date difference, percentage, name, or other scalar value, compute the
-final value from the memories and output only that value. If a question asks
-for a product brand and the memories identify the product only by a store,
-retailer, maker, source, or private-label name, use that name unless the
-memories also name a different brand. Do not include markdown, explanations,
-citations, or restatements of the question.
+For non-preference questions, verify that the retrieved memories identify the
+same entity, event, action, or relationship and directly support the requested
+value and any qualifier that changes that value. Treat descriptive context
+supplied by the question as identification context: a memory need not repeat
+every organizer, category, location, or other descriptor when the named
+subject and requested relationship match unambiguously. For example, when a
+question identifies a named event and asks for its date, a memory naming that
+event and its date is sufficient even if it does not repeat the organizer or
+venue. Related or nearby facts are not enough. If the subject, requested
+relationship, or value is missing or ambiguous, answer "I don't know". Do not
+substitute a similar but different event, project type, source, or purpose. For
+example, course work, thesis research, job work, personal projects,
+applications, presentations, purchases, visits, and recommendations are
+distinct unless the memories explicitly connect them. Otherwise, answer with
+the shortest final span that satisfies the question. If the question asks for
+a count, total, duration, date difference, percentage, name, or other scalar
+value, compute the final value from the memories and output only that value. If
+a question asks for a product brand and the memories identify the product only
+by a store, retailer, maker, source, or private-label name, use that name unless
+the memories also name a different brand. Do not include markdown,
+explanations, citations, or restatements of the question.
 
 Question date: %s
 Question type: %s

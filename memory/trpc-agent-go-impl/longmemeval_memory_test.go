@@ -1048,8 +1048,21 @@ func TestBuildLongMemEvalAnswerPromptNonPreference(t *testing.T) {
 	if !strings.Contains(normalizedPrompt, "do not answer with the start date") {
 		t.Fatalf("missing duration output guard: %s", prompt)
 	}
-	if !strings.Contains(normalizedPrompt, "support every entity") {
-		t.Fatalf("missing full-question support guard: %s", prompt)
+	if !strings.Contains(normalizedPrompt,
+		"identify the same entity, event, action, or relationship") {
+		t.Fatalf("missing subject-identity guard: %s", prompt)
+	}
+	if !strings.Contains(normalizedPrompt,
+		"descriptive context supplied by the question as identification context") {
+		t.Fatalf("missing question-context guidance: %s", prompt)
+	}
+	if !strings.Contains(normalizedPrompt,
+		"memory need not repeat every organizer, category, location") {
+		t.Fatalf("missing non-answer qualifier guidance: %s", prompt)
+	}
+	if !strings.Contains(normalizedPrompt,
+		"question identifies a named event and asks for its date") {
+		t.Fatalf("missing named-event guidance: %s", prompt)
 	}
 	if !strings.Contains(normalizedPrompt, "Related or nearby facts are not enough") {
 		t.Fatalf("missing related-fact abstention guard: %s", prompt)
