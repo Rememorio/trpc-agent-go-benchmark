@@ -299,6 +299,7 @@ const qaAnswerPolicy = `EVIDENCE POLICY:
 OUTPUT RULES:
 - Output only the bare answer, with no explanation or context. Never output an empty answer.
 - Prefer exact words from the supporting memories and keep the answer to 1-12 words.
+- For a yes/no question, output exactly "Yes" or "No" with no supporting details.
 - For "when", use a natural-language date. For "how many", output the number.
 - Do not prepend a person's name or pronoun unless it is part of the requested answer.
 - If uncertain whether the evidence supports the exact factual relation, output exactly "` + fallbackAnswer + `".`

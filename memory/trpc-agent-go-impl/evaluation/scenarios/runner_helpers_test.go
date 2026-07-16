@@ -48,6 +48,7 @@ func assertGroundedQAPrompt(t *testing.T, got string) {
 		"support the exact subject",
 		"Never transfer a fact",
 		"Never output an empty answer",
+		`output exactly "Yes" or "No"`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing grounding rule %q: %q", want, got)
