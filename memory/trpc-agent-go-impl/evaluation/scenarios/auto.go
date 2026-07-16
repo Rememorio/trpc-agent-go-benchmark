@@ -30,7 +30,6 @@ import (
 const (
 	autoAppName = "memory-eval-auto"
 
-	autoQAMaxTokens         = 80
 	autoQAMaxToolIterations = 10
 )
 
@@ -78,53 +77,14 @@ func (e *AutoEvaluator) Evaluate(
 		AppName: autoAppName, UserID: sample.SampleID,
 	}
 
-	_ = e.memoryService.ClearMemories(ctx, userKey)
-
-	// Phase 1: Seed sessions to trigger auto extraction.
-	seedRunner := runner.NewRunner(
-		autoAppName,
-		seedAgent{},
-		runner.WithSessionService(newSessionService(e.config)),
-		runner.WithMemoryService(e.memoryService),
-	)
-	defer seedRunner.Close()
-
-	for _, sess := range sample.Conversation {
-		sessionID := fmt.Sprintf("seed-%s", sess.SessionID)
-		msgs := sessionMessages(sample, sess)
-		// Set reference date so the extractor resolves
-		// relative time expressions correctly.
-		seedCtx := ctx
-		if t, ok := parseSessionDate(
-			sess.SessionDate,
-		); ok {
-			seedCtx = extractor.WithReferenceDate(
-				seedCtx, t,
-			)
+	if e.config.ReuseMemories {
+		if err := e.requireExistingMemories(ctx, userKey); err != nil {
+			return nil, err
 		}
-		ch, err := runner.RunWithMessages(
-			seedCtx, seedRunner,
-			userKey.UserID, sessionID, msgs,
-		)
-		if err != nil {
-			return nil, fmt.Errorf(
-				"seed session %s: %w", sess.SessionID, err,
-			)
+	} else {
+		if err := e.seedMemories(ctx, userKey, sample); err != nil {
+			return nil, err
 		}
-		if _, err := collectFinalText(ch); err != nil {
-			return nil, fmt.Errorf(
-				"seed session %s: %w", sess.SessionID, err,
-			)
-		}
-	}
-
-	// Wait for async extraction to complete.
-	if err := e.waitForAutoExtraction(
-		ctx, userKey, sample,
-	); err != nil {
-		return nil, fmt.Errorf(
-			"wait for auto extraction: %w", err,
-		)
 	}
 
 	// Phase 2: Answer questions via agent with memory_search.
@@ -186,21 +146,75 @@ func newAutoQAAgent(
 	tools []tool.Tool,
 	searchPasses int,
 ) agent.Agent {
-	genConfig := model.GenerationConfig{
-		Stream:      false,
-		MaxTokens:   intPtr(autoQAMaxTokens),
-		Temperature: float64Ptr(0),
-	}
 	return llmagent.New(
 		defaultAgentName,
 		llmagent.WithModel(m),
 		llmagent.WithInstruction(
 			qaMemorySearchInstruction(searchPasses),
 		),
-		llmagent.WithGenerationConfig(genConfig),
+		llmagent.WithGenerationConfig(memoryQAGenerationConfig()),
 		llmagent.WithTools(tools),
 		llmagent.WithMaxToolIterations(autoQAMaxToolIterations),
 	)
+}
+
+func (e *AutoEvaluator) requireExistingMemories(
+	ctx context.Context,
+	userKey memory.UserKey,
+) error {
+	entries, err := e.memoryService.ReadMemories(ctx, userKey, 1)
+	if err != nil {
+		return fmt.Errorf("read reused memories: %w", err)
+	}
+	if len(entries) == 0 {
+		return fmt.Errorf(
+			"reuse memories requested but no memories exist for sample %s",
+			userKey.UserID,
+		)
+	}
+	return nil
+}
+
+func (e *AutoEvaluator) seedMemories(
+	ctx context.Context,
+	userKey memory.UserKey,
+	sample *dataset.LoCoMoSample,
+) error {
+	if err := e.memoryService.ClearMemories(ctx, userKey); err != nil {
+		return fmt.Errorf("clear memories: %w", err)
+	}
+
+	seedRunner := runner.NewRunner(
+		autoAppName,
+		seedAgent{},
+		runner.WithSessionService(newSessionService(e.config)),
+		runner.WithMemoryService(e.memoryService),
+	)
+	defer seedRunner.Close()
+
+	for _, sess := range sample.Conversation {
+		sessionID := fmt.Sprintf("seed-%s", sess.SessionID)
+		msgs := sessionMessages(sample, sess)
+		seedCtx := ctx
+		if t, ok := parseSessionDate(sess.SessionDate); ok {
+			seedCtx = extractor.WithReferenceDate(seedCtx, t)
+		}
+		ch, err := runner.RunWithMessages(
+			seedCtx, seedRunner,
+			userKey.UserID, sessionID, msgs,
+		)
+		if err != nil {
+			return fmt.Errorf("seed session %s: %w", sess.SessionID, err)
+		}
+		if _, err := collectFinalText(ch); err != nil {
+			return fmt.Errorf("seed session %s: %w", sess.SessionID, err)
+		}
+	}
+
+	if err := e.waitForAutoExtraction(ctx, userKey, sample); err != nil {
+		return fmt.Errorf("wait for auto extraction: %w", err)
+	}
+	return nil
 }
 
 func (e *AutoEvaluator) evaluateQA(

@@ -212,6 +212,11 @@ var (
 		1,
 		"Odd number of independent LongMemEval judge votes",
 	)
+	flagLoCoMoReuseMemories = flag.Bool(
+		"locomo-reuse-memories",
+		false,
+		"Reuse memories already stored in the selected backend table and run only LoCoMo QA",
+	)
 	flagLMECompareResults = flag.String(
 		"lme-compare-results",
 		"",

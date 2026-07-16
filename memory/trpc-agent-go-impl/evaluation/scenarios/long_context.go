@@ -54,6 +54,10 @@ type Config struct {
 	// Only applies to agentic and auto scenarios.
 	QASearchPasses int
 
+	// ReuseMemories skips auto extraction and answers against memories already
+	// stored for the sample. It only applies to the auto scenario.
+	ReuseMemories bool
+
 	// SessionRecallResults controls how many recalled
 	// session events are preloaded during QA.
 	// Only applies to session_recall scenario.

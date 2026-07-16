@@ -26,10 +26,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
-const (
-	sessionRecallAppName     = "memory-eval-session-recall"
-	sessionRecallQAMaxTokens = 80
-)
+const sessionRecallAppName = "memory-eval-session-recall"
 
 const sessionRecallInstructionTemplate = `You are a memory retrieval assistant. Your ONLY job is to read recalled session events and output a short factual answer.
 
@@ -205,11 +202,6 @@ func newSessionRecallQAAgent(
 	m model.Model,
 	cfg Config,
 ) agent.Agent {
-	genConfig := model.GenerationConfig{
-		Stream:      false,
-		MaxTokens:   intPtr(sessionRecallQAMaxTokens),
-		Temperature: float64Ptr(0),
-	}
 	return llmagent.New(
 		defaultAgentName,
 		llmagent.WithModel(m),
@@ -219,7 +211,7 @@ func newSessionRecallQAAgent(
 				fallbackAnswer,
 			),
 		),
-		llmagent.WithGenerationConfig(genConfig),
+		llmagent.WithGenerationConfig(memoryQAGenerationConfig()),
 		llmagent.WithPreloadSessionRecall(
 			cfg.SessionRecallResults,
 		),

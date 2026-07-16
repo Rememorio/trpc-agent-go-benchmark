@@ -34,7 +34,6 @@ const agenticAppName = "memory-eval-agentic"
 const (
 	agenticWriteMaxToolIterations = 50
 	agenticReadMaxToolIterations  = 8
-	agenticQAMaxTokens            = 100
 
 	agenticUnknownDate      = "unknown"
 	agenticDatePrefixFormat = "[DATE: %s] "
@@ -279,18 +278,13 @@ func newAgenticQAAgent(
 	tools []tool.Tool,
 	searchPasses int,
 ) agent.Agent {
-	genConfig := model.GenerationConfig{
-		Stream:      false,
-		MaxTokens:   intPtr(agenticQAMaxTokens),
-		Temperature: float64Ptr(0),
-	}
 	return llmagent.New(
 		defaultAgentName,
 		llmagent.WithModel(m),
 		llmagent.WithInstruction(
 			qaMemorySearchInstruction(searchPasses),
 		),
-		llmagent.WithGenerationConfig(genConfig),
+		llmagent.WithGenerationConfig(memoryQAGenerationConfig()),
 		llmagent.WithTools(tools),
 		llmagent.WithMaxToolIterations(
 			agenticReadMaxToolIterations,

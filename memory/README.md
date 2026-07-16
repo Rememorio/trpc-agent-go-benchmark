@@ -395,6 +395,15 @@ The runner also reads and records the sanitized self-hosted mem0 runtime
 configuration. `-mem0-llm-temperature` changes that configuration only when it
 is non-negative; the default keeps the server value while still recording it.
 
+LoCoMo memory QA explicitly disables model thinking, uses low reasoning effort,
+and reserves 512 output tokens for tool calls and the final short answer. This
+prevents reasoning or provider tool-call syntax from exhausting a small output
+budget before an answer is emitted. `-locomo-reuse-memories` skips only the auto
+extraction phase and requires an explicit `-table-suffix`; it fails when the
+selected table has no memories for the sample. The QA searches and answers are
+still regenerated, and the result metadata records the table, reuse mode, and
+build provenance.
+
 ## Command-Line Options
 
 | Option              | Default                | Description                            |
@@ -413,6 +422,7 @@ is non-negative; the default keeps the server value while still recording it.
 | `-vector-topk`      | 30                     | Top-k results for vector backends      |
 | `-qa-history-turns` | 0                      | Inject N conversation turns as context |
 | `-qa-search-passes` | 2                      | memory_search calls per QA             |
+| `-locomo-reuse-memories` | false             | Run QA against an explicit existing table |
 | `-sample-id`        |                        | Filter by sample ID                    |
 | `-max-tasks`        | 0                      | Maximum tasks (0=all)                  |
 | `-llm-judge`        | false                  | Enable LLM-as-Judge                    |

@@ -39,6 +39,25 @@ func TestQAMemorySearchInstruction_MultiSearch(t *testing.T) {
 	}
 }
 
+func TestMemoryQAGenerationConfig(t *testing.T) {
+	config := memoryQAGenerationConfig()
+	if config.Stream {
+		t.Fatal("memory QA must use non-streaming generation")
+	}
+	if config.MaxTokens == nil || *config.MaxTokens != memoryQAMaxTokens {
+		t.Fatalf("MaxTokens = %v, want %d", config.MaxTokens, memoryQAMaxTokens)
+	}
+	if config.Temperature == nil || *config.Temperature != 0 {
+		t.Fatalf("Temperature = %v, want 0", config.Temperature)
+	}
+	if config.ReasoningEffort == nil || *config.ReasoningEffort != "low" {
+		t.Fatalf("ReasoningEffort = %v, want low", config.ReasoningEffort)
+	}
+	if config.ThinkingEnabled == nil || *config.ThinkingEnabled {
+		t.Fatalf("ThinkingEnabled = %v, want false", config.ThinkingEnabled)
+	}
+}
+
 func TestCollectFinalTextAndUsage_WaitsForRunnerCompletion(t *testing.T) {
 	ch := make(chan *event.Event)
 	resultCh := make(chan collectResult, 1)

@@ -426,6 +426,20 @@ func qaMemorySearchInstruction(searchPasses int) string {
 	return fmt.Sprintf(qaMultiSearchInstruction, searchPasses)
 }
 
+const memoryQAMaxTokens = 512
+
+func memoryQAGenerationConfig() model.GenerationConfig {
+	reasoningEffort := "low"
+	thinkingEnabled := false
+	return model.GenerationConfig{
+		Stream:          false,
+		MaxTokens:       intPtr(memoryQAMaxTokens),
+		Temperature:     float64Ptr(0),
+		ReasoningEffort: &reasoningEffort,
+		ThinkingEnabled: &thinkingEnabled,
+	}
+}
+
 const (
 	rateLimitCode              = "\"code\":\"4029\""
 	maxRateLimitRetries        = 10

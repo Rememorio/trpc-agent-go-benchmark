@@ -74,17 +74,20 @@ type EvaluationResult struct {
 
 // EvalMetadata holds evaluation metadata.
 type EvalMetadata struct {
-	Framework      string    `json:"framework"`
-	Version        string    `json:"version"`
-	Timestamp      time.Time `json:"timestamp"`
-	Model          string    `json:"model"`
-	EvalModel      string    `json:"eval_model,omitempty"`
-	Scenario       string    `json:"scenario"`
-	MemoryBackend  string    `json:"memory_backend,omitempty"`
-	MaxContext     int       `json:"max_context"`
-	QAHistoryTurns int       `json:"qa_history_turns,omitempty"`
-	QASearchPasses int       `json:"qa_search_passes,omitempty"`
-	LLMJudge       bool      `json:"llm_judge"`
+	Framework      string             `json:"framework"`
+	Version        string             `json:"version"`
+	Timestamp      time.Time          `json:"timestamp"`
+	Model          string             `json:"model"`
+	EvalModel      string             `json:"eval_model,omitempty"`
+	Scenario       string             `json:"scenario"`
+	MemoryBackend  string             `json:"memory_backend,omitempty"`
+	MaxContext     int                `json:"max_context"`
+	QAHistoryTurns int                `json:"qa_history_turns,omitempty"`
+	QASearchPasses int                `json:"qa_search_passes,omitempty"`
+	ReuseMemories  bool               `json:"reuse_memories,omitempty"`
+	TableSuffix    string             `json:"table_suffix,omitempty"`
+	Build          lmeBuildProvenance `json:"build"`
+	LLMJudge       bool               `json:"llm_judge"`
 }
 
 // EvalSummary holds aggregated evaluation summary.
@@ -174,6 +177,7 @@ func runLoCoMoMemory(ctx context.Context) error {
 		SessionEventLimit:     *flagSessionEventLimit,
 		QAHistoryTurns:        *flagQAHistoryTurns,
 		QASearchPasses:        *flagQASearchPasses,
+		ReuseMemories:         *flagLoCoMoReuseMemories,
 		SessionRecallResults:  *flagVectorTopK,
 		SessionRecallMinScore: *flagSessionRecallMinScore,
 		DebugDumpMemories:     *flagDebugDumpMemories,
@@ -240,6 +244,9 @@ func logScenarioConfig(
 	log.Printf("Memory Backends: %v", backends)
 	if *flagQAHistoryTurns > 0 {
 		log.Printf("QA History Turns: %d", *flagQAHistoryTurns)
+	}
+	if *flagLoCoMoReuseMemories {
+		log.Printf("Reuse Memories: enabled (QA only)")
 	}
 	if *flagQASearchPasses > 1 {
 		log.Printf("QA Search Passes: %d", *flagQASearchPasses)
@@ -424,6 +431,9 @@ func validateLoCoMoFlags() {
 			"Invalid session-recall-min-score: %f",
 			*flagSessionRecallMinScore,
 		)
+	}
+	if *flagLoCoMoReuseMemories && strings.TrimSpace(*flagTableSuffix) == "" {
+		log.Fatal("locomo-reuse-memories requires an explicit table-suffix")
 	}
 }
 
@@ -747,6 +757,9 @@ func buildEvaluationResult(
 			MaxContext:     config.MaxContext,
 			QAHistoryTurns: config.QAHistoryTurns,
 			QASearchPasses: config.QASearchPasses,
+			ReuseMemories:  config.ReuseMemories,
+			TableSuffix:    *flagTableSuffix,
+			Build:          currentLongMemEvalBuildProvenance(),
 			LLMJudge:       config.EnableLLMJudge,
 		},
 		Summary: &EvalSummary{
