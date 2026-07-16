@@ -2200,7 +2200,12 @@ func buildLongMemEvalAnswerPrompt(inst *lmeInstance, hits []memoryHit) string {
 	guidance := longMemEvalAnswerGuidance(inst)
 	return fmt.Sprintf(`You are answering a LongMemEval memory question.
 
-Use only the retrieved memories below. If the memories do not contain enough information, answer "I don't know".
+Use only the retrieved memories below. They are ordered from most to least
+relevant. When an earlier memory directly and unambiguously answers the
+requested value, do not abstain merely because lower-ranked memories discuss
+related entities or events. Only explicit contradictory evidence about the
+same subject and time should block that answer. If the memories do not contain
+enough information, answer "I don't know".
 Output only the final answer. Do not explain, reason step by step, cite
 memory numbers, mention uncertainty analysis, or use markdown. The first token
 must be part of the final answer. If the question asks for an order, list, or

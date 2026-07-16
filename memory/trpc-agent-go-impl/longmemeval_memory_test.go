@@ -1039,6 +1039,18 @@ func TestBuildLongMemEvalAnswerPromptNonPreference(t *testing.T) {
 	if !strings.Contains(normalizedPrompt, "shortest final span") {
 		t.Fatalf("missing concise scalar guidance: %s", prompt)
 	}
+	if !strings.Contains(normalizedPrompt,
+		"ordered from most to least relevant") {
+		t.Fatalf("missing retrieval-order guidance: %s", prompt)
+	}
+	if !strings.Contains(normalizedPrompt,
+		"lower-ranked memories discuss related entities or events") {
+		t.Fatalf("missing lower-ranked distraction guidance: %s", prompt)
+	}
+	if !strings.Contains(normalizedPrompt,
+		"contradictory evidence about the same subject and time") {
+		t.Fatalf("missing ranked-evidence conflict guard: %s", prompt)
+	}
 	if !strings.Contains(normalizedPrompt, "first token must be part of the final answer") {
 		t.Fatalf("missing no-reasoning output guard: %s", prompt)
 	}
