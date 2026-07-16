@@ -87,6 +87,7 @@ type lmeSelectionCase struct {
 }
 
 type lmeSelectionManifest struct {
+	Build           lmeBuildProvenance `json:"build"`
 	DatasetSHA256   string             `json:"dataset_sha256"`
 	SelectionSHA256 string             `json:"selection_sha256"`
 	ProtocolVersion string             `json:"protocol_version"`
@@ -2475,6 +2476,7 @@ func writeLongMemEvalSelection(
 		})
 	}
 	manifest := lmeSelectionManifest{
+		Build:           currentLongMemEvalBuildProvenance(),
 		DatasetSHA256:   datasetDigest,
 		SelectionSHA256: selectionDigest,
 		ProtocolVersion: lmeProtocolVersion,

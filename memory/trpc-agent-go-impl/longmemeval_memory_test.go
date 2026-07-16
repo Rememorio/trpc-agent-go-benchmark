@@ -207,6 +207,9 @@ func TestWriteLongMemEvalSelectionOmitsQuestionContent(t *testing.T) {
 		got.AbstentionCount != 1 || len(got.Cases) != 2 {
 		t.Fatalf("unexpected manifest: %+v", got)
 	}
+	if got.Build.GoVersion == "" {
+		t.Fatalf("selection omitted build provenance: %+v", got.Build)
+	}
 	if got.Cases[0].QuestionID != "question-1" || got.Cases[0].Abstention {
 		t.Fatalf("unexpected answerable case: %+v", got.Cases[0])
 	}
