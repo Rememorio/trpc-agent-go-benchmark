@@ -80,6 +80,23 @@ type lmeInstance struct {
 	HaystackSessions   [][]lmeTurn `json:"haystack_sessions"`
 }
 
+type lmeSelectionCase struct {
+	QuestionID   string `json:"question_id"`
+	QuestionType string `json:"question_type"`
+	Abstention   bool   `json:"abstention"`
+}
+
+type lmeSelectionManifest struct {
+	DatasetSHA256   string             `json:"dataset_sha256"`
+	SelectionSHA256 string             `json:"selection_sha256"`
+	ProtocolVersion string             `json:"protocol_version"`
+	ProtocolSHA256  string             `json:"protocol_sha256"`
+	SamplePerType   int                `json:"sample_per_type"`
+	AbstentionCount int                `json:"sample_abstention_count"`
+	SampleSeed      int64              `json:"sample_seed"`
+	Cases           []lmeSelectionCase `json:"cases"`
+}
+
 type flexString string
 
 func (s *flexString) UnmarshalJSON(data []byte) error {
@@ -890,20 +907,6 @@ func runLongMemEvalMemory(ctx context.Context) error {
 	if path := strings.TrimSpace(*flagLMEAnalyzeResults); path != "" {
 		return analyzeLongMemEvalResults(path, longMemEvalAnalysisOutputDir(path))
 	}
-	if err := os.MkdirAll(*flagOutput, 0755); err != nil {
-		return fmt.Errorf("create output dir: %w", err)
-	}
-	pgExtractionConfig, err := currentLongMemEvalPGVectorExtractionConfig()
-	if err != nil {
-		return err
-	}
-
-	modelName := getModelName()
-	modelVariant := getModelVariant()
-	baseLLM, err := newLongMemEvalModel(modelName, modelVariant)
-	if err != nil {
-		return err
-	}
 	datasetPath := resolveLongMemEvalDatasetPath()
 	instances, err := loadLongMemEval(datasetPath)
 	if err != nil {
@@ -919,6 +922,29 @@ func runLongMemEvalMemory(ctx context.Context) error {
 		cases,
 		protocol,
 	)
+	if err != nil {
+		return err
+	}
+	if *flagLMESelectionOnly {
+		return writeLongMemEvalSelection(
+			os.Stdout,
+			cases,
+			datasetDigest,
+			selectionDigest,
+			protocolDigest,
+		)
+	}
+	if err := os.MkdirAll(*flagOutput, 0755); err != nil {
+		return fmt.Errorf("create output dir: %w", err)
+	}
+	pgExtractionConfig, err := currentLongMemEvalPGVectorExtractionConfig()
+	if err != nil {
+		return err
+	}
+
+	modelName := getModelName()
+	modelVariant := getModelVariant()
+	baseLLM, err := newLongMemEvalModel(modelName, modelVariant)
 	if err != nil {
 		return err
 	}
@@ -2428,6 +2454,42 @@ func questionIDs(instances []*lmeInstance) []string {
 		out = append(out, inst.QuestionID)
 	}
 	return out
+}
+
+func writeLongMemEvalSelection(
+	w io.Writer,
+	instances []*lmeInstance,
+	datasetDigest string,
+	selectionDigest string,
+	protocolDigest string,
+) error {
+	cases := make([]lmeSelectionCase, 0, len(instances))
+	for _, inst := range instances {
+		if inst == nil {
+			continue
+		}
+		cases = append(cases, lmeSelectionCase{
+			QuestionID:   inst.QuestionID,
+			QuestionType: inst.QuestionType,
+			Abstention:   isAbstentionQuestion(inst),
+		})
+	}
+	manifest := lmeSelectionManifest{
+		DatasetSHA256:   datasetDigest,
+		SelectionSHA256: selectionDigest,
+		ProtocolVersion: lmeProtocolVersion,
+		ProtocolSHA256:  protocolDigest,
+		SamplePerType:   *flagLMEPerType,
+		AbstentionCount: *flagLMEAbstentionCount,
+		SampleSeed:      *flagLMESampleSeed,
+		Cases:           cases,
+	}
+	encoder := json.NewEncoder(w)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(manifest); err != nil {
+		return fmt.Errorf("encode LongMemEval selection: %w", err)
+	}
+	return nil
 }
 
 func saveLongMemEvalResults(outputDir string, result *runResult) {

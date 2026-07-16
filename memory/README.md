@@ -258,6 +258,17 @@ go run . \
   -table-suffix _lme_badcase \
   -output ../results/lme-badcase
 
+# Inspect and pre-register a stratified selection without initializing any
+# model, embedding, database, or Mem0 provider. The manifest contains only
+# question IDs, types, sampling parameters, and provenance digests.
+go run . \
+  -dataset-format longmemeval \
+  -dataset ../../summary/data/longmemeval-cleaned/longmemeval_oracle.json \
+  -lme-per-type 2 \
+  -lme-abstention-count 4 \
+  -lme-sample-seed 48 \
+  -lme-selection-only
+
 # Stratified 16-question development baseline plus a frozen Mem0 reference arm.
 LME_AGENT_REPLACEMENT="trpc.group/trpc-go/trpc-agent-go@<upstream-pseudo-version>" \
 LME_AGENT_PROFILE=upstream \
@@ -440,6 +451,7 @@ LongMemEval-specific options:
 | `-lme-per-type`          | 0       | Stratified sample count per question type    |
 | `-lme-abstention-count`  | 0       | Additional abstention questions to sample    |
 | `-lme-sample-seed`       | 42      | Sampling seed                                |
+| `-lme-selection-only`    | false   | Print selection provenance, then exit        |
 | `-lme-max-sessions`      | 0       | Max haystack sessions per case               |
 | `-lme-max-pairs`         | 0       | Max user/assistant pairs per case            |
 | `-lme-ingest-wait`       | 250ms   | Extra delay after completed pair ingestion   |

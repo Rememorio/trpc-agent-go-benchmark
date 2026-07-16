@@ -158,6 +158,63 @@ func TestLongMemEvalBuildProvenance(t *testing.T) {
 	}
 }
 
+func TestWriteLongMemEvalSelectionOmitsQuestionContent(t *testing.T) {
+	originalPerType := *flagLMEPerType
+	originalAbstentionCount := *flagLMEAbstentionCount
+	originalSeed := *flagLMESampleSeed
+	t.Cleanup(func() {
+		*flagLMEPerType = originalPerType
+		*flagLMEAbstentionCount = originalAbstentionCount
+		*flagLMESampleSeed = originalSeed
+	})
+	*flagLMEPerType = 2
+	*flagLMEAbstentionCount = 1
+	*flagLMESampleSeed = 271
+
+	instances := []*lmeInstance{
+		{
+			QuestionID:   "question-1",
+			QuestionType: "single-session-user",
+			Question:     "private question content",
+			Answer:       "private answer content",
+		},
+		{
+			QuestionID:   "question-2_abs",
+			QuestionType: "single-session-user",
+			Question:     "another private question",
+			Answer:       "another private answer",
+		},
+	}
+	var output strings.Builder
+	if err := writeLongMemEvalSelection(
+		&output,
+		instances,
+		"dataset-digest",
+		"selection-digest",
+		"protocol-digest",
+	); err != nil {
+		t.Fatalf("write selection: %v", err)
+	}
+	if strings.Contains(output.String(), "private") {
+		t.Fatalf("selection leaked question content: %s", output.String())
+	}
+
+	var got lmeSelectionManifest
+	if err := json.Unmarshal([]byte(output.String()), &got); err != nil {
+		t.Fatalf("decode selection: %v", err)
+	}
+	if got.SampleSeed != 271 || got.SamplePerType != 2 ||
+		got.AbstentionCount != 1 || len(got.Cases) != 2 {
+		t.Fatalf("unexpected manifest: %+v", got)
+	}
+	if got.Cases[0].QuestionID != "question-1" || got.Cases[0].Abstention {
+		t.Fatalf("unexpected answerable case: %+v", got.Cases[0])
+	}
+	if got.Cases[1].QuestionID != "question-2_abs" || !got.Cases[1].Abstention {
+		t.Fatalf("unexpected abstention case: %+v", got.Cases[1])
+	}
+}
+
 func TestLongMemEvalBuildProvenanceIssue(t *testing.T) {
 	t.Parallel()
 	pinned := lmeBuildProvenance{
