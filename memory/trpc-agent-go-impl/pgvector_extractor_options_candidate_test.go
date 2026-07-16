@@ -19,8 +19,8 @@ import (
 
 func TestLongMemEvalExtractorOptionsCandidate(t *testing.T) {
 	t.Parallel()
-	options, err := longMemEvalExtractorOptions(lmePGVectorExtractionConfig{
-		UpdatePolicy:              lmeUpdatePolicyHistoryPreserving,
+	options, err := pgvectorExtractorOptions(pgvectorExtractionConfig{
+		UpdatePolicy:              pgvectorUpdatePolicyHistoryPreserving,
 		AssistantResultExtraction: true,
 	})
 	if err != nil {

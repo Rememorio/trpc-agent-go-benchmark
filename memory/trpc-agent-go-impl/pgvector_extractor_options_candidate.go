@@ -13,8 +13,8 @@ package main
 
 import "trpc.group/trpc-go/trpc-agent-go/memory/extractor"
 
-func longMemEvalExtractorOptions(
-	config lmePGVectorExtractionConfig,
+func pgvectorExtractorOptions(
+	config pgvectorExtractionConfig,
 ) ([]extractor.Option, error) {
 	return []extractor.Option{
 		extractor.WithUpdatePolicy(extractor.UpdatePolicy(config.UpdatePolicy)),

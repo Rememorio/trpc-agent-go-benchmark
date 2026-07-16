@@ -280,8 +280,8 @@ LME_AGENT_PROFILE=upstream \
   -lme-abstention-count 4 \
   -lme-sample-seed 48 \
   -lme-implementation upstream-main-<commit> \
-  -lme-update-policy reconcile \
-  -lme-assistant-result-extraction=false \
+  -pgvector-update-policy reconcile \
+  -pgvector-assistant-result-extraction=false \
   -lme-answer=true \
   -mem0-llm-temperature 0 \
   -vector-topk 30 \
@@ -298,8 +298,8 @@ LME_AGENT_PROFILE=upstream \
   -lme-abstention-count 4 \
   -lme-sample-seed 48 \
   -lme-implementation candidate-<commit> \
-  -lme-update-policy reconcile \
-  -lme-assistant-result-extraction=true \
+  -pgvector-update-policy history-preserving \
+  -pgvector-assistant-result-extraction=true \
   -lme-answer=true \
   -vector-topk 30 \
   -table-suffix _lme_candidate \
@@ -428,6 +428,8 @@ build provenance.
 | `-scenario`         | long_context           | Evaluation scenario (comma-separated)  |
 | `-memory-backend`   | inmemory               | Memory backend (comma-separated)       |
 | `-pgvector-dsn`     | (env)                  | PostgreSQL DSN for pgvector            |
+| `-pgvector-update-policy` | reconcile            | Auto-memory reconciliation policy      |
+| `-pgvector-assistant-result-extraction` | false | Retain concrete assistant results   |
 | `-mysql-dsn`        | (env)                  | MySQL DSN for mysql backend            |
 | `-embed-model`      | text-embedding-3-small | Embedding model for vector backends    |
 | `-vector-topk`      | 30                     | Top-k results for vector backends      |

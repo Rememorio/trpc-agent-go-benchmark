@@ -74,20 +74,21 @@ type EvaluationResult struct {
 
 // EvalMetadata holds evaluation metadata.
 type EvalMetadata struct {
-	Framework      string             `json:"framework"`
-	Version        string             `json:"version"`
-	Timestamp      time.Time          `json:"timestamp"`
-	Model          string             `json:"model"`
-	EvalModel      string             `json:"eval_model,omitempty"`
-	Scenario       string             `json:"scenario"`
-	MemoryBackend  string             `json:"memory_backend,omitempty"`
-	MaxContext     int                `json:"max_context"`
-	QAHistoryTurns int                `json:"qa_history_turns,omitempty"`
-	QASearchPasses int                `json:"qa_search_passes,omitempty"`
-	ReuseMemories  bool               `json:"reuse_memories,omitempty"`
-	TableSuffix    string             `json:"table_suffix,omitempty"`
-	Build          lmeBuildProvenance `json:"build"`
-	LLMJudge       bool               `json:"llm_judge"`
+	Framework          string                    `json:"framework"`
+	Version            string                    `json:"version"`
+	Timestamp          time.Time                 `json:"timestamp"`
+	Model              string                    `json:"model"`
+	EvalModel          string                    `json:"eval_model,omitempty"`
+	Scenario           string                    `json:"scenario"`
+	MemoryBackend      string                    `json:"memory_backend,omitempty"`
+	MaxContext         int                       `json:"max_context"`
+	QAHistoryTurns     int                       `json:"qa_history_turns,omitempty"`
+	QASearchPasses     int                       `json:"qa_search_passes,omitempty"`
+	ReuseMemories      bool                      `json:"reuse_memories,omitempty"`
+	TableSuffix        string                    `json:"table_suffix,omitempty"`
+	PGVectorExtraction *pgvectorExtractionConfig `json:"pgvector_extraction,omitempty"`
+	Build              lmeBuildProvenance        `json:"build"`
+	LLMJudge           bool                      `json:"llm_judge"`
 }
 
 // EvalSummary holds aggregated evaluation summary.
@@ -344,7 +345,11 @@ func runScenario(
 	var sessionSvc session.Service
 	var err error
 	memCfg := buildMemoryConfig(scenarioType, backend)
-	memOpts := buildMemoryServiceOptions(memCfg, llm)
+	memOpts, configErr := buildMemoryServiceOptions(memCfg, llm)
+	if configErr != nil {
+		log.Printf("Failed to configure %s memory service: %v", backend, configErr)
+		return
+	}
 
 	switch scenarioType {
 	case scenarios.ScenarioLongContext:
@@ -462,20 +467,28 @@ func buildMemoryConfig(
 func buildMemoryServiceOptions(
 	cfg memoryConfig,
 	extractorModel model.Model,
-) memoryServiceOptions {
+) (memoryServiceOptions, error) {
 	opts := memoryServiceOptions{vectorTopK: *flagVectorTopK}
 	if cfg.mode != memoryModeAuto {
-		return opts
+		return opts, nil
 	}
 	opts.enableExtractor = true
 	opts.extractorModel = extractorModel
-	return opts
+	if cfg.backend == "pgvector" {
+		config, err := currentPGVectorExtractionConfig()
+		if err != nil {
+			return memoryServiceOptions{}, err
+		}
+		opts.pgvectorExtraction = config
+	}
+	return opts, nil
 }
 
 type memoryServiceOptions struct {
-	enableExtractor bool
-	extractorModel  model.Model
-	vectorTopK      int
+	enableExtractor    bool
+	extractorModel     model.Model
+	vectorTopK         int
+	pgvectorExtraction pgvectorExtractionConfig
 }
 
 func createMemoryService(
@@ -544,7 +557,13 @@ func createPGVectorService(
 			embedModelName,
 		)
 		tableName = tableNameWithSuffix(pgvectorTableAutoBase)
-		ext = extractor.NewExtractor(opts.extractorModel)
+		extractorOptions, err := pgvectorExtractorOptions(
+			opts.pgvectorExtraction,
+		)
+		if err != nil {
+			return nil, err
+		}
+		ext = extractor.NewExtractor(opts.extractorModel, extractorOptions...)
 	} else {
 		log.Printf(
 			"Creating pgvector memory service (embed_model=%s)",
@@ -745,23 +764,29 @@ func buildEvaluationResult(
 		cacheHitRate = float64(totalUsage.CachedTokens) /
 			float64(totalUsage.PromptTokens)
 	}
+	metadata := &EvalMetadata{
+		Framework:      "trpc-agent-go",
+		Version:        "1.0.0",
+		Timestamp:      time.Now(),
+		Model:          getModelName(),
+		EvalModel:      getEvalModelName(),
+		Scenario:       string(config.Scenario),
+		MemoryBackend:  backend,
+		MaxContext:     config.MaxContext,
+		QAHistoryTurns: config.QAHistoryTurns,
+		QASearchPasses: config.QASearchPasses,
+		ReuseMemories:  config.ReuseMemories,
+		TableSuffix:    *flagTableSuffix,
+		Build:          currentLongMemEvalBuildProvenance(),
+		LLMJudge:       config.EnableLLMJudge,
+	}
+	if config.Scenario == scenarios.ScenarioAuto && backend == "pgvector" {
+		if extraction, err := currentPGVectorExtractionConfig(); err == nil {
+			metadata.PGVectorExtraction = &extraction
+		}
+	}
 	return &EvaluationResult{
-		Metadata: &EvalMetadata{
-			Framework:      "trpc-agent-go",
-			Version:        "1.0.0",
-			Timestamp:      time.Now(),
-			Model:          getModelName(),
-			EvalModel:      getEvalModelName(),
-			Scenario:       string(config.Scenario),
-			MemoryBackend:  backend,
-			MaxContext:     config.MaxContext,
-			QAHistoryTurns: config.QAHistoryTurns,
-			QASearchPasses: config.QASearchPasses,
-			ReuseMemories:  config.ReuseMemories,
-			TableSuffix:    *flagTableSuffix,
-			Build:          currentLongMemEvalBuildProvenance(),
-			LLMJudge:       config.EnableLLMJudge,
-		},
+		Metadata: metadata,
 		Summary: &EvalSummary{
 			TotalSamples:          len(sampleResults),
 			TotalQuestions:        totalQuestions,

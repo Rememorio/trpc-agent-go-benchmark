@@ -17,13 +17,13 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
 )
 
-func longMemEvalExtractorOptions(
-	config lmePGVectorExtractionConfig,
+func pgvectorExtractorOptions(
+	config pgvectorExtractionConfig,
 ) ([]extractor.Option, error) {
-	if config.UpdatePolicy != lmeUpdatePolicyReconcile {
+	if config.UpdatePolicy != pgvectorUpdatePolicyReconcile {
 		return nil, fmt.Errorf(
 			"upstream build profile only supports update policy %q",
-			lmeUpdatePolicyReconcile,
+			pgvectorUpdatePolicyReconcile,
 		)
 	}
 	if config.AssistantResultExtraction {

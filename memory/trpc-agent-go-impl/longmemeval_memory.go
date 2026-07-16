@@ -223,20 +223,6 @@ type extractionOperation struct {
 	Location     string                  `json:"location,omitempty"`
 }
 
-type lmeUpdatePolicy string
-
-const (
-	lmeUpdatePolicyReconcile         lmeUpdatePolicy = "reconcile"
-	lmeUpdatePolicyHistoryPreserving lmeUpdatePolicy = "history-preserving"
-	lmeUpdatePolicyAddOnly           lmeUpdatePolicy = "add-only"
-)
-
-type lmePGVectorExtractionConfig struct {
-	UpdatePolicy                lmeUpdatePolicy `json:"update_policy"`
-	AssistantResultExtraction   bool            `json:"assistant_result_extraction"`
-	AssistantResultUpdatePolicy lmeUpdatePolicy `json:"assistant_result_update_policy,omitempty"`
-}
-
 type traceMessage struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
@@ -836,46 +822,6 @@ func openAIModelOptionsForVariant(variant string) ([]openaimodel.Option, error) 
 	}
 }
 
-func currentLongMemEvalPGVectorExtractionConfig() (
-	lmePGVectorExtractionConfig,
-	error,
-) {
-	var policy lmeUpdatePolicy
-	switch strings.ToLower(strings.TrimSpace(*flagLMEUpdatePolicy)) {
-	case "", string(lmeUpdatePolicyReconcile):
-		policy = lmeUpdatePolicyReconcile
-	case string(lmeUpdatePolicyHistoryPreserving):
-		policy = lmeUpdatePolicyHistoryPreserving
-	case string(lmeUpdatePolicyAddOnly):
-		policy = lmeUpdatePolicyAddOnly
-	default:
-		return lmePGVectorExtractionConfig{}, fmt.Errorf(
-			"unsupported lme-update-policy %q: expected reconcile, history-preserving, or add-only",
-			*flagLMEUpdatePolicy,
-		)
-	}
-	return lmePGVectorExtractionConfig{
-		UpdatePolicy:              policy,
-		AssistantResultExtraction: *flagLMEAssistantResultExtraction,
-		AssistantResultUpdatePolicy: assistantResultUpdatePolicy(
-			policy, *flagLMEAssistantResultExtraction,
-		),
-	}, nil
-}
-
-func assistantResultUpdatePolicy(
-	policy lmeUpdatePolicy,
-	enabled bool,
-) lmeUpdatePolicy {
-	if !enabled {
-		return ""
-	}
-	if policy == lmeUpdatePolicyAddOnly {
-		return lmeUpdatePolicyAddOnly
-	}
-	return lmeUpdatePolicyHistoryPreserving
-}
-
 func runLongMemEvalMemory(ctx context.Context) error {
 	if strings.TrimSpace(*flagLMECompareResults) == "" &&
 		strings.TrimSpace(*flagLMEAnalyzeResults) == "" {
@@ -943,7 +889,7 @@ func runLongMemEvalMemory(ctx context.Context) error {
 	if err := os.MkdirAll(*flagOutput, 0755); err != nil {
 		return fmt.Errorf("create output dir: %w", err)
 	}
-	pgExtractionConfig, err := currentLongMemEvalPGVectorExtractionConfig()
+	pgExtractionConfig, err := currentPGVectorExtractionConfig()
 	if err != nil {
 		return err
 	}
@@ -1262,7 +1208,7 @@ afterIngest:
 func newBackend(
 	name string,
 	llm model.Model,
-	pgExtractionConfig lmePGVectorExtractionConfig,
+	pgExtractionConfig pgvectorExtractionConfig,
 ) (memoryBackend, error) {
 	switch strings.TrimSpace(name) {
 	case "pgvector":
@@ -1315,7 +1261,7 @@ func newBackend(
 
 func newLongMemEvalPGVectorBackend(
 	llm model.Model,
-	pgExtractionConfig lmePGVectorExtractionConfig,
+	pgExtractionConfig pgvectorExtractionConfig,
 	readOnly bool,
 ) (*pgvectorBackend, error) {
 	dsn := getPGVectorDSN()
@@ -1336,7 +1282,7 @@ func newLongMemEvalPGVectorBackend(
 	if readOnly {
 		opts = append(opts, memorypgvector.WithSkipDBInit(true))
 	} else {
-		extractorOptions, err := longMemEvalExtractorOptions(pgExtractionConfig)
+		extractorOptions, err := pgvectorExtractorOptions(pgExtractionConfig)
 		if err != nil {
 			return nil, err
 		}

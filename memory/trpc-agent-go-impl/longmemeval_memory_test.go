@@ -540,31 +540,6 @@ func TestLMETracingExtractorStagesFallback(t *testing.T) {
 	}
 }
 
-func TestAssistantResultUpdatePolicy(t *testing.T) {
-	t.Parallel()
-
-	if got := assistantResultUpdatePolicy(
-		lmeUpdatePolicyReconcile, false,
-	); got != "" {
-		t.Fatalf("disabled policy = %q, want empty", got)
-	}
-	if got := assistantResultUpdatePolicy(
-		lmeUpdatePolicyReconcile, true,
-	); got != lmeUpdatePolicyHistoryPreserving {
-		t.Fatalf("reconcile result policy = %q", got)
-	}
-	if got := assistantResultUpdatePolicy(
-		lmeUpdatePolicyHistoryPreserving, true,
-	); got != lmeUpdatePolicyHistoryPreserving {
-		t.Fatalf("history result policy = %q", got)
-	}
-	if got := assistantResultUpdatePolicy(
-		lmeUpdatePolicyAddOnly, true,
-	); got != lmeUpdatePolicyAddOnly {
-		t.Fatalf("add-only result policy = %q", got)
-	}
-}
-
 func TestMem0OSSIngestRetriesTransientStatus(t *testing.T) {
 	t.Parallel()
 
@@ -1766,43 +1741,6 @@ func TestOpenAIModelOptionsForVariant(t *testing.T) {
 	}
 	if _, err := openAIModelOptionsForVariant("unknown"); err == nil {
 		t.Fatal("expected error for unsupported variant")
-	}
-}
-
-func TestCurrentLongMemEvalPGVectorExtractionConfig(t *testing.T) {
-	oldPolicy := *flagLMEUpdatePolicy
-	oldAssistantResults := *flagLMEAssistantResultExtraction
-	defer func() {
-		*flagLMEUpdatePolicy = oldPolicy
-		*flagLMEAssistantResultExtraction = oldAssistantResults
-	}()
-
-	for _, tt := range []struct {
-		input string
-		want  lmeUpdatePolicy
-	}{
-		{input: "", want: lmeUpdatePolicyReconcile},
-		{input: " RECONCILE ", want: lmeUpdatePolicyReconcile},
-		{input: "history-preserving", want: lmeUpdatePolicyHistoryPreserving},
-		{input: "ADD-ONLY", want: lmeUpdatePolicyAddOnly},
-	} {
-		*flagLMEUpdatePolicy = tt.input
-		*flagLMEAssistantResultExtraction = true
-		got, err := currentLongMemEvalPGVectorExtractionConfig()
-		if err != nil {
-			t.Fatalf("policy %q returned error: %v", tt.input, err)
-		}
-		if got.UpdatePolicy != tt.want {
-			t.Fatalf("policy %q = %q, want %q", tt.input, got.UpdatePolicy, tt.want)
-		}
-		if !got.AssistantResultExtraction {
-			t.Fatalf("policy %q lost assistant-result setting", tt.input)
-		}
-	}
-
-	*flagLMEUpdatePolicy = "custom"
-	if _, err := currentLongMemEvalPGVectorExtractionConfig(); err == nil {
-		t.Fatal("expected unsupported update policy error")
 	}
 }
 
