@@ -528,7 +528,7 @@ func longMemEvalAnalysisRows(result *runResult) []lmeAnalysisRow {
 				F1:               br.F1,
 				BLEU:             br.BLEU,
 				Evidence:         evidenceStatus(br.Evidence),
-				Error:            br.Error,
+				Error:            longMemEvalBackendError(br),
 				Answer:           br.Answer,
 				Reference:        cr.Answer,
 				Question:         cr.Question,
@@ -657,7 +657,7 @@ func normalizedFailureStage(br *backendResult) string {
 	}
 	stage := strings.TrimSpace(br.FailureStage)
 	if stage == "" {
-		if br.Error != "" {
+		if longMemEvalBackendError(br) != "" {
 			return "backend_error"
 		}
 		return "unknown"
@@ -671,7 +671,7 @@ func evaluatedFailureStage(
 	judgeCorrect bool,
 	judgeAvailable bool,
 ) string {
-	if !judgeAvailable || br == nil || br.Error != "" {
+	if !judgeAvailable || br == nil || longMemEvalBackendError(br) != "" {
 		return rawStage
 	}
 	switch rawStage {

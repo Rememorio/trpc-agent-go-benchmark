@@ -204,8 +204,9 @@ func rerankLongMemEvalResult(
 			br.RawAnswer = rawAnswer
 			br.Answer = strings.TrimSpace(rawAnswer)
 			br.Judge = nil
+			resetLongMemEvalAnswerError(br)
 			if answerErr != nil {
-				br.Error = appendError(br.Error, "rerank answer: "+answerErr.Error())
+				br.AnswerError = answerErr.Error()
 			}
 			scoreLongMemEvalAnswer(cr, br)
 			previousEvidence := br.Evidence
@@ -215,9 +216,6 @@ func rerankLongMemEvalResult(
 					previousEvidence.HasAnswerTurnLabels
 			}
 			br.FailureStage = classifyFailure(inst, br)
-			if answerErr != nil {
-				br.FailureStage = "answer_error"
-			}
 			completed++
 			rerankMetadata["completed_backends"] = completed
 			result.Summary = buildLongMemEvalSummary(result.Cases)

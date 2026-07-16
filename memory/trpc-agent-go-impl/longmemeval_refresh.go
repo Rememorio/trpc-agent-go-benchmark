@@ -248,6 +248,7 @@ func refreshLongMemEvalRetrievalResult(
 		replaceLongMemEvalRerankUsage(br, lmeTokenUsage{})
 		br.Retrieval = hits
 		br.Judge = nil
+		resetLongMemEvalAnswerError(br)
 		if searchErr != nil {
 			br.Error = appendError(br.Error, "refresh search: "+searchErr.Error())
 			br.FailureStage = "search_error"
@@ -265,7 +266,7 @@ func refreshLongMemEvalRetrievalResult(
 			br.RawAnswer = raw
 			br.Answer = strings.TrimSpace(raw)
 			if answerErr != nil {
-				br.Error = appendError(br.Error, "refresh answer: "+answerErr.Error())
+				br.AnswerError = answerErr.Error()
 			}
 			scoreLongMemEvalAnswer(cr, br)
 			previousEvidence := br.Evidence
@@ -275,9 +276,6 @@ func refreshLongMemEvalRetrievalResult(
 					previousEvidence.HasAnswerTurnLabels
 			}
 			br.FailureStage = classifyFailure(inst, br)
-			if answerErr != nil {
-				br.FailureStage = "answer_error"
-			}
 		}
 		completed++
 		refresh["completed_cases"] = completed

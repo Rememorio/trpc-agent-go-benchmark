@@ -258,6 +258,7 @@ type backendResult struct {
 	IngestDuration        int64               `json:"ingest_duration_ms"`
 	SearchDuration        int64               `json:"search_duration_ms"`
 	AnswerDuration        int64               `json:"answer_duration_ms,omitempty"`
+	AnswerError           string              `json:"answer_error,omitempty"`
 	Error                 string              `json:"error,omitempty"`
 }
 
@@ -1208,7 +1209,7 @@ afterIngest:
 		br.AnswerUsage = tokenUsagePtr(usage)
 		addLongMemEvalBackendUsage(br, usage, embeddingUsage, providerUsage)
 		if err != nil {
-			br.Error = appendError(br.Error, "answer: "+err.Error())
+			br.AnswerError = err.Error()
 		}
 		br.RawAnswer = rawAnswer
 		br.Answer = strings.TrimSpace(rawAnswer)
@@ -1603,12 +1604,13 @@ func reanswerLongMemEvalResult(
 			br.AnswerDuration = time.Since(start).Milliseconds()
 			br.RawAnswer = raw
 			br.Answer = strings.TrimSpace(raw)
+			resetLongMemEvalAnswerError(br)
 			if answerErr != nil {
-				br.Error = appendError(br.Error, "re-answer: "+answerErr.Error())
+				br.AnswerError = answerErr.Error()
 			}
 			scoreLongMemEvalAnswer(cr, br)
-			if answerErr != nil {
-				br.FailureStage = "answer_error"
+			if br.AnswerError != "" || br.Error != "" || br.Evidence != nil {
+				br.FailureStage = classifyFailure(inst, br)
 			}
 			log.Printf("  %s answer=%q calls=%d tokens=%d err=%v",
 				backendName, truncate(br.Answer, 80), usage.LLMCalls,
@@ -1854,6 +1856,42 @@ func scoreLongMemEvalAnswer(cr *caseResult, br *backendResult) {
 			br.FailureStage = "abstention_answered"
 		}
 	}
+}
+
+func resetLongMemEvalAnswerError(br *backendResult) {
+	if br == nil {
+		return
+	}
+	br.AnswerError = ""
+	br.Error = stripLegacyLongMemEvalAnswerErrors(br.Error)
+}
+
+func stripLegacyLongMemEvalAnswerErrors(value string) string {
+	if value == "" {
+		return ""
+	}
+	prefixes := []string{
+		"answer:",
+		"re-answer:",
+		"refresh answer:",
+		"rerank answer:",
+	}
+	parts := strings.Split(value, "; ")
+	kept := parts[:0]
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		answerError := false
+		for _, prefix := range prefixes {
+			if strings.HasPrefix(trimmed, prefix) {
+				answerError = true
+				break
+			}
+		}
+		if !answerError && trimmed != "" {
+			kept = append(kept, trimmed)
+		}
+	}
+	return strings.Join(kept, "; ")
 }
 
 func judgeLongMemEvalAnswer(
@@ -2420,8 +2458,8 @@ func saveCaseLog(outputDir string, cr *caseResult, br *backendResult) {
 	fmt.Fprintf(&b, "QuestionID: %s\nType: %s\nDate: %s\n", cr.QuestionID, cr.QuestionType, cr.QuestionDate)
 	fmt.Fprintf(&b, "Question: %s\nReference: %s\nAnswerSessions: %s\n\n",
 		cr.Question, cr.Answer, strings.Join(cr.AnswerSessionIDs, ","))
-	fmt.Fprintf(&b, "Backend: %s\nUserID: %s\nPairs: %d\nError: %s\n\n",
-		br.Backend, br.UserID, br.IngestedPairs, br.Error)
+	fmt.Fprintf(&b, "Backend: %s\nUserID: %s\nPairs: %d\nError: %s\nAnswerError: %s\n\n",
+		br.Backend, br.UserID, br.IngestedPairs, br.Error, br.AnswerError)
 	if br.Evidence != nil {
 		fmt.Fprintf(&b, "Evidence: stage=%s has_labels=%v abstention=%v extract_any=%v retrieval_any=%v retrieval_all=%v turn_extract_any=%v turn_retrieval_any=%v extracted=%s retrieved=%s\n\n",
 			br.FailureStage,
@@ -2552,7 +2590,8 @@ func printLongMemEvalSummary(result *runResult) {
 				tokenCalls(br.TokenUsage), tokenTotal(br.TokenUsage), tokenCached(br.TokenUsage),
 				embeddingCalls(br.EmbeddingUsage), embeddingTokens(br.EmbeddingUsage),
 				br.ProviderUsageReported,
-				br.ExactMatch, br.F1, br.BLEU, br.Error)
+				br.ExactMatch, br.F1, br.BLEU,
+				longMemEvalBackendError(br))
 		}
 	}
 	if result.Summary == nil {
@@ -2994,6 +3033,9 @@ func hasAnswerSourceHit(hits []memoryHit) bool {
 }
 
 func classifyFailure(inst *lmeInstance, br *backendResult) string {
+	if br.AnswerError != "" {
+		return "answer_error"
+	}
 	if br.Error != "" {
 		return "backend_error"
 	}
@@ -3234,6 +3276,17 @@ func appendError(base, next string) string {
 		return base
 	}
 	return base + "; " + next
+}
+
+func longMemEvalBackendError(br *backendResult) string {
+	if br == nil {
+		return ""
+	}
+	answerError := ""
+	if br.AnswerError != "" {
+		answerError = "answer: " + br.AnswerError
+	}
+	return appendError(br.Error, answerError)
 }
 
 func truncate(s string, n int) string {

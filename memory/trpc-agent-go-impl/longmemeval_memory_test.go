@@ -1153,6 +1153,9 @@ func TestReanswerLongMemEvalResult(t *testing.T) {
 	if mem0.Answer != "Option B" || !mem0.ExactMatch || mem0.FailureStage != "ok" || mem0.Judge != nil {
 		t.Fatalf("unexpected mem0 answer: %+v", mem0)
 	}
+	if mem0.Error != "" || mem0.AnswerError != "" {
+		t.Fatalf("stale answer error retained: %+v", mem0)
+	}
 	if pgvector.Answer != "Option A" || pgvector.ExactMatch || pgvector.FailureStage != "answer_miss" || pgvector.Judge != nil {
 		t.Fatalf("unexpected pgvector answer: %+v", pgvector)
 	}
@@ -1179,6 +1182,8 @@ func reanswerTestBackend(name string) *backendResult {
 		Answer:       "legacy answer",
 		RawAnswer:    "legacy answer",
 		FailureStage: "answer_miss",
+		AnswerError:  "old structured answer failure",
+		Error:        "answer: old legacy answer failure",
 		Judge:        &lmeJudgeResult{Correct: true, Raw: "VERDICT: yes"},
 		Retrieval:    []memoryHit{{Memory: "Option B was selected.", Score: 0.9}},
 		TokenUsage: &lmeTokenUsage{
@@ -1193,6 +1198,22 @@ func reanswerTestBackend(name string) *backendResult {
 			TotalTokens:      20,
 			LLMCalls:         1,
 		},
+	}
+}
+
+func TestStripLegacyLongMemEvalAnswerErrors(t *testing.T) {
+	t.Parallel()
+
+	value := "flush: failed; answer: truncated; re-answer: timed out; " +
+		"refresh answer: empty; rerank answer: invalid; search: failed"
+	if got, want := stripLegacyLongMemEvalAnswerErrors(value),
+		"flush: failed; search: failed"; got != want {
+		t.Fatalf("stripped error = %q, want %q", got, want)
+	}
+	if got := classifyFailure(&lmeInstance{}, &backendResult{
+		AnswerError: "truncated",
+	}); got != "answer_error" {
+		t.Fatalf("answer failure stage = %q, want answer_error", got)
 	}
 }
 
@@ -1752,6 +1773,7 @@ func TestEvaluatedFailureStage(t *testing.T) {
 	abstention := &backendResult{Evidence: &evidenceMetrics{IsAbstention: true}}
 	regular := &backendResult{Evidence: &evidenceMetrics{}}
 	backendError := &backendResult{Error: "failed"}
+	answerError := &backendResult{AnswerError: "truncated"}
 	tests := []struct {
 		name           string
 		result         *backendResult
@@ -1762,6 +1784,7 @@ func TestEvaluatedFailureStage(t *testing.T) {
 	}{
 		{name: "no judge", result: regular, raw: "answer_miss", want: "answer_miss"},
 		{name: "backend error", result: backendError, raw: "backend_error", judgeCorrect: true, judgeAvailable: true, want: "backend_error"},
+		{name: "answer error", result: answerError, raw: "answer_error", judgeCorrect: true, judgeAvailable: true, want: "answer_error"},
 		{name: "correct answer", result: regular, raw: "answer_miss", judgeCorrect: true, judgeAvailable: true, want: "ok"},
 		{name: "incorrect answer", result: regular, raw: "ok", judgeAvailable: true, want: "answer_miss"},
 		{name: "correct abstention", result: abstention, raw: "abstention_answered", judgeCorrect: true, judgeAvailable: true, want: "ok_abstention"},
