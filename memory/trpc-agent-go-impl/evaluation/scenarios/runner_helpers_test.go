@@ -29,13 +29,13 @@ func TestQAMemorySearchInstruction_SingleSearch(t *testing.T) {
 
 func TestQAMemorySearchInstruction_MultiSearch(t *testing.T) {
 	got := qaMemorySearchInstruction(2)
-	if !strings.Contains(got, "exactly 2 separate") {
+	if !strings.Contains(got, "exactly 2 times") {
 		t.Fatalf("missing multi-search rule: %q", got)
 	}
 	if !strings.Contains(got, fallbackAnswer) {
 		t.Fatalf("missing fallback answer: %q", got)
 	}
-	if !strings.Contains(got, "different short query") {
+	if !strings.Contains(got, "Search #1") {
 		t.Fatalf("missing workflow search marker: %q", got)
 	}
 	assertGroundedQAPrompt(t, got)
@@ -46,9 +46,11 @@ func assertGroundedQAPrompt(t *testing.T, got string) {
 	for _, want := range []string{
 		"Topical relevance is not answer support",
 		"support the exact subject",
+		"unambiguous paraphrase",
 		"Never transfer a fact",
 		"Never output an empty answer",
 		`output exactly "Yes" or "No"`,
+		"shortest answer span",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing grounding rule %q: %q", want, got)
@@ -74,19 +76,19 @@ func TestMemorySearchProtocol(t *testing.T) {
 		wantViolation bool
 	}{
 		{
-			name: "planned batch",
+			name: "sequential calls",
 			steps: []StepTrace{
-				{ToolCalls: []ToolCallTrace{search, search}},
+				{ToolCalls: []ToolCallTrace{search}},
+				{ToolCalls: []ToolCallTrace{search}},
 				{},
 			},
 			expected:  2,
 			wantCalls: 2,
 		},
 		{
-			name: "sequential calls",
+			name: "batched calls",
 			steps: []StepTrace{
-				{ToolCalls: []ToolCallTrace{search}},
-				{ToolCalls: []ToolCallTrace{search}},
+				{ToolCalls: []ToolCallTrace{search, search}},
 				{},
 			},
 			expected:      2,
@@ -119,6 +121,22 @@ func TestMemorySearchProtocol(t *testing.T) {
 				)
 			}
 		})
+	}
+}
+
+func TestMemoryQAUserMessageReinforcesAnswerFormat(t *testing.T) {
+	msg := memoryQAUserMessage("What happened?")
+	if msg.Role != model.RoleUser {
+		t.Fatalf("role = %q, want user", msg.Role)
+	}
+	for _, want := range []string{
+		"What happened?",
+		"shortest final answer span",
+		"For yes/no, output only Yes or No",
+	} {
+		if !strings.Contains(msg.Content, want) {
+			t.Fatalf("missing %q in %q", want, msg.Content)
+		}
 	}
 }
 

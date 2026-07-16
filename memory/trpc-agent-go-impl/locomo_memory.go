@@ -18,6 +18,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -85,6 +86,7 @@ type EvalMetadata struct {
 	QAHistoryTurns     int                       `json:"qa_history_turns,omitempty"`
 	QASearchPasses     int                       `json:"qa_search_passes,omitempty"`
 	QAPromptVersion    string                    `json:"qa_prompt_version,omitempty"`
+	QASearchStrategy   string                    `json:"qa_search_strategy,omitempty"`
 	ReuseMemories      bool                      `json:"reuse_memories,omitempty"`
 	TableSuffix        string                    `json:"table_suffix,omitempty"`
 	PGVectorExtraction *pgvectorExtractionConfig `json:"pgvector_extraction,omitempty"`
@@ -154,7 +156,10 @@ func runLoCoMoMemory(ctx context.Context) error {
 	log.Printf("Loaded %d samples", len(samples))
 
 	// Filter samples if specified.
-	samples = filterSamples(samples)
+	samples, err = filterSamples(samples)
+	if err != nil {
+		return err
+	}
 	if len(samples) == 0 {
 		return fmt.Errorf("no samples to evaluate")
 	}
@@ -301,7 +306,9 @@ func getScenarios(scenario string) []scenarios.ScenarioType {
 	return result
 }
 
-func filterSamples(samples []*dataset.LoCoMoSample) []*dataset.LoCoMoSample {
+func filterSamples(
+	samples []*dataset.LoCoMoSample,
+) ([]*dataset.LoCoMoSample, error) {
 	// Filter by sample ID.
 	if *flagSampleID != "" {
 		filtered := make([]*dataset.LoCoMoSample, 0)
@@ -327,7 +334,67 @@ func filterSamples(samples []*dataset.LoCoMoSample) []*dataset.LoCoMoSample {
 		}
 		log.Printf("Filtered QA by category: %s", *flagCategory)
 	}
-	return samples
+
+	questionIDs := parseCommaList(*flagLoCoMoQuestionIDs)
+	if len(questionIDs) > 0 {
+		var err error
+		samples, err = filterLoCoMoQuestions(samples, questionIDs)
+		if err != nil {
+			return nil, err
+		}
+		log.Printf(
+			"Filtered LoCoMo QA to %d question IDs",
+			len(questionIDs),
+		)
+	}
+	return samples, nil
+}
+
+func filterLoCoMoQuestions(
+	samples []*dataset.LoCoMoSample,
+	questionIDs []string,
+) ([]*dataset.LoCoMoSample, error) {
+	wanted := make(map[string]struct{}, len(questionIDs))
+	for _, id := range questionIDs {
+		id = strings.TrimSpace(id)
+		if id != "" {
+			wanted[id] = struct{}{}
+		}
+	}
+	found := make(map[string]struct{}, len(wanted))
+	filteredSamples := make([]*dataset.LoCoMoSample, 0, len(samples))
+	for _, sample := range samples {
+		if sample == nil {
+			continue
+		}
+		qaItems := make([]dataset.QAItem, 0, len(sample.QA))
+		for _, qa := range sample.QA {
+			if _, ok := wanted[qa.QuestionID]; !ok {
+				continue
+			}
+			qaItems = append(qaItems, qa)
+			found[qa.QuestionID] = struct{}{}
+		}
+		if len(qaItems) == 0 {
+			continue
+		}
+		sample.QA = qaItems
+		filteredSamples = append(filteredSamples, sample)
+	}
+	missing := make([]string, 0)
+	for id := range wanted {
+		if _, ok := found[id]; !ok {
+			missing = append(missing, id)
+		}
+	}
+	if len(missing) > 0 {
+		slices.Sort(missing)
+		return nil, fmt.Errorf(
+			"LoCoMo question IDs not found: %s",
+			strings.Join(missing, ", "),
+		)
+	}
+	return filteredSamples, nil
 }
 
 func runScenario(
@@ -786,6 +853,7 @@ func buildEvaluationResult(
 	if config.Scenario == scenarios.ScenarioAuto ||
 		config.Scenario == scenarios.ScenarioAgentic {
 		metadata.QAPromptVersion = scenarios.MemoryQAPromptVersion
+		metadata.QASearchStrategy = scenarios.MemoryQASearchStrategy
 	}
 	if config.Scenario == scenarios.ScenarioAuto && backend == "pgvector" {
 		if extraction, err := currentPGVectorExtractionConfig(); err == nil {

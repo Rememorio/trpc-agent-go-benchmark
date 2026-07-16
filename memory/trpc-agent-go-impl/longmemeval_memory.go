@@ -2799,21 +2799,6 @@ func resolveLongMemEvalDatasetPath() string {
 	return filepath.Join(dataset, dataFile)
 }
 
-func parseCommaList(raw string) []string {
-	parts := strings.Split(raw, ",")
-	out := make([]string, 0, len(parts))
-	seen := make(map[string]bool, len(parts))
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		if p == "" || seen[p] {
-			continue
-		}
-		seen[p] = true
-		out = append(out, p)
-	}
-	return out
-}
-
 func snapshotsFromEntries(entries []*memory.Entry) []memorySnapshot {
 	out := make([]memorySnapshot, 0, len(entries))
 	for _, e := range entries {

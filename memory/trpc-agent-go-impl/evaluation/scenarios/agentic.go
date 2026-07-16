@@ -357,7 +357,7 @@ func (e *AgenticEvaluator) evaluateQA(
 	start := time.Now()
 
 	sessionID := fmt.Sprintf("qa-%s", qa.QuestionID)
-	msg := model.NewUserMessage(qa.Question)
+	msg := memoryQAUserMessage(qa.Question)
 
 	var runOpts []agent.RunOption
 	if len(historyMsgs) > 0 {

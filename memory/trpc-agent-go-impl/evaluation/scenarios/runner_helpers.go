@@ -265,7 +265,10 @@ const (
 	fallbackAnswer = "The information is not available."
 
 	// MemoryQAPromptVersion identifies the shared memory-search QA protocol.
-	MemoryQAPromptVersion = "locomo-memory-qa-v2"
+	MemoryQAPromptVersion = "locomo-memory-qa-v3"
+
+	// MemoryQASearchStrategy identifies how multiple retrieval queries run.
+	MemoryQASearchStrategy = "sequential-adaptive"
 )
 
 const qaInstructionHeader = `You are a memory retrieval assistant. Search memories, then output one concise answer.
@@ -281,28 +284,37 @@ const qaSingleSearchWorkflow = `SEARCH WORKFLOW:
 `
 
 const qaMultiSearchWorkflow = `SEARCH WORKFLOW:
-1. In your first response, emit exactly %[1]d separate memory_search tool calls and do not answer yet, even if the answer already seems obvious or unavailable.
-2. Give each call a different short query. Include the exact key entity and vary the requested event, action, relation, or wording. Never use the kind filter.
-3. If the question is time-related, use a wide time window in one query. For temporal ordering, set order_by_event_time=true. Use another query without a time filter when the filter might hide evidence.
-4. After all %[1]d results arrive, read every returned memory and answer without calling another tool.
+1. You MUST call memory_search exactly %[1]d times before answering, even if an earlier result seems sufficient or the answer seems unavailable.
+2. Call exactly ONE memory_search per assistant response, then stop and wait for its result. NEVER emit multiple tool calls in the same response.
+3. Search #1 with short keywords containing the exact key entity and requested event, action, or relation. Never use the kind filter. If time-related, use a wide time window. For temporal ordering, set order_by_event_time=true.
+4. After each result, use what you learned to plan a different query or relation while keeping the exact subject. If a time filter may have hidden evidence, search once without it.
+5. Only after all %[1]d search results have arrived, read every returned memory and answer without calling another tool.
 
 `
 
 const qaAnswerPolicy = `EVIDENCE POLICY:
 1. Topical relevance is not answer support. For a factual question, answer only when the memories support the exact subject and the requested event, action, attribute, or relation.
-2. Never transfer a fact between people, objects, or similar events. Mentioning the requested person elsewhere is insufficient. A plan or consideration does not prove a choice or completed action, and possession of a related object does not prove participation in the activity.
-3. Respect negative evidence and status qualifiers such as not, never, considering, planning, and completed.
-4. For an explicitly hypothetical, comparative, or inferential question, make a concise inference only from evidence about the exact subject. Do not assume an unsupported premise from the question.
-5. Temporal and multi-hop answers may combine multiple memories, but every required link must be supported.
-6. If the exact factual relation is unsupported after all searches, output exactly "` + fallbackAnswer + `". Prefer this fallback to a guess based only on a related topic.
+2. Support may be direct or an unambiguous paraphrase or distinctive description of the same object or event. Exact wording or a title need not appear when the identity and requested relation are otherwise clear.
+3. Never transfer a fact between people, objects, or similar events. Mentioning the requested person elsewhere is insufficient. A plan or consideration does not prove a choice or completed action, and possession of a related object does not prove participation in the activity.
+4. Respect negative evidence and status qualifiers such as not, never, considering, planning, and completed.
+5. For an explicitly hypothetical, comparative, or inferential question, make a concise inference only from evidence about the exact subject. Do not assume an unsupported premise from the question.
+6. Temporal and multi-hop answers may combine multiple memories, but every required link must be supported.
+7. If the exact factual relation is unsupported after all searches, output exactly "` + fallbackAnswer + `". Prefer this fallback to a guess based only on a related topic.
 
-OUTPUT RULES:
-- Output only the bare answer, with no explanation or context. Never output an empty answer.
-- Prefer exact words from the supporting memories and keep the answer to 1-12 words.
-- For a yes/no question, output exactly "Yes" or "No" with no supporting details.
-- For "when", use a natural-language date. For "how many", output the number.
-- Do not prepend a person's name or pronoun unless it is part of the requested answer.
-- If uncertain whether the evidence supports the exact factual relation, output exactly "` + fallbackAnswer + `".`
+FINAL ANSWER FORMAT (MANDATORY):
+- The score compares your text with a short reference answer. Output only the shortest answer span, never evidence, explanation, context, Markdown, or a full sentence.
+- For yes/no, output exactly "Yes" or "No". For who/what/where/which, output only the requested name or noun phrase. For when, output only a natural-language date. For how many, output only the number. For why/how, output a short clause.
+- Use exact words from the supporting memories. Keep the answer to 1-12 words and do not restate the question's subject.
+- Examples: "Sweden", "Transgender woman", "Horseback riding", "19 October 2023", "3", "Yes".
+- Never output an empty answer. If the exact factual relation is unsupported, output exactly "` + fallbackAnswer + `".`
+
+const qaQuestionAnswerConstraint = `
+
+After the required memory searches, output only the shortest final answer span (1-12 words). Do not include evidence, explanation, context, or Markdown. For yes/no, output only Yes or No.`
+
+func memoryQAUserMessage(question string) model.Message {
+	return model.NewUserMessage(question + qaQuestionAnswerConstraint)
+}
 
 func qaMemorySearchInstruction(searchPasses int) string {
 	if searchPasses <= 1 {
@@ -470,16 +482,14 @@ func memorySearchProtocol(
 		expected = 1
 	}
 	var total int
-	var initial int
+	stepCalls := make([]int, len(steps))
 	for stepIndex, step := range steps {
 		for _, call := range step.ToolCalls {
 			if call.Name != "memory_search" {
 				continue
 			}
 			total++
-			if stepIndex == 0 {
-				initial++
-			}
+			stepCalls[stepIndex]++
 		}
 	}
 	if total != expected {
@@ -488,11 +498,25 @@ func memorySearchProtocol(
 			total, expected,
 		)
 	}
-	if initial != expected {
-		return total, fmt.Sprintf(
-			"initial memory_search calls = %d, want %d",
-			initial, expected,
-		)
+	for i := range expected {
+		if i >= len(stepCalls) || stepCalls[i] != 1 {
+			var actual int
+			if i < len(stepCalls) {
+				actual = stepCalls[i]
+			}
+			return total, fmt.Sprintf(
+				"memory_search calls in step %d = %d, want 1",
+				i+1, actual,
+			)
+		}
+	}
+	for i := expected; i < len(stepCalls); i++ {
+		if stepCalls[i] != 0 {
+			return total, fmt.Sprintf(
+				"unexpected memory_search call in answer step %d",
+				i+1,
+			)
+		}
 	}
 	return total, ""
 }

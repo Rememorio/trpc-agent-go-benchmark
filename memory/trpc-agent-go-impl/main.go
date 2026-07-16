@@ -80,6 +80,11 @@ var (
 
 	flagSampleID          = flag.String("sample-id", "", "Filter by sample ID")
 	flagCategory          = flag.String("category", "", "Filter by QA category")
+	flagLoCoMoQuestionIDs = flag.String(
+		"locomo-question-ids",
+		"",
+		"Comma-separated LoCoMo question_id filter",
+	)
 	flagMaxTasks          = flag.Int("max-tasks", 0, "Maximum tasks (0=all)")
 	flagMaxContext        = flag.Int("max-context", 128000, "Maximum context length")
 	flagSessionEventLimit = flag.Int("session-event-limit", 1000, "Max events kept in each session (0=unlimited)")
@@ -359,6 +364,21 @@ func parseMemoryBackends(backendsStr string) []string {
 		}
 	}
 	return backends
+}
+
+func parseCommaList(raw string) []string {
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	seen := make(map[string]bool, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" || seen[part] {
+			continue
+		}
+		seen[part] = true
+		out = append(out, part)
+	}
+	return out
 }
 
 func getModelName() string {
