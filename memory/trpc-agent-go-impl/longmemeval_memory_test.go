@@ -2309,7 +2309,7 @@ func TestCompareLongMemEvalRowsIgnoresJudgeDriftForSameAnswer(t *testing.T) {
 		Question:         "Which gift?",
 		Reference:        "A yellow dress",
 		Backend:          "pgvector",
-		Answer:           "A yellow dress and earrings",
+		Answer:           "A yellow dress and earrings.",
 		JudgeAvailable:   true,
 		EvaluatedCorrect: true,
 	}}

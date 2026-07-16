@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode"
 )
 
 type lmeAnalysisRow struct {
@@ -608,7 +609,8 @@ func sameLongMemEvalComparisonAnswer(baseline, candidate lmeAnalysisRow) bool {
 }
 
 func normalizedLongMemEvalComparisonText(text string) string {
-	return strings.ToLower(strings.Join(strings.Fields(text), " "))
+	normalized := strings.ToLower(strings.Join(strings.Fields(text), " "))
+	return strings.TrimRightFunc(normalized, unicode.IsPunct)
 }
 
 func lmeCompareKey(questionID, backend string) string {
