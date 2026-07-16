@@ -397,15 +397,20 @@ func (e *AgenticEvaluator) evaluateQA(
 	}
 
 	tu := res.usage
+	searchCalls, protocolError := memorySearchProtocol(
+		res.steps, e.config.QASearchPasses,
+	)
 	return &QAResult{
-		QuestionID: qa.QuestionID,
-		Question:   qa.Question,
-		Category:   qa.Category,
-		Expected:   qa.Answer,
-		Predicted:  predicted,
-		Metrics:    m,
-		LatencyMs:  time.Since(start).Milliseconds(),
-		TokenUsage: &tu,
-		Steps:      res.steps,
+		QuestionID:    qa.QuestionID,
+		Question:      qa.Question,
+		Category:      qa.Category,
+		Expected:      qa.Answer,
+		Predicted:     predicted,
+		Metrics:       m,
+		LatencyMs:     time.Since(start).Milliseconds(),
+		TokenUsage:    &tu,
+		Steps:         res.steps,
+		SearchCalls:   searchCalls,
+		ProtocolError: protocolError,
 	}, nil
 }

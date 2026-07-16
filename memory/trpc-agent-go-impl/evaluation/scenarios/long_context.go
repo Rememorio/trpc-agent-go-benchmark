@@ -103,6 +103,8 @@ type QAResult struct {
 	TokensUsed    int                 `json:"tokens_used,omitempty"`
 	TokenUsage    *TokenUsage         `json:"token_usage,omitempty"`
 	Steps         []StepTrace         `json:"steps,omitempty"`
+	SearchCalls   int                 `json:"memory_search_calls,omitempty"`
+	ProtocolError string              `json:"protocol_error,omitempty"`
 	SessionRecall *SessionRecallTrace `json:"session_recall,omitempty"`
 }
 

@@ -84,6 +84,7 @@ type EvalMetadata struct {
 	MaxContext         int                       `json:"max_context"`
 	QAHistoryTurns     int                       `json:"qa_history_turns,omitempty"`
 	QASearchPasses     int                       `json:"qa_search_passes,omitempty"`
+	QAPromptVersion    string                    `json:"qa_prompt_version,omitempty"`
 	ReuseMemories      bool                      `json:"reuse_memories,omitempty"`
 	TableSuffix        string                    `json:"table_suffix,omitempty"`
 	PGVectorExtraction *pgvectorExtractionConfig `json:"pgvector_extraction,omitempty"`
@@ -107,6 +108,7 @@ type EvalSummary struct {
 	TotalTokens           int     `json:"total_tokens"`
 	TotalCachedTokens     int     `json:"total_cached_tokens,omitempty"`
 	TotalLLMCalls         int     `json:"total_llm_calls"`
+	ProtocolViolations    int     `json:"protocol_violations"`
 	AvgPromptTokensPerQA  float64 `json:"avg_prompt_tokens_per_qa"`
 	AvgCompletionPerQA    float64 `json:"avg_completion_tokens_per_qa"`
 	AvgCachedTokensPerQA  float64 `json:"avg_cached_tokens_per_qa,omitempty"`
@@ -759,6 +761,7 @@ func buildEvaluationResult(
 	totalTime := time.Since(startTime)
 	overall := catAgg.GetOverall()
 	qCount := max(totalQuestions, 1)
+	protocolViolations := countProtocolViolations(sampleResults)
 	var cacheHitRate float64
 	if totalUsage.PromptTokens > 0 {
 		cacheHitRate = float64(totalUsage.CachedTokens) /
@@ -780,6 +783,10 @@ func buildEvaluationResult(
 		Build:          currentLongMemEvalBuildProvenance(),
 		LLMJudge:       config.EnableLLMJudge,
 	}
+	if config.Scenario == scenarios.ScenarioAuto ||
+		config.Scenario == scenarios.ScenarioAgentic {
+		metadata.QAPromptVersion = scenarios.MemoryQAPromptVersion
+	}
 	if config.Scenario == scenarios.ScenarioAuto && backend == "pgvector" {
 		if extraction, err := currentPGVectorExtractionConfig(); err == nil {
 			metadata.PGVectorExtraction = &extraction
@@ -800,6 +807,7 @@ func buildEvaluationResult(
 			TotalTokens:           totalUsage.TotalTokens,
 			TotalCachedTokens:     totalUsage.CachedTokens,
 			TotalLLMCalls:         totalUsage.LLMCalls,
+			ProtocolViolations:    protocolViolations,
 			AvgPromptTokensPerQA:  float64(totalUsage.PromptTokens) / float64(qCount),
 			AvgCompletionPerQA:    float64(totalUsage.CompletionTokens) / float64(qCount),
 			AvgCachedTokensPerQA:  float64(totalUsage.CachedTokens) / float64(qCount),
@@ -809,6 +817,21 @@ func buildEvaluationResult(
 		ByCategory:    catAgg.GetCategoryMetrics(),
 		SampleResults: sampleResults,
 	}
+}
+
+func countProtocolViolations(results []*scenarios.SampleResult) int {
+	var count int
+	for _, sample := range results {
+		if sample == nil {
+			continue
+		}
+		for _, qa := range sample.QAResults {
+			if qa != nil && qa.ProtocolError != "" {
+				count++
+			}
+		}
+	}
+	return count
 }
 
 func saveResults(outputDir string, result *EvaluationResult) {
