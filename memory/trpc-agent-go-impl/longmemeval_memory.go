@@ -49,12 +49,14 @@ const (
 	lmeAppName                = "lme-memory"
 	lmeAgentName              = "lme-memory-agent"
 
-	lmePGVectorTableBase = "lme_memory_eval"
-	defaultMem0Host      = "http://localhost:8888"
-	lmeMem0IngestRetries = 2
-	lmeAutoMemoryPoll    = 20 * time.Millisecond
-	lmeAutoMemoryGrace   = time.Second
-	lmeAutoMemoryTimeout = 10 * time.Minute
+	lmePGVectorTableBase     = "lme_memory_eval"
+	defaultMem0Host          = "http://localhost:8888"
+	lmeMem0IngestRetries     = 5
+	lmeMem0InitialRetryDelay = time.Second
+	lmeMem0MaximumRetryDelay = 16 * time.Second
+	lmeAutoMemoryPoll        = 20 * time.Millisecond
+	lmeAutoMemoryGrace       = time.Second
+	lmeAutoMemoryTimeout     = 10 * time.Minute
 
 	// This diagnostic state is optional: upstream main does not write it,
 	// while candidate builds can surface asynchronous extraction failures.
@@ -634,7 +636,10 @@ func (b *mem0Backend) ingestPairOSS(ctx context.Context, sess *session.Session, 
 	var lastErr error
 	for attempt := 0; attempt <= lmeMem0IngestRetries; attempt++ {
 		if attempt > 0 {
-			if err := sleepWithContext(ctx, time.Duration(attempt)*time.Second); err != nil {
+			delay := mem0IngestRetryDelay(attempt)
+			log.Printf("mem0 OSS ingest retry %d/%d in %s after transient error: %v",
+				attempt, lmeMem0IngestRetries, delay, lastErr)
+			if err := sleepWithContext(ctx, delay); err != nil {
 				return err
 			}
 		}
@@ -3296,6 +3301,23 @@ func isRetryableMem0Error(err error) bool {
 
 func isRetryableMem0Status(status int) bool {
 	return status == http.StatusTooManyRequests || status >= 500
+}
+
+func mem0IngestRetryDelay(attempt int) time.Duration {
+	if attempt <= 0 {
+		return 0
+	}
+	delay := lmeMem0InitialRetryDelay
+	for retry := 1; retry < attempt; retry++ {
+		if delay >= lmeMem0MaximumRetryDelay/2 {
+			return lmeMem0MaximumRetryDelay
+		}
+		delay *= 2
+	}
+	if delay > lmeMem0MaximumRetryDelay {
+		return lmeMem0MaximumRetryDelay
+	}
+	return delay
 }
 
 func sleepWithContext(ctx context.Context, d time.Duration) error {

@@ -907,6 +907,29 @@ func TestRetryableMem0Status(t *testing.T) {
 	}
 }
 
+func TestMem0IngestRetryDelay(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		attempt int
+		want    time.Duration
+	}{
+		{attempt: 0, want: 0},
+		{attempt: 1, want: time.Second},
+		{attempt: 2, want: 2 * time.Second},
+		{attempt: 3, want: 4 * time.Second},
+		{attempt: 4, want: 8 * time.Second},
+		{attempt: 5, want: 16 * time.Second},
+		{attempt: 6, want: 16 * time.Second},
+	}
+	for _, test := range tests {
+		if got := mem0IngestRetryDelay(test.attempt); got != test.want {
+			t.Fatalf("attempt %d delay = %s, want %s",
+				test.attempt, got, test.want)
+		}
+	}
+}
+
 func TestFilterCasesByQuestionIDs(t *testing.T) {
 	oldID := *flagLMEQuestionID
 	oldIDs := *flagLMEQuestionIDs

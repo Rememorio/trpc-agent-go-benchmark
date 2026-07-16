@@ -455,7 +455,7 @@ LongMemEval-specific options:
 | `-lme-max-sessions`      | 0       | Max haystack sessions per case               |
 | `-lme-max-pairs`         | 0       | Max user/assistant pairs per case            |
 | `-lme-ingest-wait`       | 250ms   | Extra delay after completed pair ingestion   |
-| `-lme-model-call-timeout` | 3m      | Model timeout and mem0 OSS request cap       |
+| `-lme-model-call-timeout` | 5m      | Model timeout and mem0 OSS request cap       |
 | `-lme-answer`            | true    | Generate answers from retrieved memories     |
 | `-lme-implementation`    | (env)   | Reproducible implementation label            |
 | `-lme-reanswer-results`   |         | Re-answer using saved ranked retrieval hits  |
