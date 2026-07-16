@@ -27,7 +27,7 @@ const (
 	lmePGVectorModulePath = "trpc.group/trpc-go/trpc-agent-go/memory/pgvector"
 
 	lmeAnswerPrimaryMaxTokens = 512
-	lmeAnswerRetryMaxTokens   = 4096
+	lmeAnswerRetryMaxTokens   = 1024
 	lmeAnswerMaxAttempts      = 2
 	lmeJudgePrimaryMaxTokens  = 1024
 	lmeJudgeRepairMaxTokens   = 2048
@@ -35,7 +35,7 @@ const (
 	// These versions are part of the experiment contract. Bump the relevant
 	// version whenever replay, prompting, or judging semantics change.
 	lmeProtocolVersion     = "lme-memory-turn-pair-v1"
-	lmeAnswerPromptVersion = "lme-memory-answer-v4"
+	lmeAnswerPromptVersion = "lme-memory-answer-v5"
 	lmeJudgePromptVersion  = "lme-official-adapted-judge-v2"
 )
 

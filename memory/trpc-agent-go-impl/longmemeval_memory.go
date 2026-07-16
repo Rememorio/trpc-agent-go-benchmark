@@ -1471,8 +1471,7 @@ func answerFromMemories(ctx context.Context, llm model.Model, inst *lmeInstance,
 	for attempt := 0; attempt < lmeAnswerMaxAttempts; attempt++ {
 		req := newLongMemEvalAnswerRequest(prompt)
 		if attempt > 0 {
-			maxTokens := lmeAnswerRetryMaxTokens
-			req.MaxTokens = &maxTokens
+			req = newLongMemEvalAnswerRetryRequest(prompt)
 		}
 		respCh, err := llm.GenerateContent(ctx, req)
 		if err != nil {
@@ -2179,6 +2178,23 @@ func newLongMemEvalAnswerRequest(prompt string) *model.Request {
 			ThinkingEnabled: &thinkingEnabled,
 		},
 	}
+}
+
+func newLongMemEvalAnswerRetryRequest(prompt string) *model.Request {
+	req := newLongMemEvalAnswerRequest(prompt + `
+
+RETRY REQUIREMENT: The previous response exceeded the token limit. Return the
+final answer now in at most 128 words. For a scalar, date, name, count, or list,
+return only the requested value or values. Do not include analysis, reasoning,
+a preamble, uncertainty discussion, or markdown.`)
+	maxTokens := lmeAnswerRetryMaxTokens
+	req.MaxTokens = &maxTokens
+	req.Messages = append([]model.Message{
+		model.NewSystemMessage(
+			"Output only the requested final answer. Never reveal analysis or reasoning.",
+		),
+	}, req.Messages...)
+	return req
 }
 
 func buildLongMemEvalAnswerPrompt(inst *lmeInstance, hits []memoryHit) string {
