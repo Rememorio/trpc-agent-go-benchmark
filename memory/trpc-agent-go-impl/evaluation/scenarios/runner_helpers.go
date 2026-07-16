@@ -265,10 +265,13 @@ const (
 	fallbackAnswer = "The information is not available."
 
 	// MemoryQAPromptVersion identifies the shared memory-search QA protocol.
-	MemoryQAPromptVersion = "locomo-memory-qa-v3"
+	MemoryQAPromptVersion = "locomo-memory-qa-v4"
 
 	// MemoryQASearchStrategy identifies how multiple retrieval queries run.
 	MemoryQASearchStrategy = "sequential-adaptive"
+
+	// MemoryQARecoveryMaxTokens caps the no-tool answer recovery call.
+	MemoryQARecoveryMaxTokens = 1024
 )
 
 const qaInstructionHeader = `You are a memory retrieval assistant. Search memories, then output one concise answer.
@@ -357,6 +360,7 @@ type ToolCallTrace struct {
 // StepTrace records one LLM round-trip (request → response).
 type StepTrace struct {
 	Step             int             `json:"step"`
+	Phase            string          `json:"phase,omitempty"`
 	PromptTokens     int             `json:"prompt_tokens"`
 	CompletionTokens int             `json:"completion_tokens"`
 	TotalTokens      int             `json:"total_tokens"`
@@ -393,7 +397,7 @@ func collectFinalTextAndUsage(
 				msg := choice.Message
 				if msg.Role == model.RoleAssistant {
 					step++
-					st := StepTrace{Step: step}
+					st := StepTrace{Step: step, Phase: "answer"}
 					if ev.Response.Usage != nil {
 						st.PromptTokens =
 							ev.Response.Usage.PromptTokens
@@ -413,6 +417,9 @@ func collectFinalTextAndUsage(
 								Name: tc.Function.Name,
 								Args: string(tc.Function.Arguments),
 							})
+					}
+					if len(st.ToolCalls) > 0 {
+						st.Phase = "memory-search"
 					}
 					res.steps = append(res.steps, st)
 					pendingStep = -1
@@ -521,6 +528,124 @@ func memorySearchProtocol(
 	return total, ""
 }
 
+func recoverMemoryQAAnswer(
+	ctx context.Context,
+	m model.Model,
+	question string,
+	res collectResult,
+) (collectResult, *AnswerRecoveryTrace) {
+	trigger := memoryQARecoveryTrigger(res)
+	if trigger == "" {
+		return res, nil
+	}
+	trace := &AnswerRecoveryTrace{Trigger: trigger}
+	evidence := memoryQARetrievalEvidence(res.steps)
+	if strings.TrimSpace(evidence) == "" {
+		trace.Error = "no memory_search evidence available for recovery"
+		return res, trace
+	}
+	prompt := fmt.Sprintf(
+		`The previous answer generation failed. Answer the question using only the retrieved memory_search results below.
+
+Follow these rules:
+- Output only the shortest final answer span (1-12 words).
+- Do not include evidence, explanation, context, or Markdown.
+- For yes/no, output only Yes or No.
+- If the exact factual relation is unsupported, output exactly "%s".
+
+Question:
+%s
+
+Retrieved memory_search results:
+%s`,
+		fallbackAnswer,
+		question,
+		evidence,
+	)
+	reasoningEffort := "low"
+	thinkingEnabled := false
+	recovery, err := runModelWithRateLimitRetry(
+		ctx,
+		m,
+		&model.Request{
+			Messages: []model.Message{model.NewUserMessage(prompt)},
+			GenerationConfig: model.GenerationConfig{
+				Stream:          false,
+				MaxTokens:       intPtr(MemoryQARecoveryMaxTokens),
+				Temperature:     float64Ptr(0),
+				ReasoningEffort: &reasoningEffort,
+				ThinkingEnabled: &thinkingEnabled,
+			},
+		},
+	)
+	if err != nil {
+		trace.Error = err.Error()
+		return res, trace
+	}
+	trace.FinishReason = recovery.finishReason
+	trace.Succeeded = strings.TrimSpace(recovery.text) != ""
+	if !trace.Succeeded {
+		trace.Error = "recovery returned an empty answer"
+		return res, trace
+	}
+	res.text = strings.TrimSpace(recovery.text)
+	step := StepTrace{
+		Step:         len(res.steps) + 1,
+		Phase:        "answer-recovery",
+		FinishReason: recovery.finishReason,
+	}
+	if recovery.usage != nil {
+		step.PromptTokens = recovery.usage.PromptTokens
+		step.CompletionTokens = recovery.usage.CompletionTokens
+		step.TotalTokens = recovery.usage.TotalTokens
+		step.CachedTokens = recovery.usage.PromptTokensDetails.CachedTokens
+		res.usage.Add(TokenUsage{
+			PromptTokens:     recovery.usage.PromptTokens,
+			CompletionTokens: recovery.usage.CompletionTokens,
+			TotalTokens:      recovery.usage.TotalTokens,
+			CachedTokens:     recovery.usage.PromptTokensDetails.CachedTokens,
+			LLMCalls:         1,
+		})
+	}
+	res.steps = append(res.steps, step)
+	return res, trace
+}
+
+func memoryQARecoveryTrigger(res collectResult) string {
+	var reasons []string
+	if strings.TrimSpace(res.text) == "" {
+		reasons = append(reasons, "empty-answer")
+	}
+	if len(res.steps) > 0 {
+		finishReason := strings.ToLower(strings.TrimSpace(
+			res.steps[len(res.steps)-1].FinishReason,
+		))
+		if finishReason == "length" || finishReason == "max_tokens" ||
+			finishReason == "max_output_tokens" {
+			reasons = append(reasons, "finish-reason:"+finishReason)
+		}
+	}
+	return strings.Join(reasons, ",")
+}
+
+func memoryQARetrievalEvidence(steps []StepTrace) string {
+	var evidence strings.Builder
+	for _, step := range steps {
+		for _, call := range step.ToolCalls {
+			if call.Name != "memory_search" || call.Result == "" {
+				continue
+			}
+			fmt.Fprintf(
+				&evidence,
+				"Query: %s\nResult: %s\n\n",
+				call.Args,
+				call.Result,
+			)
+		}
+	}
+	return evidence.String()
+}
+
 // memorySearchResult matches the JSON structure returned by
 // memory_search tool for parsing in logs.
 type memorySearchResult struct {
@@ -564,6 +689,9 @@ func logQATrace(
 			log.Printf(
 				"    Finish reason: %s", st.FinishReason,
 			)
+		}
+		if st.Phase != "" {
+			log.Printf("    Phase: %s", st.Phase)
 		}
 		if len(st.ToolCalls) > 0 {
 			log.Printf(
@@ -690,6 +818,15 @@ func logVerboseQAResult(
 	if qaResult.ProtocolError != "" {
 		log.Printf(
 			"    Protocol violation: %s", qaResult.ProtocolError,
+		)
+	}
+	if qaResult.AnswerRecovery != nil {
+		log.Printf(
+			"    Answer recovery: trigger=%s succeeded=%v finish=%s error=%s",
+			qaResult.AnswerRecovery.Trigger,
+			qaResult.AnswerRecovery.Succeeded,
+			qaResult.AnswerRecovery.FinishReason,
+			qaResult.AnswerRecovery.Error,
 		)
 	}
 	if qaResult.SessionRecall != nil {

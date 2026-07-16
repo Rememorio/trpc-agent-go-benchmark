@@ -93,19 +93,28 @@ func DefaultConfig() Config {
 
 // QAResult holds the result of a single QA evaluation.
 type QAResult struct {
-	QuestionID    string              `json:"question_id"`
-	Question      string              `json:"question"`
-	Category      string              `json:"category"`
-	Expected      string              `json:"expected"`
-	Predicted     string              `json:"predicted"`
-	Metrics       metrics.QAMetrics   `json:"metrics"`
-	LatencyMs     int64               `json:"latency_ms"`
-	TokensUsed    int                 `json:"tokens_used,omitempty"`
-	TokenUsage    *TokenUsage         `json:"token_usage,omitempty"`
-	Steps         []StepTrace         `json:"steps,omitempty"`
-	SearchCalls   int                 `json:"memory_search_calls,omitempty"`
-	ProtocolError string              `json:"protocol_error,omitempty"`
-	SessionRecall *SessionRecallTrace `json:"session_recall,omitempty"`
+	QuestionID     string               `json:"question_id"`
+	Question       string               `json:"question"`
+	Category       string               `json:"category"`
+	Expected       string               `json:"expected"`
+	Predicted      string               `json:"predicted"`
+	Metrics        metrics.QAMetrics    `json:"metrics"`
+	LatencyMs      int64                `json:"latency_ms"`
+	TokensUsed     int                  `json:"tokens_used,omitempty"`
+	TokenUsage     *TokenUsage          `json:"token_usage,omitempty"`
+	Steps          []StepTrace          `json:"steps,omitempty"`
+	SearchCalls    int                  `json:"memory_search_calls,omitempty"`
+	ProtocolError  string               `json:"protocol_error,omitempty"`
+	AnswerRecovery *AnswerRecoveryTrace `json:"answer_recovery,omitempty"`
+	SessionRecall  *SessionRecallTrace  `json:"session_recall,omitempty"`
+}
+
+// AnswerRecoveryTrace records a direct answer retry after generation failure.
+type AnswerRecoveryTrace struct {
+	Trigger      string `json:"trigger"`
+	Succeeded    bool   `json:"succeeded"`
+	Error        string `json:"error,omitempty"`
+	FinishReason string `json:"finish_reason,omitempty"`
 }
 
 // SessionRecallTrace records the query-time session recall
@@ -348,8 +357,9 @@ func (e *LongContextEvaluator) evaluateQA(
 
 // runModelResult holds the output of a model call.
 type runModelResult struct {
-	text  string
-	usage *model.Usage
+	text         string
+	usage        *model.Usage
+	finishReason string
 }
 
 // runModelWithRateLimitRetry calls model.GenerateContent with
@@ -380,6 +390,7 @@ func runModelWithRateLimitRetry(
 
 		var lastContent string
 		var lastUsage *model.Usage
+		var lastFinishReason string
 		for resp := range respCh {
 			if resp == nil {
 				continue
@@ -412,9 +423,13 @@ func runModelWithRateLimitRetry(
 				)
 			}
 			if len(resp.Choices) > 0 {
-				c := resp.Choices[0].Message.Content
+				choice := resp.Choices[0]
+				c := choice.Message.Content
 				if c != "" {
 					lastContent = c
+				}
+				if choice.FinishReason != nil {
+					lastFinishReason = *choice.FinishReason
 				}
 			}
 			if resp.Usage != nil {
@@ -423,8 +438,9 @@ func runModelWithRateLimitRetry(
 		}
 		if lastContent != "" {
 			return runModelResult{
-				text:  strings.TrimSpace(lastContent),
-				usage: lastUsage,
+				text:         strings.TrimSpace(lastContent),
+				usage:        lastUsage,
+				finishReason: lastFinishReason,
 			}, nil
 		}
 		// Empty response (possibly rate limit or model overload).

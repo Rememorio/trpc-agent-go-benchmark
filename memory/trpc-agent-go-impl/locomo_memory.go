@@ -75,23 +75,24 @@ type EvaluationResult struct {
 
 // EvalMetadata holds evaluation metadata.
 type EvalMetadata struct {
-	Framework          string                    `json:"framework"`
-	Version            string                    `json:"version"`
-	Timestamp          time.Time                 `json:"timestamp"`
-	Model              string                    `json:"model"`
-	EvalModel          string                    `json:"eval_model,omitempty"`
-	Scenario           string                    `json:"scenario"`
-	MemoryBackend      string                    `json:"memory_backend,omitempty"`
-	MaxContext         int                       `json:"max_context"`
-	QAHistoryTurns     int                       `json:"qa_history_turns,omitempty"`
-	QASearchPasses     int                       `json:"qa_search_passes,omitempty"`
-	QAPromptVersion    string                    `json:"qa_prompt_version,omitempty"`
-	QASearchStrategy   string                    `json:"qa_search_strategy,omitempty"`
-	ReuseMemories      bool                      `json:"reuse_memories,omitempty"`
-	TableSuffix        string                    `json:"table_suffix,omitempty"`
-	PGVectorExtraction *pgvectorExtractionConfig `json:"pgvector_extraction,omitempty"`
-	Build              lmeBuildProvenance        `json:"build"`
-	LLMJudge           bool                      `json:"llm_judge"`
+	Framework           string                    `json:"framework"`
+	Version             string                    `json:"version"`
+	Timestamp           time.Time                 `json:"timestamp"`
+	Model               string                    `json:"model"`
+	EvalModel           string                    `json:"eval_model,omitempty"`
+	Scenario            string                    `json:"scenario"`
+	MemoryBackend       string                    `json:"memory_backend,omitempty"`
+	MaxContext          int                       `json:"max_context"`
+	QAHistoryTurns      int                       `json:"qa_history_turns,omitempty"`
+	QASearchPasses      int                       `json:"qa_search_passes,omitempty"`
+	QAPromptVersion     string                    `json:"qa_prompt_version,omitempty"`
+	QASearchStrategy    string                    `json:"qa_search_strategy,omitempty"`
+	QARecoveryMaxTokens int                       `json:"qa_recovery_max_tokens,omitempty"`
+	ReuseMemories       bool                      `json:"reuse_memories,omitempty"`
+	TableSuffix         string                    `json:"table_suffix,omitempty"`
+	PGVectorExtraction  *pgvectorExtractionConfig `json:"pgvector_extraction,omitempty"`
+	Build               lmeBuildProvenance        `json:"build"`
+	LLMJudge            bool                      `json:"llm_judge"`
 }
 
 // EvalSummary holds aggregated evaluation summary.
@@ -105,16 +106,18 @@ type EvalSummary struct {
 	AvgLatencyMs    float64 `json:"avg_latency_ms"`
 
 	// Token usage statistics.
-	TotalPromptTokens     int     `json:"total_prompt_tokens"`
-	TotalCompletionTokens int     `json:"total_completion_tokens"`
-	TotalTokens           int     `json:"total_tokens"`
-	TotalCachedTokens     int     `json:"total_cached_tokens,omitempty"`
-	TotalLLMCalls         int     `json:"total_llm_calls"`
-	ProtocolViolations    int     `json:"protocol_violations"`
-	AvgPromptTokensPerQA  float64 `json:"avg_prompt_tokens_per_qa"`
-	AvgCompletionPerQA    float64 `json:"avg_completion_tokens_per_qa"`
-	AvgCachedTokensPerQA  float64 `json:"avg_cached_tokens_per_qa,omitempty"`
-	AvgLLMCallsPerQA      float64 `json:"avg_llm_calls_per_qa"`
+	TotalPromptTokens       int     `json:"total_prompt_tokens"`
+	TotalCompletionTokens   int     `json:"total_completion_tokens"`
+	TotalTokens             int     `json:"total_tokens"`
+	TotalCachedTokens       int     `json:"total_cached_tokens,omitempty"`
+	TotalLLMCalls           int     `json:"total_llm_calls"`
+	ProtocolViolations      int     `json:"protocol_violations"`
+	AnswerRecoveryAttempts  int     `json:"answer_recovery_attempts"`
+	AnswerRecoverySuccesses int     `json:"answer_recovery_successes"`
+	AvgPromptTokensPerQA    float64 `json:"avg_prompt_tokens_per_qa"`
+	AvgCompletionPerQA      float64 `json:"avg_completion_tokens_per_qa"`
+	AvgCachedTokensPerQA    float64 `json:"avg_cached_tokens_per_qa,omitempty"`
+	AvgLLMCallsPerQA        float64 `json:"avg_llm_calls_per_qa"`
 	// CacheHitRate is the fraction of prompt tokens served
 	// from the provider's prompt cache (0.0–1.0).
 	CacheHitRate float64 `json:"cache_hit_rate,omitempty"`
@@ -829,6 +832,7 @@ func buildEvaluationResult(
 	overall := catAgg.GetOverall()
 	qCount := max(totalQuestions, 1)
 	protocolViolations := countProtocolViolations(sampleResults)
+	recoveryAttempts, recoverySuccesses := countAnswerRecoveries(sampleResults)
 	var cacheHitRate float64
 	if totalUsage.PromptTokens > 0 {
 		cacheHitRate = float64(totalUsage.CachedTokens) /
@@ -854,6 +858,7 @@ func buildEvaluationResult(
 		config.Scenario == scenarios.ScenarioAgentic {
 		metadata.QAPromptVersion = scenarios.MemoryQAPromptVersion
 		metadata.QASearchStrategy = scenarios.MemoryQASearchStrategy
+		metadata.QARecoveryMaxTokens = scenarios.MemoryQARecoveryMaxTokens
 	}
 	if config.Scenario == scenarios.ScenarioAuto && backend == "pgvector" {
 		if extraction, err := currentPGVectorExtractionConfig(); err == nil {
@@ -863,24 +868,26 @@ func buildEvaluationResult(
 	return &EvaluationResult{
 		Metadata: metadata,
 		Summary: &EvalSummary{
-			TotalSamples:          len(sampleResults),
-			TotalQuestions:        totalQuestions,
-			OverallF1:             overall.F1,
-			OverallBLEU:           overall.BLEU,
-			OverallLLMScore:       overall.LLMScore,
-			TotalTimeMs:           totalTime.Milliseconds(),
-			AvgLatencyMs:          float64(totalTime.Milliseconds()) / float64(qCount),
-			TotalPromptTokens:     totalUsage.PromptTokens,
-			TotalCompletionTokens: totalUsage.CompletionTokens,
-			TotalTokens:           totalUsage.TotalTokens,
-			TotalCachedTokens:     totalUsage.CachedTokens,
-			TotalLLMCalls:         totalUsage.LLMCalls,
-			ProtocolViolations:    protocolViolations,
-			AvgPromptTokensPerQA:  float64(totalUsage.PromptTokens) / float64(qCount),
-			AvgCompletionPerQA:    float64(totalUsage.CompletionTokens) / float64(qCount),
-			AvgCachedTokensPerQA:  float64(totalUsage.CachedTokens) / float64(qCount),
-			AvgLLMCallsPerQA:      float64(totalUsage.LLMCalls) / float64(qCount),
-			CacheHitRate:          cacheHitRate,
+			TotalSamples:            len(sampleResults),
+			TotalQuestions:          totalQuestions,
+			OverallF1:               overall.F1,
+			OverallBLEU:             overall.BLEU,
+			OverallLLMScore:         overall.LLMScore,
+			TotalTimeMs:             totalTime.Milliseconds(),
+			AvgLatencyMs:            float64(totalTime.Milliseconds()) / float64(qCount),
+			TotalPromptTokens:       totalUsage.PromptTokens,
+			TotalCompletionTokens:   totalUsage.CompletionTokens,
+			TotalTokens:             totalUsage.TotalTokens,
+			TotalCachedTokens:       totalUsage.CachedTokens,
+			TotalLLMCalls:           totalUsage.LLMCalls,
+			ProtocolViolations:      protocolViolations,
+			AnswerRecoveryAttempts:  recoveryAttempts,
+			AnswerRecoverySuccesses: recoverySuccesses,
+			AvgPromptTokensPerQA:    float64(totalUsage.PromptTokens) / float64(qCount),
+			AvgCompletionPerQA:      float64(totalUsage.CompletionTokens) / float64(qCount),
+			AvgCachedTokensPerQA:    float64(totalUsage.CachedTokens) / float64(qCount),
+			AvgLLMCallsPerQA:        float64(totalUsage.LLMCalls) / float64(qCount),
+			CacheHitRate:            cacheHitRate,
 		},
 		ByCategory:    catAgg.GetCategoryMetrics(),
 		SampleResults: sampleResults,
@@ -900,6 +907,26 @@ func countProtocolViolations(results []*scenarios.SampleResult) int {
 		}
 	}
 	return count
+}
+
+func countAnswerRecoveries(
+	results []*scenarios.SampleResult,
+) (attempts, successes int) {
+	for _, sample := range results {
+		if sample == nil {
+			continue
+		}
+		for _, qa := range sample.QAResults {
+			if qa == nil || qa.AnswerRecovery == nil {
+				continue
+			}
+			attempts++
+			if qa.AnswerRecovery.Succeeded {
+				successes++
+			}
+		}
+	}
+	return attempts, successes
 }
 
 func saveResults(outputDir string, result *EvaluationResult) {

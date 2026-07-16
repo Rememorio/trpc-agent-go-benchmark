@@ -377,6 +377,9 @@ func (e *AgenticEvaluator) evaluateQA(
 	if err != nil {
 		return nil, fmt.Errorf("runner run: %w", err)
 	}
+	res, answerRecovery := recoverMemoryQAAnswer(
+		ctx, e.model, qa.Question, res,
+	)
 	predicted := res.text
 
 	m := metrics.QAMetrics{
@@ -401,16 +404,17 @@ func (e *AgenticEvaluator) evaluateQA(
 		res.steps, e.config.QASearchPasses,
 	)
 	return &QAResult{
-		QuestionID:    qa.QuestionID,
-		Question:      qa.Question,
-		Category:      qa.Category,
-		Expected:      qa.Answer,
-		Predicted:     predicted,
-		Metrics:       m,
-		LatencyMs:     time.Since(start).Milliseconds(),
-		TokenUsage:    &tu,
-		Steps:         res.steps,
-		SearchCalls:   searchCalls,
-		ProtocolError: protocolError,
+		QuestionID:     qa.QuestionID,
+		Question:       qa.Question,
+		Category:       qa.Category,
+		Expected:       qa.Answer,
+		Predicted:      predicted,
+		Metrics:        m,
+		LatencyMs:      time.Since(start).Milliseconds(),
+		TokenUsage:     &tu,
+		Steps:          res.steps,
+		SearchCalls:    searchCalls,
+		ProtocolError:  protocolError,
+		AnswerRecovery: answerRecovery,
 	}, nil
 }

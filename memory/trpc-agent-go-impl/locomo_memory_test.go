@@ -95,6 +95,12 @@ func TestBuildEvaluationResultRecordsMemoryQAPromptVersion(t *testing.T) {
 				scenario, got, scenarios.MemoryQASearchStrategy,
 			)
 		}
+		if got := result.Metadata.QARecoveryMaxTokens; got != scenarios.MemoryQARecoveryMaxTokens {
+			t.Fatalf(
+				"scenario %s recovery max tokens = %d, want %d",
+				scenario, got, scenarios.MemoryQARecoveryMaxTokens,
+			)
+		}
 	}
 }
 
@@ -114,6 +120,9 @@ func TestBuildEvaluationResultOmitsMemoryQAPromptVersion(t *testing.T) {
 	if got := result.Metadata.QASearchStrategy; got != "" {
 		t.Fatalf("long-context search strategy = %q, want empty", got)
 	}
+	if got := result.Metadata.QARecoveryMaxTokens; got != 0 {
+		t.Fatalf("long-context recovery max tokens = %d, want 0", got)
+	}
 }
 
 func TestBuildEvaluationResultCountsProtocolViolations(t *testing.T) {
@@ -128,6 +137,8 @@ func TestBuildEvaluationResultCountsProtocolViolations(t *testing.T) {
 					nil,
 					{},
 					{ProtocolError: "missing search"},
+					{AnswerRecovery: &scenarios.AnswerRecoveryTrace{Succeeded: true}},
+					{AnswerRecovery: &scenarios.AnswerRecoveryTrace{}},
 				},
 			},
 		},
@@ -137,5 +148,11 @@ func TestBuildEvaluationResultCountsProtocolViolations(t *testing.T) {
 	)
 	if got := result.Summary.ProtocolViolations; got != 1 {
 		t.Fatalf("protocol violations = %d, want 1", got)
+	}
+	if got := result.Summary.AnswerRecoveryAttempts; got != 2 {
+		t.Fatalf("answer recovery attempts = %d, want 2", got)
+	}
+	if got := result.Summary.AnswerRecoverySuccesses; got != 1 {
+		t.Fatalf("answer recovery successes = %d, want 1", got)
 	}
 }

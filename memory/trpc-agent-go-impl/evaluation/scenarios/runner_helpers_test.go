@@ -11,6 +11,7 @@
 package scenarios
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +19,39 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
+
+type recoveryModel struct {
+	request *model.Request
+}
+
+func (m *recoveryModel) GenerateContent(
+	_ context.Context,
+	request *model.Request,
+) (<-chan *model.Response, error) {
+	m.request = request
+	finishReason := "stop"
+	ch := make(chan *model.Response, 1)
+	ch <- &model.Response{
+		Choices: []model.Choice{{
+			Message:      model.NewAssistantMessage("recovered answer"),
+			FinishReason: &finishReason,
+		}},
+		Usage: &model.Usage{
+			PromptTokens:     20,
+			CompletionTokens: 3,
+			TotalTokens:      23,
+			PromptTokensDetails: model.PromptTokensDetails{
+				CachedTokens: 4,
+			},
+		},
+	}
+	close(ch)
+	return ch, nil
+}
+
+func (*recoveryModel) Info() model.Info {
+	return model.Info{}
+}
 
 func TestQAMemorySearchInstruction_SingleSearch(t *testing.T) {
 	got := qaMemorySearchInstruction(1)
@@ -121,6 +155,85 @@ func TestMemorySearchProtocol(t *testing.T) {
 				)
 			}
 		})
+	}
+}
+
+func TestRecoverMemoryQAAnswer(t *testing.T) {
+	m := &recoveryModel{}
+	res := collectResult{
+		usage: TokenUsage{LLMCalls: 3},
+		steps: []StepTrace{
+			{
+				Step:  1,
+				Phase: "memory-search",
+				ToolCalls: []ToolCallTrace{{
+					Name:   "memory_search",
+					Args:   `{"query":"first"}`,
+					Result: `{"results":[{"memory":"evidence"}]}`,
+				}},
+			},
+			{Step: 2, Phase: "answer", FinishReason: "length"},
+		},
+	}
+	got, trace := recoverMemoryQAAnswer(
+		context.Background(), m, "What happened?", res,
+	)
+	if trace == nil || !trace.Succeeded {
+		t.Fatalf("recovery trace = %+v", trace)
+	}
+	if trace.Trigger != "empty-answer,finish-reason:length" {
+		t.Fatalf("trigger = %q", trace.Trigger)
+	}
+	if got.text != "recovered answer" {
+		t.Fatalf("answer = %q", got.text)
+	}
+	if got.usage.LLMCalls != 4 || got.usage.TotalTokens != 23 ||
+		got.usage.CachedTokens != 4 {
+		t.Fatalf("usage = %+v", got.usage)
+	}
+	if len(got.steps) != 3 || got.steps[2].Phase != "answer-recovery" ||
+		got.steps[2].FinishReason != "stop" {
+		t.Fatalf("steps = %+v", got.steps)
+	}
+	if m.request == nil || len(m.request.Messages) != 1 {
+		t.Fatalf("request = %+v", m.request)
+	}
+	prompt := m.request.Messages[0].Content
+	for _, want := range []string{
+		"What happened?", `{"query":"first"}`, "evidence",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("recovery prompt missing %q: %q", want, prompt)
+		}
+	}
+}
+
+func TestRecoverMemoryQAAnswerSkipsCompleteAnswer(t *testing.T) {
+	res := collectResult{
+		text:  "complete",
+		steps: []StepTrace{{FinishReason: "stop"}},
+	}
+	got, trace := recoverMemoryQAAnswer(
+		context.Background(), nil, "question", res,
+	)
+	if trace != nil || got.text != res.text {
+		t.Fatalf("got = %+v, trace = %+v", got, trace)
+	}
+}
+
+func TestRecoverMemoryQAAnswerRequiresEvidence(t *testing.T) {
+	res := collectResult{
+		steps: []StepTrace{{FinishReason: "length"}},
+	}
+	got, trace := recoverMemoryQAAnswer(
+		context.Background(), nil, "question", res,
+	)
+	if trace == nil || trace.Error !=
+		"no memory_search evidence available for recovery" {
+		t.Fatalf("trace = %+v", trace)
+	}
+	if got.text != "" || len(got.steps) != len(res.steps) {
+		t.Fatalf("got = %+v", got)
 	}
 }
 
