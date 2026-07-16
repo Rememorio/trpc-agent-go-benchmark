@@ -1119,6 +1119,16 @@ func TestBuildLongMemEvalAnswerPromptKnowledgeUpdateTimeline(t *testing.T) {
 		!strings.Contains(normalizedPrompt, "newest supported value") {
 		t.Fatalf("missing current-state guidance: %s", prompt)
 	}
+	if !strings.Contains(normalizedPrompt, "recent") ||
+		!strings.Contains(normalizedPrompt, "after a relocation, update, or change") {
+		t.Fatalf("missing recent-state guidance: %s", prompt)
+	}
+	if !strings.Contains(normalizedPrompt,
+		"compare their event_time metadata before retrieval rank") ||
+		!strings.Contains(normalizedPrompt,
+			"temporal rule overrides the general ranked-evidence rule") {
+		t.Fatalf("missing event-time precedence guidance: %s", prompt)
+	}
 }
 
 func TestRestoreLongMemEvalRawAnswerRemovesLegacyPostprocessing(t *testing.T) {

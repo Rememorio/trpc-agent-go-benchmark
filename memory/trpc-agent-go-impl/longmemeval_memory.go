@@ -2257,10 +2257,15 @@ For knowledge-update questions, first decide from the question wording whether
 it asks for an earlier state or the latest state. If it asks for "previous",
 "before", "old", "former", "prior", or what was true before an update, answer
 with the earlier value immediately before the later update; do not answer with
-the latest/current value. If it asks for "current", "latest", "now", or what
-changed after an update, answer with the newest supported value. Use dates and
-timeline wording in the retrieved memories to choose the value, but output only
-the requested value itself.`
+the latest/current value. If it asks for "current", "latest", "now", "recent",
+"recently", or what became true after a relocation, update, or change, answer
+with the newest supported value. When memories describe different states of
+the same subject, compare their event_time metadata before retrieval rank:
+select the greatest event_time for a latest-state question and the appropriate
+earlier event_time for a previous-state question. This temporal rule overrides
+the general ranked-evidence rule for the same subject at different times. Use
+timeline wording when event_time is absent, but output only the requested value
+itself.`
 	}
 	if strings.Contains(inst.QuestionType, "preference") {
 		return `

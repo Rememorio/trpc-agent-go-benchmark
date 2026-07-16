@@ -35,7 +35,7 @@ const (
 	// These versions are part of the experiment contract. Bump the relevant
 	// version whenever replay, prompting, or judging semantics change.
 	lmeProtocolVersion     = "lme-memory-turn-pair-v1"
-	lmeAnswerPromptVersion = "lme-memory-answer-v3"
+	lmeAnswerPromptVersion = "lme-memory-answer-v4"
 	lmeJudgePromptVersion  = "lme-official-adapted-judge-v2"
 )
 
