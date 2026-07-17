@@ -1119,7 +1119,8 @@ func TestRestoreLongMemEvalRawAnswerRemovesLegacyPostprocessing(t *testing.T) {
 		FailureStage: "ok",
 	}
 	restoreLongMemEvalRawAnswer(cr, br)
-	if br.Answer != br.RawAnswer || br.ExactMatch || br.F1 == 1 || br.FailureStage != "answer_miss" {
+	if br.Answer != br.RawAnswer || br.ExactMatch || br.F1 == 1 ||
+		br.FailureStage != "evidence_or_answer_miss" {
 		t.Fatalf("raw answer was not restored: %+v", br)
 	}
 
@@ -1249,7 +1250,9 @@ func TestReanswerLongMemEvalResult(t *testing.T) {
 	if mem0.Error != "" || mem0.AnswerError != "" {
 		t.Fatalf("stale answer error retained: %+v", mem0)
 	}
-	if pgvector.Answer != "Option A" || pgvector.ExactMatch || pgvector.FailureStage != "answer_miss" || pgvector.Judge != nil {
+	if pgvector.Answer != "Option A" || pgvector.ExactMatch ||
+		pgvector.FailureStage != "evidence_or_answer_miss" ||
+		pgvector.Judge != nil {
 		t.Fatalf("unexpected pgvector answer: %+v", pgvector)
 	}
 	if mem0.TokenUsage == nil || mem0.TokenUsage.TotalTokens != 89 ||
@@ -1307,6 +1310,98 @@ func TestStripLegacyLongMemEvalAnswerErrors(t *testing.T) {
 		AnswerError: "truncated",
 	}); got != "answer_error" {
 		t.Fatalf("answer failure stage = %q, want answer_error", got)
+	}
+}
+
+func TestClassifyFailurePreservesEvidenceGranularity(t *testing.T) {
+	inst := &lmeInstance{}
+	tests := []struct {
+		name     string
+		evidence evidenceMetrics
+		exact    bool
+		want     string
+		status   string
+	}{
+		{
+			name: "answer turn extraction miss",
+			evidence: evidenceMetrics{
+				HasEvidenceLabels:   true,
+				HasAnswerTurnLabels: true,
+			},
+			want:   "extraction_turn_miss",
+			status: "extraction_turn_miss",
+		},
+		{
+			name: "answer session extraction miss",
+			evidence: evidenceMetrics{
+				HasEvidenceLabels: true,
+			},
+			want:   "extraction_session_miss",
+			status: "extraction_session_miss",
+		},
+		{
+			name: "answer turn retrieval miss",
+			evidence: evidenceMetrics{
+				HasEvidenceLabels:    true,
+				HasAnswerTurnLabels:  true,
+				ExtractTurnRecallAny: true,
+				ExtractRecallAny:     true,
+			},
+			want:   "retrieval_turn_miss",
+			status: "retrieval_turn_miss",
+		},
+		{
+			name: "answer session retrieval miss",
+			evidence: evidenceMetrics{
+				HasEvidenceLabels: true,
+				ExtractRecallAny:  true,
+			},
+			want:   "retrieval_session_miss",
+			status: "retrieval_session_miss",
+		},
+		{
+			name: "content or answer miss",
+			evidence: evidenceMetrics{
+				HasEvidenceLabels:      true,
+				HasAnswerTurnLabels:    true,
+				ExtractTurnRecallAny:   true,
+				ExtractRecallAny:       true,
+				RetrievalTurnRecallAny: true,
+				RetrievalRecallAny:     true,
+				RetrievalRecallAll:     true,
+			},
+			want:   "evidence_or_answer_miss",
+			status: "full_retrieval",
+		},
+		{
+			name: "correct",
+			evidence: evidenceMetrics{
+				HasEvidenceLabels:      true,
+				HasAnswerTurnLabels:    true,
+				ExtractTurnRecallAny:   true,
+				ExtractRecallAny:       true,
+				RetrievalTurnRecallAny: true,
+				RetrievalRecallAny:     true,
+				RetrievalRecallAll:     true,
+			},
+			exact:  true,
+			want:   "ok",
+			status: "full_retrieval",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := classifyFailure(inst, &backendResult{
+				Evidence:   &test.evidence,
+				ExactMatch: test.exact,
+			})
+			if got != test.want {
+				t.Fatalf("classifyFailure() = %q, want %q", got, test.want)
+			}
+			if got := evidenceStatus(&test.evidence); got != test.status {
+				t.Fatalf("evidenceStatus() = %q, want %q", got, test.status)
+			}
+		})
 	}
 }
 
@@ -1853,7 +1948,7 @@ func TestEvaluatedFailureStage(t *testing.T) {
 		{name: "backend error", result: backendError, raw: "backend_error", judgeCorrect: true, judgeAvailable: true, want: "backend_error"},
 		{name: "answer error", result: answerError, raw: "answer_error", judgeCorrect: true, judgeAvailable: true, want: "answer_error"},
 		{name: "correct answer", result: regular, raw: "answer_miss", judgeCorrect: true, judgeAvailable: true, want: "ok"},
-		{name: "incorrect answer", result: regular, raw: "ok", judgeAvailable: true, want: "answer_miss"},
+		{name: "incorrect answer", result: regular, raw: "ok", judgeAvailable: true, want: "evidence_or_answer_miss"},
 		{name: "correct abstention", result: abstention, raw: "abstention_answered", judgeCorrect: true, judgeAvailable: true, want: "ok_abstention"},
 		{name: "incorrect abstention", result: abstention, raw: "ok_abstention", judgeAvailable: true, want: "abstention_answered"},
 		{name: "pipeline stage", result: regular, raw: "retrieval_miss", judgeCorrect: true, judgeAvailable: true, want: "retrieval_miss"},

@@ -677,7 +677,8 @@ func evaluatedFailureStage(
 		return rawStage
 	}
 	switch rawStage {
-	case "ok", "ok_abstention", "answer_miss", "abstention_answered":
+	case "ok", "ok_abstention", "answer_miss",
+		"evidence_or_answer_miss", "abstention_answered":
 		if br.Evidence != nil && br.Evidence.IsAbstention {
 			if judgeCorrect {
 				return "ok_abstention"
@@ -687,7 +688,7 @@ func evaluatedFailureStage(
 		if judgeCorrect {
 			return "ok"
 		}
-		return "answer_miss"
+		return "evidence_or_answer_miss"
 	default:
 		return rawStage
 	}
@@ -748,11 +749,17 @@ func evidenceStatus(ev *evidenceMetrics) string {
 	if !ev.HasEvidenceLabels {
 		return "unlabeled"
 	}
+	if ev.HasAnswerTurnLabels && !ev.ExtractTurnRecallAny {
+		return "extraction_turn_miss"
+	}
 	if !ev.ExtractRecallAny {
-		return "extract_miss"
+		return "extraction_session_miss"
+	}
+	if ev.HasAnswerTurnLabels && !ev.RetrievalTurnRecallAny {
+		return "retrieval_turn_miss"
 	}
 	if !ev.RetrievalRecallAny {
-		return "retrieval_miss"
+		return "retrieval_session_miss"
 	}
 	if !ev.RetrievalRecallAll {
 		return "partial_retrieval"

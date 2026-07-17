@@ -1831,11 +1831,11 @@ func scoreLongMemEvalAnswer(cr *caseResult, br *backendResult) {
 	br.F1 = metrics.CalculateF1(br.Answer, cr.Answer)
 	br.BLEU = metrics.CalculateBLEU(br.Answer, cr.Answer)
 	switch br.FailureStage {
-	case "ok", "answer_miss":
+	case "ok", "answer_miss", "evidence_or_answer_miss":
 		if br.ExactMatch || br.F1 >= 0.8 {
 			br.FailureStage = "ok"
 		} else {
-			br.FailureStage = "answer_miss"
+			br.FailureStage = "evidence_or_answer_miss"
 		}
 	case "ok_abstention", "abstention_answered":
 		if isUnknownAnswer(br.Answer) {
@@ -3098,16 +3098,16 @@ func classifyFailure(inst *lmeInstance, br *backendResult) string {
 		return "no_evidence_labels"
 	}
 	if br.Evidence.HasAnswerTurnLabels && !br.Evidence.ExtractTurnRecallAny {
-		return "extract_miss"
+		return "extraction_turn_miss"
 	}
 	if !br.Evidence.ExtractRecallAny {
-		return "extract_miss"
+		return "extraction_session_miss"
 	}
 	if br.Evidence.HasAnswerTurnLabels && !br.Evidence.RetrievalTurnRecallAny {
-		return "retrieval_miss"
+		return "retrieval_turn_miss"
 	}
 	if !br.Evidence.RetrievalRecallAny {
-		return "retrieval_miss"
+		return "retrieval_session_miss"
 	}
 	if !*flagLMEAnswer {
 		return "retrieval_only"
@@ -3115,7 +3115,7 @@ func classifyFailure(inst *lmeInstance, br *backendResult) string {
 	if br.ExactMatch || br.F1 >= 0.8 {
 		return "ok"
 	}
-	return "answer_miss"
+	return "evidence_or_answer_miss"
 }
 
 func isAbstentionQuestion(inst *lmeInstance) bool {
