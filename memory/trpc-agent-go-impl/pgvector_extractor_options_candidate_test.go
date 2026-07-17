@@ -26,7 +26,13 @@ func TestLongMemEvalExtractorOptionsCandidate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("candidate options: %v", err)
 	}
-	metadata := extractor.NewExtractor(nil, options...).Metadata()
+	metadataProvider, ok := extractor.NewExtractor(nil, options...).(interface {
+		Metadata() map[string]any
+	})
+	if !ok {
+		t.Fatal("candidate extractor does not expose configuration metadata")
+	}
+	metadata := metadataProvider.Metadata()
 	if got := metadata["update_policy"]; got != "history-preserving" {
 		t.Fatalf("update policy metadata = %v", got)
 	}
