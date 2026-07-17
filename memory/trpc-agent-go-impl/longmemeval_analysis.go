@@ -146,12 +146,28 @@ func compareLongMemEvalResults(baselinePath, candidatePath, outputDir string) er
 	if err := os.WriteFile(filepath.Join(outputDir, "comparison.tsv"), []byte(formatLongMemEvalComparisonTSV(rows)), 0644); err != nil {
 		return fmt.Errorf("write comparison.tsv: %w", err)
 	}
+	mem0Rows := compareLongMemEvalCrossBackendRows(
+		filterLongMemEvalAnalysisRows(longMemEvalAnalysisRows(baseline), "mem0"),
+		filterLongMemEvalAnalysisRows(longMemEvalAnalysisRows(candidate), "pgvector"),
+		"candidate-pgvector-vs-mem0",
+	)
+	if len(mem0Rows) == 0 {
+		return errors.New("no shared candidate pgvector and Mem0 cases to compare")
+	}
+	if err := os.WriteFile(
+		filepath.Join(outputDir, "mem0_comparison.tsv"),
+		[]byte(formatLongMemEvalComparisonTSV(mem0Rows)),
+		0644,
+	); err != nil {
+		return fmt.Errorf("write mem0_comparison.tsv: %w", err)
+	}
 	report := formatLongMemEvalComparisonMarkdown(
 		baselinePath,
 		candidatePath,
 		baseline,
 		candidate,
 		rows,
+		mem0Rows,
 	)
 	if err := os.WriteFile(filepath.Join(outputDir, "comparison.md"), []byte(report), 0644); err != nil {
 		return fmt.Errorf("write comparison.md: %w", err)
@@ -599,6 +615,22 @@ func compareLongMemEvalRows(baselineRows, candidateRows []lmeAnalysisRow) []lmeC
 	return out
 }
 
+func compareLongMemEvalCrossBackendRows(
+	baselineRows,
+	candidateRows []lmeAnalysisRow,
+	label string,
+) []lmeCompareRow {
+	baseline := append([]lmeAnalysisRow(nil), baselineRows...)
+	candidate := append([]lmeAnalysisRow(nil), candidateRows...)
+	for i := range baseline {
+		baseline[i].Backend = label
+	}
+	for i := range candidate {
+		candidate[i].Backend = label
+	}
+	return compareLongMemEvalRows(baseline, candidate)
+}
+
 func sameLongMemEvalComparisonAnswer(baseline, candidate lmeAnalysisRow) bool {
 	return normalizedLongMemEvalComparisonText(baseline.Question) ==
 		normalizedLongMemEvalComparisonText(candidate.Question) &&
@@ -835,9 +867,9 @@ func formatLongMemEvalComparisonMarkdown(
 	candidatePath string,
 	baseline,
 	candidate *runResult,
-	rows []lmeCompareRow,
+	rows,
+	mem0Rows []lmeCompareRow,
 ) string {
-	summary := summarizeLongMemEvalCompareRows(rows)
 	var b strings.Builder
 	b.WriteString("# LongMemEval Comparison\n\n")
 	fmt.Fprintf(&b, "- Baseline: `%s`\n", baselinePath)
@@ -845,12 +877,32 @@ func formatLongMemEvalComparisonMarkdown(
 	fmt.Fprintf(&b, "- Baseline implementation: `%s`\n", longMemEvalResultImplementation(baseline))
 	fmt.Fprintf(&b, "- Candidate implementation: `%s`\n", longMemEvalResultImplementation(candidate))
 	b.WriteString("- Correctness uses the semantic judge when available and falls back to exact match; no model calls are made.\n")
-	b.WriteString("- Pgvector deltas use only cases present in both runs. Mem0 is frozen from the baseline run and is not rerun or delta-compared.\n")
+	b.WriteString("- Pgvector and Mem0 deltas use only cases present in both runs. Mem0 is frozen from the baseline run and is not rerun.\n")
 	b.WriteString("- Identical normalized questions, references, and answers are treated as unchanged; conflicting judge verdicts are counted as ignored judge drift.\n\n")
 
 	writeLongMemEvalComparisonArms(&b, baseline, candidate)
 
-	b.WriteString("## Backend Delta Summary\n\n")
+	writeLongMemEvalDeltaSummary(&b, "Upstream Pgvector vs Candidate", rows)
+	b.WriteString("\n## Top Pgvector Improvements\n\n")
+	writeCompareRowsTable(&b, topCompareRows(rows, true, 20))
+	b.WriteString("\n## Top Pgvector Regressions\n\n")
+	writeCompareRowsTable(&b, topCompareRows(rows, false, 20))
+
+	writeLongMemEvalDeltaSummary(&b, "Mem0 vs Candidate Pgvector", mem0Rows)
+	b.WriteString("\n## Candidate Wins over Mem0\n\n")
+	writeCompareRowsTable(&b, topCompareRows(mem0Rows, true, 20))
+	b.WriteString("\n## Candidate Losses to Mem0\n\n")
+	writeCompareRowsTable(&b, topCompareRows(mem0Rows, false, 20))
+	return b.String()
+}
+
+func writeLongMemEvalDeltaSummary(
+	b *strings.Builder,
+	title string,
+	rows []lmeCompareRow,
+) {
+	summary := summarizeLongMemEvalCompareRows(rows)
+	fmt.Fprintf(b, "## %s\n\n", title)
 	b.WriteString("| Backend | Cases | Correct Baseline | Correct Candidate | EM Baseline | EM Candidate | Avg Delta F1 | Improved | Regressed | Unchanged | Judge Drift Ignored |\n")
 	b.WriteString("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n")
 	for _, backend := range sortedCompareBackends(summary) {
@@ -859,17 +911,11 @@ func formatLongMemEvalComparisonMarkdown(
 		if s.Cases > 0 {
 			avgDelta = s.TotalDeltaF1 / float64(s.Cases)
 		}
-		fmt.Fprintf(&b, "| %s | %d | %d | %d | %d | %d | %+.4f | %d | %d | %d | %d |\n",
+		fmt.Fprintf(b, "| %s | %d | %d | %d | %d | %d | %+.4f | %d | %d | %d | %d |\n",
 			mdCell(backend), s.Cases, s.BaselineCorrect, s.CandidateCorrect,
 			s.BaselineEM, s.CandidateEM,
 			avgDelta, s.Improved, s.Regressed, s.Unchanged, s.JudgeDriftIgnored)
 	}
-
-	b.WriteString("\n## Top Improvements\n\n")
-	writeCompareRowsTable(&b, topCompareRows(rows, true, 20))
-	b.WriteString("\n## Top Regressions\n\n")
-	writeCompareRowsTable(&b, topCompareRows(rows, false, 20))
-	return b.String()
 }
 
 func longMemEvalResultImplementation(result *runResult) string {

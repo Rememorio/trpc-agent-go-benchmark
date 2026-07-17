@@ -2071,7 +2071,11 @@ func TestCompareLongMemEvalResults(t *testing.T) {
 	if err := compareLongMemEvalResults(basePath, candidatePath, outputDir); err != nil {
 		t.Fatalf("compare results: %v", err)
 	}
-	for _, name := range []string{"comparison.md", "comparison.tsv"} {
+	for _, name := range []string{
+		"comparison.md",
+		"comparison.tsv",
+		"mem0_comparison.tsv",
+	} {
 		data, err := os.ReadFile(filepath.Join(outputDir, name))
 		if err != nil {
 			t.Fatalf("read %s: %v", name, err)
