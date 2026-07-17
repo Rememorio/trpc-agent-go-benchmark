@@ -1405,6 +1405,47 @@ func TestClassifyFailurePreservesEvidenceGranularity(t *testing.T) {
 	}
 }
 
+func TestNormalizedFailureStageMigratesLegacyStages(t *testing.T) {
+	tests := []struct {
+		name   string
+		result *backendResult
+		want   string
+	}{
+		{
+			name: "turn extraction miss",
+			result: &backendResult{
+				FailureStage: "extract_miss",
+				Evidence: &evidenceMetrics{
+					HasAnswerTurnLabels: true,
+				},
+			},
+			want: "extraction_turn_miss",
+		},
+		{
+			name: "session retrieval miss",
+			result: &backendResult{
+				FailureStage: "retrieval_miss",
+				Evidence:     &evidenceMetrics{},
+			},
+			want: "retrieval_session_miss",
+		},
+		{
+			name: "answer miss",
+			result: &backendResult{
+				FailureStage: "answer_miss",
+			},
+			want: "evidence_or_answer_miss",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := normalizedFailureStage(test.result); got != test.want {
+				t.Fatalf("normalizedFailureStage() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
 func TestExactAnswerMatchUsesWholeNormalizedAnswer(t *testing.T) {
 	t.Parallel()
 
@@ -1890,7 +1931,8 @@ func TestAnalyzeLongMemEvalResults(t *testing.T) {
 		t.Fatalf("analysis rows = %d, want 2", len(rows))
 	}
 	for _, row := range rows {
-		if row.QuestionID == "q2" && (row.Stage != "ok" || row.RawStage != "answer_miss") {
+		if row.QuestionID == "q2" &&
+			(row.Stage != "ok" || row.RawStage != "evidence_or_answer_miss") {
 			t.Fatalf("judge-aware stage not applied: %+v", row)
 		}
 	}

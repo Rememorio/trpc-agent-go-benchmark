@@ -696,7 +696,24 @@ func normalizedFailureStage(br *backendResult) string {
 		}
 		return "unknown"
 	}
-	return stage
+	switch stage {
+	case "extract_miss":
+		if br.Evidence != nil && br.Evidence.HasAnswerTurnLabels &&
+			!br.Evidence.ExtractTurnRecallAny {
+			return "extraction_turn_miss"
+		}
+		return "extraction_session_miss"
+	case "retrieval_miss":
+		if br.Evidence != nil && br.Evidence.HasAnswerTurnLabels &&
+			!br.Evidence.RetrievalTurnRecallAny {
+			return "retrieval_turn_miss"
+		}
+		return "retrieval_session_miss"
+	case "answer_miss":
+		return "evidence_or_answer_miss"
+	default:
+		return stage
+	}
 }
 
 func evaluatedFailureStage(
