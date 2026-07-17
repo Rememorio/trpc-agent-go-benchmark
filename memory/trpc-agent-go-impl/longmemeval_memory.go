@@ -1057,7 +1057,12 @@ func runCaseBackend(
 	}
 
 	pairsSeen := 0
-	for sessIdx, s := range sortedSessions(inst) {
+	sessions := sortedSessions(inst)
+	sessionTotal := len(sessions)
+	if *flagLMEMaxSessions > 0 {
+		sessionTotal = min(sessionTotal, *flagLMEMaxSessions)
+	}
+	for sessIdx, s := range sessions {
 		if *flagLMEMaxSessions > 0 && sessIdx >= *flagLMEMaxSessions {
 			break
 		}
@@ -1134,6 +1139,12 @@ func runCaseBackend(
 			if *flagVerbose {
 				log.Printf("    %s session=%s pair=%d new=%d total=%d err=%v",
 					backend.Name(), s.ID, pairIdx, len(trace.NewMemories), trace.MemoryCount, err)
+			} else if pairIdx == len(pairs)-1 || err != nil {
+				log.Printf(
+					"    %s ingest progress session=%d/%d id=%s pairs=%d memories=%d elapsed=%s err=%v",
+					backend.Name(), sessIdx+1, sessionTotal, s.ID, pairsSeen,
+					trace.MemoryCount, time.Since(start).Round(time.Second), err,
+				)
 			}
 			if err != nil {
 				goto afterIngest
