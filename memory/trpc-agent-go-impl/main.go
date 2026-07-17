@@ -182,6 +182,11 @@ var (
 		true,
 		"Generate LongMemEval answers from retrieved memories",
 	)
+	flagLMEBlindProgress = flag.Bool(
+		"lme-blind-progress",
+		false,
+		"Redact LongMemEval answers and quality metrics from progress output",
+	)
 	flagLMEImplementation = flag.String(
 		"lme-implementation",
 		"",

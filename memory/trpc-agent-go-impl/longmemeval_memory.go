@@ -958,6 +958,7 @@ func runLongMemEvalMemory(ctx context.Context) error {
 			"retrieval_note": "retrieval hits are searched memories, not raw transcript chunks",
 			"evidence_note":  "source_sessions are inferred from the pair after which a memory first appeared or changed.",
 			"answer_scoring": "raw model output; no retrieval-assisted answer post-processing",
+			"blind_progress": *flagLMEBlindProgress,
 			"token_usage_scope": "LLM and embedding usage made in this process. Self-hosted mem0 internal " +
 				"usage is included when its server returns X-Mem0-Usage; provider_usage_reported marks coverage.",
 		},
@@ -984,8 +985,7 @@ func runLongMemEvalMemory(ctx context.Context) error {
 		len(cases), backends, modelName, pgExtractionConfig.UpdatePolicy,
 		pgExtractionConfig.AssistantResultExtraction)
 	for i, inst := range cases {
-		log.Printf("[%d/%d] %s type=%s sessions=%d answer=%q",
-			i+1, len(cases), inst.QuestionID, inst.QuestionType, len(inst.HaystackSessions), inst.Answer)
+		log.Print(longMemEvalCaseProgress(i+1, len(cases), inst, *flagLMEBlindProgress))
 		cr := &caseResult{
 			QuestionID:       inst.QuestionID,
 			QuestionType:     inst.QuestionType,
@@ -1014,13 +1014,7 @@ func runLongMemEvalMemory(ctx context.Context) error {
 			br := runCaseBackend(ctx, llm, tracker, backend, inst, runID)
 			cr.BackendResults[backendName] = br
 			_ = backend.Close()
-			log.Printf("  %s pairs=%d memories=%d hits=%d evidence=%s calls=%d tokens=%d cached=%d embed_calls=%d embed_tokens=%d provider_usage=%v em=%v f1=%.3f answer=%q",
-				backendName, br.IngestedPairs, len(br.FinalMemories), len(br.Retrieval),
-				br.FailureStage,
-				tokenCalls(br.TokenUsage), tokenTotal(br.TokenUsage), tokenCached(br.TokenUsage),
-				embeddingCalls(br.EmbeddingUsage), embeddingTokens(br.EmbeddingUsage),
-				br.ProviderUsageReported,
-				br.ExactMatch, br.F1, truncate(br.Answer, 120))
+			log.Print(longMemEvalBackendProgress(backendName, br, *flagLMEBlindProgress))
 			saveCaseLog(*flagOutput, cr, br)
 		}
 		results.Cases = append(results.Cases, cr)
@@ -1030,6 +1024,32 @@ func runLongMemEvalMemory(ctx context.Context) error {
 	results.Summary = buildLongMemEvalSummary(results.Cases)
 	printLongMemEvalSummary(results)
 	return nil
+}
+
+func longMemEvalCaseProgress(index, total int, inst *lmeInstance, blind bool) string {
+	if blind {
+		return fmt.Sprintf("[%d/%d] %s type=%s sessions=%d",
+			index, total, inst.QuestionID, inst.QuestionType, len(inst.HaystackSessions))
+	}
+	return fmt.Sprintf("[%d/%d] %s type=%s sessions=%d answer=%q",
+		index, total, inst.QuestionID, inst.QuestionType, len(inst.HaystackSessions), inst.Answer)
+}
+
+func longMemEvalBackendProgress(backendName string, br *backendResult, blind bool) string {
+	if blind {
+		return fmt.Sprintf("  %s pairs=%d memories=%d hits=%d calls=%d tokens=%d cached=%d embed_calls=%d embed_tokens=%d provider_usage=%v",
+			backendName, br.IngestedPairs, len(br.FinalMemories), len(br.Retrieval),
+			tokenCalls(br.TokenUsage), tokenTotal(br.TokenUsage), tokenCached(br.TokenUsage),
+			embeddingCalls(br.EmbeddingUsage), embeddingTokens(br.EmbeddingUsage),
+			br.ProviderUsageReported)
+	}
+	return fmt.Sprintf("  %s pairs=%d memories=%d hits=%d evidence=%s calls=%d tokens=%d cached=%d embed_calls=%d embed_tokens=%d provider_usage=%v em=%v f1=%.3f answer=%q",
+		backendName, br.IngestedPairs, len(br.FinalMemories), len(br.Retrieval),
+		br.FailureStage,
+		tokenCalls(br.TokenUsage), tokenTotal(br.TokenUsage), tokenCached(br.TokenUsage),
+		embeddingCalls(br.EmbeddingUsage), embeddingTokens(br.EmbeddingUsage),
+		br.ProviderUsageReported,
+		br.ExactMatch, br.F1, truncate(br.Answer, 120))
 }
 
 func runCaseBackend(
@@ -1600,9 +1620,14 @@ func reanswerLongMemEvalResult(
 			if br.AnswerError != "" || br.Error != "" || br.Evidence != nil {
 				br.FailureStage = classifyFailure(inst, br)
 			}
-			log.Printf("  %s answer=%q calls=%d tokens=%d err=%v",
-				backendName, truncate(br.Answer, 80), usage.LLMCalls,
-				usage.TotalTokens, answerErr)
+			if *flagLMEBlindProgress {
+				log.Printf("  %s calls=%d tokens=%d err=%v",
+					backendName, usage.LLMCalls, usage.TotalTokens, answerErr)
+			} else {
+				log.Printf("  %s answer=%q calls=%d tokens=%d err=%v",
+					backendName, truncate(br.Answer, 80), usage.LLMCalls,
+					usage.TotalTokens, answerErr)
+			}
 		}
 		result.Summary = buildLongMemEvalSummary(result.Cases)
 		if err := writeLongMemEvalResults(outPath, result); err != nil {
@@ -1699,9 +1724,14 @@ func judgeLongMemEvalResults(ctx context.Context, path, outputDir string) error 
 				ctx, baseLLM, modelName, cr, br.Answer, judgeRuns,
 			)
 			br.Judge = judge
-			log.Printf("  %s judge correct=%v votes=%d/%d raw=%q err=%s",
-				backendName, judge.Correct, judge.ValidRuns, judge.RequestedRuns,
-				truncate(judge.Raw, 80), judge.Error)
+			if *flagLMEBlindProgress {
+				log.Printf("  %s judge completed votes=%d/%d err=%t",
+					backendName, judge.ValidRuns, judge.RequestedRuns, judge.Error != "")
+			} else {
+				log.Printf("  %s judge correct=%v votes=%d/%d raw=%q err=%s",
+					backendName, judge.Correct, judge.ValidRuns, judge.RequestedRuns,
+					truncate(judge.Raw, 80), judge.Error)
+			}
 		}
 		result.Summary = buildLongMemEvalSummary(result.Cases)
 		if err := writeLongMemEvalResults(outPath, &result); err != nil {
@@ -2638,6 +2668,10 @@ func saveCaseLog(outputDir string, cr *caseResult, br *backendResult) {
 }
 
 func printLongMemEvalSummary(result *runResult) {
+	if *flagLMEBlindProgress {
+		log.Printf("LongMemEval summary redacted; results retained in the output files")
+		return
+	}
 	fmt.Println("\nLongMemEval Memory Results")
 	for _, cr := range result.Cases {
 		fmt.Printf("- %s (%s): %s\n", cr.QuestionID, cr.QuestionType, cr.Question)

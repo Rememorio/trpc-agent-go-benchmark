@@ -56,6 +56,55 @@ func (s *lmeExtractorStub) Extract(
 	return s.ops, nil
 }
 
+func TestLongMemEvalBlindProgressRedactsOutcomes(t *testing.T) {
+	t.Parallel()
+	inst := &lmeInstance{
+		QuestionID:       "case-1",
+		QuestionType:     "knowledge-update",
+		Answer:           flexString("expected-secret"),
+		HaystackSessions: make([][]lmeTurn, 2),
+	}
+	result := &backendResult{
+		IngestedPairs: 3,
+		FinalMemories: make([]memorySnapshot, 4),
+		Retrieval:     make([]memoryHit, 5),
+		FailureStage:  "retrieval-turn-miss",
+		ExactMatch:    true,
+		F1:            0.75,
+		Answer:        "model-secret",
+	}
+
+	caseProgress := longMemEvalCaseProgress(1, 2, inst, true)
+	backendProgress := longMemEvalBackendProgress("pgvector", result, true)
+	for _, secret := range []string{
+		"expected-secret", "model-secret", "retrieval-turn-miss",
+		"evidence=", "em=", "f1=",
+	} {
+		if strings.Contains(caseProgress+backendProgress, secret) {
+			t.Fatalf("blind progress exposed %q: %q / %q",
+				secret, caseProgress, backendProgress)
+		}
+	}
+	for _, operational := range []string{
+		"case-1", "sessions=2", "pairs=3", "memories=4", "hits=5",
+	} {
+		if !strings.Contains(caseProgress+backendProgress, operational) {
+			t.Fatalf("blind progress omitted %q: %q / %q",
+				operational, caseProgress, backendProgress)
+		}
+	}
+
+	normalProgress := longMemEvalCaseProgress(1, 2, inst, false) +
+		longMemEvalBackendProgress("pgvector", result, false)
+	for _, outcome := range []string{
+		"expected-secret", "model-secret", "retrieval-turn-miss", "em=true", "f1=0.750",
+	} {
+		if !strings.Contains(normalProgress, outcome) {
+			t.Fatalf("normal progress omitted %q: %q", outcome, normalProgress)
+		}
+	}
+}
+
 func TestLongMemEvalBuildProvenance(t *testing.T) {
 	t.Parallel()
 	if current := currentLongMemEvalBuildProvenance(); current.GoVersion == "" {

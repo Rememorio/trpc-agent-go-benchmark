@@ -222,14 +222,15 @@ func rerankLongMemEvalResult(
 			if err := writeLongMemEvalResults(outPath, result); err != nil {
 				return fmt.Errorf("checkpoint reranked results: %w", err)
 			}
-			log.Printf("  %s hits=%d calls=%d tokens=%d answer=%q rerank_error=%q",
-				backendName,
-				len(br.Retrieval),
-				rerankUsage.LLMCalls,
-				rerankUsage.TotalTokens,
-				truncate(br.Answer, 80),
-				br.RerankError,
-			)
+			if *flagLMEBlindProgress {
+				log.Printf("  %s hits=%d calls=%d tokens=%d rerank_error=%t",
+					backendName, len(br.Retrieval), rerankUsage.LLMCalls,
+					rerankUsage.TotalTokens, br.RerankError != "")
+			} else {
+				log.Printf("  %s hits=%d calls=%d tokens=%d answer=%q rerank_error=%q",
+					backendName, len(br.Retrieval), rerankUsage.LLMCalls,
+					rerankUsage.TotalTokens, truncate(br.Answer, 80), br.RerankError)
+			}
 		}
 	}
 	result.Summary = buildLongMemEvalSummary(result.Cases)

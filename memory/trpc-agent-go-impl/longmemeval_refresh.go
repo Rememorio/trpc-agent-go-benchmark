@@ -284,11 +284,14 @@ func refreshLongMemEvalRetrievalResult(
 		if err := writeLongMemEvalResults(outPath, result); err != nil {
 			return fmt.Errorf("checkpoint retrieval refresh results: %w", err)
 		}
-		log.Printf(
-			"  %s hits=%d answer=%q embed_calls=%d err=%v",
-			backend.Name(), len(hits), truncate(br.Answer, 80),
-			providerUsage.Embedding.Calls, searchErr,
-		)
+		if *flagLMEBlindProgress {
+			log.Printf("  %s hits=%d embed_calls=%d err=%v",
+				backend.Name(), len(hits), providerUsage.Embedding.Calls, searchErr)
+		} else {
+			log.Printf("  %s hits=%d answer=%q embed_calls=%d err=%v",
+				backend.Name(), len(hits), truncate(br.Answer, 80),
+				providerUsage.Embedding.Calls, searchErr)
+		}
 	}
 	refresh["embedding_usage"] = embeddingUsage
 	result.Summary = buildLongMemEvalSummary(result.Cases)
