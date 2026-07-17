@@ -25,6 +25,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go-benchmark/memory/trpc-agent-go-impl/evaluation/dataset"
 	"trpc.group/trpc-go/trpc-agent-go-benchmark/memory/trpc-agent-go-impl/evaluation/metrics"
 	"trpc.group/trpc-go/trpc-agent-go-benchmark/memory/trpc-agent-go-impl/evaluation/scenarios"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/embedder"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
 	"trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
@@ -88,6 +89,10 @@ type EvalMetadata struct {
 	QAPromptVersion     string                    `json:"qa_prompt_version,omitempty"`
 	QASearchStrategy    string                    `json:"qa_search_strategy,omitempty"`
 	QARecoveryMaxTokens int                       `json:"qa_recovery_max_tokens,omitempty"`
+	VectorTopK          int                       `json:"vector_topk,omitempty"`
+	ReplayProtocol      string                    `json:"replay_protocol,omitempty"`
+	TokenUsageScope     string                    `json:"token_usage_scope,omitempty"`
+	EmbeddingUsageScope string                    `json:"embedding_usage_scope,omitempty"`
 	ReuseMemories       bool                      `json:"reuse_memories,omitempty"`
 	TableSuffix         string                    `json:"table_suffix,omitempty"`
 	PGVectorExtraction  *pgvectorExtractionConfig `json:"pgvector_extraction,omitempty"`
@@ -121,7 +126,16 @@ type EvalSummary struct {
 	// CacheHitRate is the fraction of prompt tokens served
 	// from the provider's prompt cache (0.0–1.0).
 	CacheHitRate float64 `json:"cache_hit_rate,omitempty"`
+
+	TokenUsage               *scenarios.TokenUsage     `json:"token_usage,omitempty"`
+	ExtractionTokenUsage     *scenarios.TokenUsage     `json:"extraction_token_usage,omitempty"`
+	QATokenUsage             *scenarios.TokenUsage     `json:"qa_token_usage,omitempty"`
+	EmbeddingUsage           *scenarios.EmbeddingUsage `json:"embedding_usage,omitempty"`
+	ExtractionEmbeddingUsage *scenarios.EmbeddingUsage `json:"extraction_embedding_usage,omitempty"`
+	QAEmbeddingUsage         *scenarios.EmbeddingUsage `json:"qa_embedding_usage,omitempty"`
 }
+
+const locomoAutoReplayProtocol = "chronological-session-batch-auto-v1"
 
 func runLoCoMoMemory(ctx context.Context) error {
 	modelName := getModelName()
@@ -422,6 +436,26 @@ func runScenario(
 		log.Printf("Failed to configure %s memory service: %v", backend, configErr)
 		return
 	}
+	if memOpts.enableExtractor {
+		extractionTracker := scenarios.NewTokenTracker()
+		config.ExtractionTracker = extractionTracker
+		memOpts.extractorCallbacks =
+			scenarios.NewModelCallbacksWithTracker(extractionTracker)
+	}
+	if scenarioType == scenarios.ScenarioAuto && backend == "pgvector" {
+		embeddingTracker := newLongMemEvalTrackingEmbedder(
+			newEmbeddingEmbedder(getEmbedModelName()),
+		)
+		memOpts.embeddingTracker = embeddingTracker
+		config.SnapshotEmbeddingUsage = func() scenarios.EmbeddingUsage {
+			usage := embeddingTracker.Snapshot()
+			return scenarios.EmbeddingUsage{
+				PromptTokens: usage.PromptTokens,
+				TotalTokens:  usage.TotalTokens,
+				Calls:        usage.Calls,
+			}
+		}
+	}
 
 	switch scenarioType {
 	case scenarios.ScenarioLongContext:
@@ -559,6 +593,8 @@ func buildMemoryServiceOptions(
 type memoryServiceOptions struct {
 	enableExtractor    bool
 	extractorModel     model.Model
+	extractorCallbacks *model.Callbacks
+	embeddingTracker   *lmeTrackingEmbedder
 	vectorTopK         int
 	pgvectorExtraction pgvectorExtractionConfig
 }
@@ -619,7 +655,10 @@ func createPGVectorService(
 		)
 	}
 	embedModelName := getEmbedModelName()
-	emb := newEmbeddingEmbedder(embedModelName)
+	var emb embedder.Embedder = newEmbeddingEmbedder(embedModelName)
+	if opts.embeddingTracker != nil {
+		emb = opts.embeddingTracker
+	}
 	tableName := tableNameWithSuffix(pgvectorTableDefaultBase)
 	var ext extractor.MemoryExtractor
 	if opts.enableExtractor {
@@ -635,7 +674,7 @@ func createPGVectorService(
 		if err != nil {
 			return nil, err
 		}
-		ext = extractor.NewExtractor(opts.extractorModel, extractorOptions...)
+		ext = newMemoryExtractor(opts, extractorOptions...)
 	} else {
 		log.Printf(
 			"Creating pgvector memory service (embed_model=%s)",
@@ -674,7 +713,7 @@ func createMySQLService(
 	if opts.enableExtractor {
 		log.Printf("Creating mysql memory service with extractor")
 		tableName = tableNameWithSuffix(mysqlTableAutoBase)
-		ext = extractor.NewExtractor(opts.extractorModel)
+		ext = newMemoryExtractor(opts)
 	} else {
 		log.Printf("Creating mysql memory service")
 	}
@@ -697,7 +736,7 @@ func createMySQLService(
 func createInMemoryService(opts memoryServiceOptions) memory.Service {
 	if opts.enableExtractor {
 		log.Printf("Creating inmemory memory service with extractor")
-		ext := extractor.NewExtractor(opts.extractorModel)
+		ext := newMemoryExtractor(opts)
 		return inmemory.NewMemoryService(
 			inmemory.WithExtractor(ext),
 			inmemory.WithAsyncMemoryNum(autoMemoryAsyncWorkers),
@@ -706,6 +745,19 @@ func createInMemoryService(opts memoryServiceOptions) memory.Service {
 		)
 	}
 	return inmemory.NewMemoryService()
+}
+
+func newMemoryExtractor(
+	opts memoryServiceOptions,
+	extractorOptions ...extractor.Option,
+) extractor.MemoryExtractor {
+	if opts.extractorCallbacks != nil {
+		extractorOptions = append(
+			extractorOptions,
+			extractor.WithModelCallbacks(opts.extractorCallbacks),
+		)
+	}
+	return extractor.NewExtractor(opts.extractorModel, extractorOptions...)
 }
 
 // standardCategories is the ordered list of QA categories.
@@ -833,9 +885,11 @@ func buildEvaluationResult(
 	qCount := max(totalQuestions, 1)
 	protocolViolations := countProtocolViolations(sampleResults)
 	recoveryAttempts, recoverySuccesses := countAnswerRecoveries(sampleResults)
+	phaseUsage := aggregateLoCoMoPhaseUsage(sampleResults)
+	effectiveCachedTokens := totalUsage.CachedPromptTokens()
 	var cacheHitRate float64
 	if totalUsage.PromptTokens > 0 {
-		cacheHitRate = float64(totalUsage.CachedTokens) /
+		cacheHitRate = float64(effectiveCachedTokens) /
 			float64(totalUsage.PromptTokens)
 	}
 	metadata := &EvalMetadata{
@@ -860,7 +914,15 @@ func buildEvaluationResult(
 		metadata.QASearchStrategy = scenarios.MemoryQASearchStrategy
 		metadata.QARecoveryMaxTokens = scenarios.MemoryQARecoveryMaxTokens
 	}
+	if config.Scenario == scenarios.ScenarioAuto {
+		metadata.ReplayProtocol = locomoAutoReplayProtocol
+		metadata.TokenUsageScope = "extractor and QA LLM calls; " +
+			"optional LLM judge excluded"
+	}
 	if config.Scenario == scenarios.ScenarioAuto && backend == "pgvector" {
+		metadata.VectorTopK = *flagVectorTopK
+		metadata.EmbeddingUsageScope = "provider-reported extraction, " +
+			"persistence, and QA-search embedding calls"
 		if extraction, err := currentPGVectorExtractionConfig(); err == nil {
 			metadata.PGVectorExtraction = &extraction
 		}
@@ -868,30 +930,91 @@ func buildEvaluationResult(
 	return &EvaluationResult{
 		Metadata: metadata,
 		Summary: &EvalSummary{
-			TotalSamples:            len(sampleResults),
-			TotalQuestions:          totalQuestions,
-			OverallF1:               overall.F1,
-			OverallBLEU:             overall.BLEU,
-			OverallLLMScore:         overall.LLMScore,
-			TotalTimeMs:             totalTime.Milliseconds(),
-			AvgLatencyMs:            float64(totalTime.Milliseconds()) / float64(qCount),
-			TotalPromptTokens:       totalUsage.PromptTokens,
-			TotalCompletionTokens:   totalUsage.CompletionTokens,
-			TotalTokens:             totalUsage.TotalTokens,
-			TotalCachedTokens:       totalUsage.CachedTokens,
-			TotalLLMCalls:           totalUsage.LLMCalls,
-			ProtocolViolations:      protocolViolations,
-			AnswerRecoveryAttempts:  recoveryAttempts,
-			AnswerRecoverySuccesses: recoverySuccesses,
-			AvgPromptTokensPerQA:    float64(totalUsage.PromptTokens) / float64(qCount),
-			AvgCompletionPerQA:      float64(totalUsage.CompletionTokens) / float64(qCount),
-			AvgCachedTokensPerQA:    float64(totalUsage.CachedTokens) / float64(qCount),
-			AvgLLMCallsPerQA:        float64(totalUsage.LLMCalls) / float64(qCount),
-			CacheHitRate:            cacheHitRate,
+			TotalSamples:             len(sampleResults),
+			TotalQuestions:           totalQuestions,
+			OverallF1:                overall.F1,
+			OverallBLEU:              overall.BLEU,
+			OverallLLMScore:          overall.LLMScore,
+			TotalTimeMs:              totalTime.Milliseconds(),
+			AvgLatencyMs:             float64(totalTime.Milliseconds()) / float64(qCount),
+			TotalPromptTokens:        totalUsage.PromptTokens,
+			TotalCompletionTokens:    totalUsage.CompletionTokens,
+			TotalTokens:              totalUsage.TotalTokens,
+			TotalCachedTokens:        effectiveCachedTokens,
+			TotalLLMCalls:            totalUsage.LLMCalls,
+			ProtocolViolations:       protocolViolations,
+			AnswerRecoveryAttempts:   recoveryAttempts,
+			AnswerRecoverySuccesses:  recoverySuccesses,
+			AvgPromptTokensPerQA:     float64(totalUsage.PromptTokens) / float64(qCount),
+			AvgCompletionPerQA:       float64(totalUsage.CompletionTokens) / float64(qCount),
+			AvgCachedTokensPerQA:     float64(effectiveCachedTokens) / float64(qCount),
+			AvgLLMCallsPerQA:         float64(totalUsage.LLMCalls) / float64(qCount),
+			CacheHitRate:             cacheHitRate,
+			TokenUsage:               locomoTokenUsagePointer(totalUsage),
+			ExtractionTokenUsage:     locomoTokenUsagePointer(phaseUsage.extractionTokens),
+			QATokenUsage:             locomoTokenUsagePointer(phaseUsage.qaTokens),
+			EmbeddingUsage:           locomoEmbeddingUsagePointer(phaseUsage.embeddings),
+			ExtractionEmbeddingUsage: locomoEmbeddingUsagePointer(phaseUsage.extractionEmbeddings),
+			QAEmbeddingUsage:         locomoEmbeddingUsagePointer(phaseUsage.qaEmbeddings),
 		},
 		ByCategory:    catAgg.GetCategoryMetrics(),
 		SampleResults: sampleResults,
 	}
+}
+
+func locomoTokenUsagePointer(
+	usage scenarios.TokenUsage,
+) *scenarios.TokenUsage {
+	if usage.IsZero() {
+		return nil
+	}
+	return &usage
+}
+
+func locomoEmbeddingUsagePointer(
+	usage scenarios.EmbeddingUsage,
+) *scenarios.EmbeddingUsage {
+	if usage.IsZero() {
+		return nil
+	}
+	return &usage
+}
+
+type locomoPhaseUsage struct {
+	extractionTokens     scenarios.TokenUsage
+	qaTokens             scenarios.TokenUsage
+	embeddings           scenarios.EmbeddingUsage
+	extractionEmbeddings scenarios.EmbeddingUsage
+	qaEmbeddings         scenarios.EmbeddingUsage
+}
+
+func aggregateLoCoMoPhaseUsage(
+	results []*scenarios.SampleResult,
+) locomoPhaseUsage {
+	var usage locomoPhaseUsage
+	for _, sample := range results {
+		if sample == nil {
+			continue
+		}
+		if sample.ExtractionTokenUsage != nil {
+			usage.extractionTokens.Add(*sample.ExtractionTokenUsage)
+		}
+		if sample.QATokenUsage != nil {
+			usage.qaTokens.Add(*sample.QATokenUsage)
+		}
+		if sample.EmbeddingUsage != nil {
+			usage.embeddings.Add(*sample.EmbeddingUsage)
+		}
+		if sample.ExtractionEmbeddingUsage != nil {
+			usage.extractionEmbeddings.Add(
+				*sample.ExtractionEmbeddingUsage,
+			)
+		}
+		if sample.QAEmbeddingUsage != nil {
+			usage.qaEmbeddings.Add(*sample.QAEmbeddingUsage)
+		}
+	}
+	return usage
 }
 
 func countProtocolViolations(results []*scenarios.SampleResult) int {

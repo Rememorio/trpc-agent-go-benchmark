@@ -72,6 +72,14 @@ type Config struct {
 	DebugDumpMemories bool
 	DebugMemLimit     int
 	DebugQALimit      int
+
+	// ExtractionTracker records auto-memory model calls. It is nil for
+	// scenarios that do not use the built-in extractor.
+	ExtractionTracker *TokenTracker
+	// SnapshotEmbeddingUsage returns and resets provider-reported embedding
+	// usage. Keeping this as a callback avoids coupling scenarios to a concrete
+	// embedding implementation.
+	SnapshotEmbeddingUsage func() EmbeddingUsage
 }
 
 // DefaultConfig returns default configuration.
@@ -142,12 +150,37 @@ type SessionRecallHit struct {
 
 // SampleResult holds evaluation results for a single sample.
 type SampleResult struct {
-	SampleID    string                             `json:"sample_id"`
-	QAResults   []*QAResult                        `json:"qa_results"`
-	ByCategory  map[string]metrics.CategoryMetrics `json:"by_category"`
-	Overall     metrics.CategoryMetrics            `json:"overall"`
-	TotalTimeMs int64                              `json:"total_time_ms"`
-	TokenUsage  *TokenUsage                        `json:"token_usage,omitempty"`
+	SampleID                 string                             `json:"sample_id"`
+	QAResults                []*QAResult                        `json:"qa_results"`
+	ByCategory               map[string]metrics.CategoryMetrics `json:"by_category"`
+	Overall                  metrics.CategoryMetrics            `json:"overall"`
+	TotalTimeMs              int64                              `json:"total_time_ms"`
+	TokenUsage               *TokenUsage                        `json:"token_usage,omitempty"`
+	ExtractionTokenUsage     *TokenUsage                        `json:"extraction_token_usage,omitempty"`
+	QATokenUsage             *TokenUsage                        `json:"qa_token_usage,omitempty"`
+	EmbeddingUsage           *EmbeddingUsage                    `json:"embedding_usage,omitempty"`
+	ExtractionEmbeddingUsage *EmbeddingUsage                    `json:"extraction_embedding_usage,omitempty"`
+	QAEmbeddingUsage         *EmbeddingUsage                    `json:"qa_embedding_usage,omitempty"`
+	ExtractionCalls          []ExtractionCallTrace              `json:"extraction_calls,omitempty"`
+}
+
+// EmbeddingUsage holds provider-reported embedding cost for one phase.
+type EmbeddingUsage struct {
+	PromptTokens int `json:"prompt_tokens"`
+	TotalTokens  int `json:"total_tokens"`
+	Calls        int `json:"calls"`
+}
+
+// Add merges another embedding usage value into the receiver.
+func (u *EmbeddingUsage) Add(other EmbeddingUsage) {
+	u.PromptTokens += other.PromptTokens
+	u.TotalTokens += other.TotalTokens
+	u.Calls += other.Calls
+}
+
+// IsZero reports whether no embedding usage was recorded.
+func (u EmbeddingUsage) IsZero() bool {
+	return u.PromptTokens == 0 && u.TotalTokens == 0 && u.Calls == 0
 }
 
 // Evaluator is the interface for scenario evaluators.

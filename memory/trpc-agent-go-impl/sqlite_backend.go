@@ -42,7 +42,7 @@ func createSQLiteService(
 	if opts.enableExtractor {
 		log.Printf("Creating sqlite memory service with extractor")
 		tableName = tableNameWithSuffix(sqliteTableAutoBase)
-		ext = extractor.NewExtractor(opts.extractorModel)
+		ext = newMemoryExtractor(opts)
 	} else {
 		log.Printf("Creating sqlite memory service")
 	}
@@ -89,7 +89,7 @@ func createSQLiteVecService(
 	if opts.enableExtractor {
 		log.Printf("Creating sqlitevec memory service with extractor")
 		tableName = tableNameWithSuffix(sqliteVecTableAutoBase)
-		ext = extractor.NewExtractor(opts.extractorModel)
+		ext = newMemoryExtractor(opts)
 	} else {
 		log.Printf("Creating sqlitevec memory service")
 	}

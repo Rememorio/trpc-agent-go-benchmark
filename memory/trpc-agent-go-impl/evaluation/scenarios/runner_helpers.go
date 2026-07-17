@@ -359,14 +359,17 @@ type ToolCallTrace struct {
 
 // StepTrace records one LLM round-trip (request → response).
 type StepTrace struct {
-	Step             int             `json:"step"`
-	Phase            string          `json:"phase,omitempty"`
-	PromptTokens     int             `json:"prompt_tokens"`
-	CompletionTokens int             `json:"completion_tokens"`
-	TotalTokens      int             `json:"total_tokens"`
-	CachedTokens     int             `json:"cached_tokens,omitempty"`
-	FinishReason     string          `json:"finish_reason,omitempty"`
-	ToolCalls        []ToolCallTrace `json:"tool_calls,omitempty"`
+	Step                int             `json:"step"`
+	Phase               string          `json:"phase,omitempty"`
+	PromptTokens        int             `json:"prompt_tokens"`
+	CompletionTokens    int             `json:"completion_tokens"`
+	TotalTokens         int             `json:"total_tokens"`
+	CachedTokens        int             `json:"cached_tokens,omitempty"`
+	CacheCreationTokens int             `json:"cache_creation_tokens,omitempty"`
+	CacheReadTokens     int             `json:"cache_read_tokens,omitempty"`
+	ReasoningTokens     int             `json:"reasoning_tokens,omitempty"`
+	FinishReason        string          `json:"finish_reason,omitempty"`
+	ToolCalls           []ToolCallTrace `json:"tool_calls,omitempty"`
 }
 
 // collectResult holds the output of collecting events from a runner.
@@ -407,6 +410,12 @@ func collectFinalTextAndUsage(
 							ev.Response.Usage.TotalTokens
 						st.CachedTokens =
 							ev.Response.Usage.PromptTokensDetails.CachedTokens
+						st.CacheCreationTokens = ev.Response.Usage.
+							PromptTokensDetails.CacheCreationTokens
+						st.CacheReadTokens = ev.Response.Usage.
+							PromptTokensDetails.CacheReadTokens
+						st.ReasoningTokens = ev.Response.Usage.
+							CompletionTokensDetails.ReasoningTokens
 					}
 					if choice.FinishReason != nil {
 						st.FinishReason = *choice.FinishReason
@@ -457,15 +466,7 @@ func collectFinalTextAndUsage(
 				}
 			}
 			if ev.Response.Usage != nil {
-				res.usage.PromptTokens +=
-					ev.Response.Usage.PromptTokens
-				res.usage.CompletionTokens +=
-					ev.Response.Usage.CompletionTokens
-				res.usage.TotalTokens +=
-					ev.Response.Usage.TotalTokens
-				res.usage.CachedTokens +=
-					ev.Response.Usage.PromptTokensDetails.CachedTokens
-				res.usage.LLMCalls++
+				res.usage.Add(tokenUsageFromModelUsage(ev.Response.Usage))
 			}
 		}
 		if ev.IsRunnerCompletion() {
@@ -599,13 +600,12 @@ Retrieved memory_search results:
 		step.CompletionTokens = recovery.usage.CompletionTokens
 		step.TotalTokens = recovery.usage.TotalTokens
 		step.CachedTokens = recovery.usage.PromptTokensDetails.CachedTokens
-		res.usage.Add(TokenUsage{
-			PromptTokens:     recovery.usage.PromptTokens,
-			CompletionTokens: recovery.usage.CompletionTokens,
-			TotalTokens:      recovery.usage.TotalTokens,
-			CachedTokens:     recovery.usage.PromptTokensDetails.CachedTokens,
-			LLMCalls:         1,
-		})
+		step.CacheCreationTokens =
+			recovery.usage.PromptTokensDetails.CacheCreationTokens
+		step.CacheReadTokens = recovery.usage.PromptTokensDetails.CacheReadTokens
+		step.ReasoningTokens =
+			recovery.usage.CompletionTokensDetails.ReasoningTokens
+		res.usage.Add(tokenUsageFromModelUsage(recovery.usage))
 	}
 	res.steps = append(res.steps, step)
 	return res, trace
@@ -669,12 +669,13 @@ func logQATrace(
 	log.Printf("    📋 Question: %s", question)
 	log.Printf("    🎯 Expected: %s", expected)
 	for _, st := range res.steps {
-		if st.CachedTokens > 0 {
+		cachedTokens := max(st.CachedTokens, st.CacheReadTokens)
+		if cachedTokens > 0 {
 			log.Printf(
 				"    🔹 Step %d | Tokens: %d"+
 					" (in:%d cached:%d out:%d)",
 				st.Step, st.TotalTokens,
-				st.PromptTokens, st.CachedTokens,
+				st.PromptTokens, cachedTokens,
 				st.CompletionTokens,
 			)
 		} else {
@@ -740,12 +741,13 @@ func logDirectQATrace(
 	log.Printf("    📋 Question: %s", question)
 	log.Printf("    🎯 Expected: %s", expected)
 	if usage != nil {
-		if usage.CachedTokens > 0 {
+		cachedTokens := usage.CachedPromptTokens()
+		if cachedTokens > 0 {
 			log.Printf(
 				"    🔹 Tokens: %d (in:%d cached:%d out:%d)",
 				usage.TotalTokens,
 				usage.PromptTokens,
-				usage.CachedTokens,
+				cachedTokens,
 				usage.CompletionTokens,
 			)
 		} else {

@@ -123,6 +123,102 @@ func TestBuildEvaluationResultOmitsMemoryQAPromptVersion(t *testing.T) {
 	if got := result.Metadata.QARecoveryMaxTokens; got != 0 {
 		t.Fatalf("long-context recovery max tokens = %d, want 0", got)
 	}
+	if got := result.Metadata.VectorTopK; got != 0 {
+		t.Fatalf("long-context vector top-k = %d, want 0", got)
+	}
+}
+
+func TestBuildEvaluationResultAggregatesAutoPhaseUsage(t *testing.T) {
+	extractionTokens := scenarios.TokenUsage{
+		PromptTokens:        100,
+		CompletionTokens:    20,
+		TotalTokens:         120,
+		CacheCreationTokens: 10,
+		CacheReadTokens:     40,
+		LLMCalls:            2,
+	}
+	qaTokens := scenarios.TokenUsage{
+		PromptTokens:     50,
+		CompletionTokens: 10,
+		TotalTokens:      60,
+		CachedTokens:     5,
+		LLMCalls:         1,
+	}
+	totalTokens := extractionTokens
+	totalTokens.Add(qaTokens)
+	extractionEmbeddings := scenarios.EmbeddingUsage{
+		PromptTokens: 30,
+		TotalTokens:  30,
+		Calls:        3,
+	}
+	qaEmbeddings := scenarios.EmbeddingUsage{
+		PromptTokens: 5,
+		TotalTokens:  5,
+		Calls:        1,
+	}
+	totalEmbeddings := extractionEmbeddings
+	totalEmbeddings.Add(qaEmbeddings)
+
+	result := buildEvaluationResult(
+		scenarios.Config{Scenario: scenarios.ScenarioAuto},
+		"pgvector",
+		time.Now(),
+		[]*scenarios.SampleResult{{
+			ExtractionTokenUsage:     &extractionTokens,
+			QATokenUsage:             &qaTokens,
+			EmbeddingUsage:           &totalEmbeddings,
+			ExtractionEmbeddingUsage: &extractionEmbeddings,
+			QAEmbeddingUsage:         &qaEmbeddings,
+		}},
+		metrics.NewCategoryAggregator(),
+		1,
+		totalTokens,
+	)
+
+	if result.Metadata.ReplayProtocol != locomoAutoReplayProtocol {
+		t.Fatalf("replay protocol = %q", result.Metadata.ReplayProtocol)
+	}
+	if result.Metadata.VectorTopK != *flagVectorTopK {
+		t.Fatalf(
+			"vector top-k = %d, want %d",
+			result.Metadata.VectorTopK,
+			*flagVectorTopK,
+		)
+	}
+	if !strings.Contains(result.Metadata.TokenUsageScope, "judge excluded") {
+		t.Fatalf("token usage scope = %q", result.Metadata.TokenUsageScope)
+	}
+	if !strings.Contains(result.Metadata.EmbeddingUsageScope, "QA-search") {
+		t.Fatalf(
+			"embedding usage scope = %q",
+			result.Metadata.EmbeddingUsageScope,
+		)
+	}
+	if result.Summary.TokenUsage == nil ||
+		*result.Summary.TokenUsage != totalTokens {
+		t.Fatalf("total token usage = %+v", result.Summary.TokenUsage)
+	}
+	if result.Summary.ExtractionTokenUsage == nil ||
+		*result.Summary.ExtractionTokenUsage != extractionTokens {
+		t.Fatalf(
+			"extraction token usage = %+v",
+			result.Summary.ExtractionTokenUsage,
+		)
+	}
+	if result.Summary.QATokenUsage == nil ||
+		*result.Summary.QATokenUsage != qaTokens {
+		t.Fatalf("QA token usage = %+v", result.Summary.QATokenUsage)
+	}
+	if result.Summary.EmbeddingUsage == nil ||
+		*result.Summary.EmbeddingUsage != totalEmbeddings {
+		t.Fatalf("embedding usage = %+v", result.Summary.EmbeddingUsage)
+	}
+	if result.Summary.TotalCachedTokens != 40 {
+		t.Fatalf(
+			"total cached tokens = %d, want 40",
+			result.Summary.TotalCachedTokens,
+		)
+	}
 }
 
 func TestBuildEvaluationResultCountsProtocolViolations(t *testing.T) {
