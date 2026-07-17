@@ -333,6 +333,17 @@ LME_AGENT_PROFILE=upstream \
   -vector-topk 30 \
   -output ../results/lme-candidate
 
+# Refresh final memory snapshots and evidence without model calls. This is
+# useful when an older benchmark build recorded only a bounded snapshot. The
+# command verifies that every recorded memory still exists unchanged, preserves
+# retrieval/answers/judges/usage, and writes snapshot_refreshed_results.json.
+MEM0_HOST=http://localhost:8888 ./run-longmemeval.sh \
+  -dataset-format longmemeval \
+  -memory-backend mem0 \
+  -lme-refresh-memory-snapshots ../results/lme-upstream/judged_results.json \
+  -vector-topk 30 \
+  -output ../results/lme-upstream
+
 # Optionally add one model-based relevance-selection pass over every backend's
 # saved top-k. Running this on a combined PGVector/Mem0 result applies the same
 # model, prompt, and Top-N to both arms. Pre-rerank hits, selected hits, model
@@ -459,8 +470,10 @@ LongMemEval-specific options:
 | `-lme-ingest-wait`       | 250ms   | Extra delay after completed pair ingestion   |
 | `-lme-model-call-timeout` | 5m      | Model timeout and mem0 OSS request cap       |
 | `-lme-answer`            | true    | Generate answers from retrieved memories     |
+| `-lme-blind-progress`    | false   | Hide answers and quality from progress logs  |
 | `-lme-implementation`    | (env)   | Reproducible implementation label            |
 | `-lme-reanswer-results`   |         | Re-answer using saved ranked retrieval hits  |
+| `-lme-refresh-memory-snapshots` | | Refresh final snapshots without model calls  |
 | `-lme-refresh-retrieval-results` | | Refresh persisted pgvector retrieval         |
 | `-lme-rerank-results`     |         | Rerank saved hits for every result backend   |
 | `-lme-rerank-topn`        | 12      | Maximum memories selected by the reranker    |

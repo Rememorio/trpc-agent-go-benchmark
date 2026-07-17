@@ -207,6 +207,11 @@ var (
 		"",
 		"Re-run PGVector retrieval and answers against memories persisted by an existing LongMemEval results.json",
 	)
+	flagLMERefreshMemorySnapshots = flag.String(
+		"lme-refresh-memory-snapshots",
+		"",
+		"Refresh final memory snapshots and evidence from persisted LongMemEval memories without model calls",
+	)
 	flagLMERerankResults = flag.String(
 		"lme-rerank-results",
 		"",

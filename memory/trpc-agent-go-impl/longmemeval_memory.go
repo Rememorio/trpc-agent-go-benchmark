@@ -869,6 +869,11 @@ func runLongMemEvalMemory(ctx context.Context) error {
 	if path := strings.TrimSpace(*flagLMERerankResults); path != "" {
 		return rerankLongMemEvalResults(ctx, path, longMemEvalAnalysisOutputDir(path))
 	}
+	if path := strings.TrimSpace(*flagLMERefreshMemorySnapshots); path != "" {
+		return refreshLongMemEvalMemorySnapshots(
+			ctx, path, longMemEvalAnalysisOutputDir(path),
+		)
+	}
 	if path := strings.TrimSpace(*flagLMERefreshRetrievalResults); path != "" {
 		return refreshLongMemEvalRetrievalResults(
 			ctx, path, longMemEvalAnalysisOutputDir(path),
