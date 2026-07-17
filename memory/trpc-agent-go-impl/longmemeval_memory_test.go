@@ -601,7 +601,7 @@ func TestMem0OSSIngestRetriesTransientStatus(t *testing.T) {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
 		if attempt == 1 {
-			http.Error(w, "busy", http.StatusServiceUnavailable)
+			http.Error(w, "busy", http.StatusTooManyRequests)
 			return
 		}
 		w.WriteHeader(http.StatusOK)
@@ -762,11 +762,33 @@ func TestMem0OSSIngestUsesRequestTimeout(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected timeout error")
 	}
-	if attempts.Load() == 0 {
-		t.Fatal("expected at least one request attempt")
+	if got := attempts.Load(); got != 1 {
+		t.Fatalf("request attempts = %d, want 1", got)
 	}
 	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
 		t.Fatalf("request timeout took too long: %v", elapsed)
+	}
+}
+
+func TestLongMemEvalMem0OSSRequestTimeout(t *testing.T) {
+	oldTimeout := *flagLMEModelCallTimeout
+	defer func() { *flagLMEModelCallTimeout = oldTimeout }()
+
+	*flagLMEModelCallTimeout = 5 * time.Minute
+	if got, want := longMemEvalMem0OSSRequestTimeout(), 6*time.Minute; got != want {
+		t.Fatalf("request timeout = %v, want %v", got, want)
+	}
+
+	*flagLMEModelCallTimeout = 0
+	if got := longMemEvalMem0OSSRequestTimeout(); got != lmeMem0RequestTimeout {
+		t.Fatalf("disabled-model request timeout = %v, want %v",
+			got, lmeMem0RequestTimeout)
+	}
+
+	maxDuration := time.Duration(1<<63 - 1)
+	*flagLMEModelCallTimeout = maxDuration
+	if got := longMemEvalMem0OSSRequestTimeout(); got != maxDuration {
+		t.Fatalf("overflow-safe request timeout = %v, want %v", got, maxDuration)
 	}
 }
 
@@ -980,12 +1002,17 @@ func TestPrepareLongMemEvalMem0Failures(t *testing.T) {
 func TestRetryableMem0Status(t *testing.T) {
 	t.Parallel()
 
-	for _, status := range []int{http.StatusTooManyRequests, http.StatusInternalServerError, http.StatusBadGateway} {
-		if !isRetryableMem0Status(status) {
-			t.Fatalf("status %d should be retryable", status)
-		}
+	if !isRetryableMem0Status(http.StatusTooManyRequests) {
+		t.Fatal("status 429 should be retryable")
 	}
-	for _, status := range []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusNotFound} {
+	for _, status := range []int{
+		http.StatusBadRequest,
+		http.StatusUnauthorized,
+		http.StatusNotFound,
+		http.StatusInternalServerError,
+		http.StatusBadGateway,
+		http.StatusServiceUnavailable,
+	} {
 		if isRetryableMem0Status(status) {
 			t.Fatalf("status %d should not be retryable", status)
 		}

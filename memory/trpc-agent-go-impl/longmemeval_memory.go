@@ -22,7 +22,6 @@ import (
 	"io"
 	"log"
 	"math/rand"
-	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -54,6 +53,8 @@ const (
 	lmeMem0IngestRetries     = 5
 	lmeMem0InitialRetryDelay = time.Second
 	lmeMem0MaximumRetryDelay = 16 * time.Second
+	lmeMem0RequestOverhead   = time.Minute
+	lmeMem0RequestTimeout    = 10 * time.Minute
 	lmeAutoMemoryPoll        = 20 * time.Millisecond
 	lmeAutoMemoryGrace       = time.Second
 	lmeAutoMemoryTimeout     = 10 * time.Minute
@@ -652,11 +653,9 @@ func (b *mem0Backend) ingestPairOSS(ctx context.Context, sess *session.Session, 
 		resp, err := client.Do(req)
 		if err != nil {
 			cancel()
-			lastErr = err
-			if isRetryableMem0Error(err) {
-				continue
-			}
-			return err
+			// A transport failure is ambiguous for this non-idempotent POST:
+			// the server may still commit memories after the client gives up.
+			return fmt.Errorf("mem0 OSS ingest request failed: %w", err)
 		}
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		_ = resp.Body.Close()
@@ -3397,19 +3396,8 @@ func lmeObservationDate(date string) (string, bool) {
 	return t.Format(time.DateOnly), true
 }
 
-func isRetryableMem0Error(err error) bool {
-	if err == nil {
-		return false
-	}
-	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-		return true
-	}
-	var netErr net.Error
-	return errors.As(err, &netErr) && netErr.Timeout()
-}
-
 func isRetryableMem0Status(status int) bool {
-	return status == http.StatusTooManyRequests || status >= 500
+	return status == http.StatusTooManyRequests
 }
 
 func mem0IngestRetryDelay(attempt int) time.Duration {
@@ -3441,11 +3429,15 @@ func sleepWithContext(ctx context.Context, d time.Duration) error {
 }
 
 func longMemEvalMem0OSSRequestTimeout() time.Duration {
-	timeout := 90 * time.Second
-	if flagLMEModelCallTimeout != nil && *flagLMEModelCallTimeout > 0 && *flagLMEModelCallTimeout < timeout {
-		timeout = *flagLMEModelCallTimeout
+	if flagLMEModelCallTimeout == nil || *flagLMEModelCallTimeout <= 0 {
+		return lmeMem0RequestTimeout
 	}
-	return timeout
+	timeout := *flagLMEModelCallTimeout
+	maxDuration := time.Duration(1<<63 - 1)
+	if timeout > maxDuration-lmeMem0RequestOverhead {
+		return timeout
+	}
+	return timeout + lmeMem0RequestOverhead
 }
 
 func contextWithOptionalTimeout(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
