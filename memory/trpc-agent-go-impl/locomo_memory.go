@@ -91,6 +91,7 @@ type EvalMetadata struct {
 	QARecoveryMaxTokens int                       `json:"qa_recovery_max_tokens,omitempty"`
 	VectorTopK          int                       `json:"vector_topk,omitempty"`
 	ReplayProtocol      string                    `json:"replay_protocol,omitempty"`
+	RoleMapping         string                    `json:"role_mapping,omitempty"`
 	TokenUsageScope     string                    `json:"token_usage_scope,omitempty"`
 	EmbeddingUsageScope string                    `json:"embedding_usage_scope,omitempty"`
 	ReuseMemories       bool                      `json:"reuse_memories,omitempty"`
@@ -135,7 +136,11 @@ type EvalSummary struct {
 	QAEmbeddingUsage         *scenarios.EmbeddingUsage `json:"qa_embedding_usage,omitempty"`
 }
 
-const locomoAutoReplayProtocol = "chronological-session-batch-auto-v1"
+const (
+	locomoAutoReplayProtocol = "chronological-session-batch-auto-v1"
+	locomoRoleMapping        = "primary human speaker=user; secondary human speaker=assistant; " +
+		"speaker names retained in message content"
+)
 
 func runLoCoMoMemory(ctx context.Context) error {
 	modelName := getModelName()
@@ -585,6 +590,10 @@ func buildMemoryServiceOptions(
 		if err != nil {
 			return memoryServiceOptions{}, err
 		}
+		if config.AssistantResultExtraction {
+			log.Printf("Warning: LoCoMo maps its secondary human speaker to the assistant role; " +
+				"assistant-result extraction is a synthetic-role ablation, not a real assistant-output evaluation")
+		}
 		opts.pgvectorExtraction = config
 	}
 	return opts, nil
@@ -916,6 +925,7 @@ func buildEvaluationResult(
 	}
 	if config.Scenario == scenarios.ScenarioAuto {
 		metadata.ReplayProtocol = locomoAutoReplayProtocol
+		metadata.RoleMapping = locomoRoleMapping
 		metadata.TokenUsageScope = "extractor and QA LLM calls; " +
 			"optional LLM judge excluded"
 	}

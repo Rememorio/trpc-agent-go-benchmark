@@ -178,6 +178,9 @@ func TestBuildEvaluationResultAggregatesAutoPhaseUsage(t *testing.T) {
 	if result.Metadata.ReplayProtocol != locomoAutoReplayProtocol {
 		t.Fatalf("replay protocol = %q", result.Metadata.ReplayProtocol)
 	}
+	if result.Metadata.RoleMapping != locomoRoleMapping {
+		t.Fatalf("role mapping = %q", result.Metadata.RoleMapping)
+	}
 	if result.Metadata.VectorTopK != *flagVectorTopK {
 		t.Fatalf(
 			"vector top-k = %d, want %d",
