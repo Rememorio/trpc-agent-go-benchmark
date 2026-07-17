@@ -279,6 +279,8 @@ type lmeJudgeResult struct {
 	Model         string            `json:"model"`
 	Correct       bool              `json:"correct"`
 	Raw           string            `json:"raw"`
+	CacheKey      string            `json:"cache_key,omitempty"`
+	VerdictSource string            `json:"verdict_source,omitempty"`
 	RequestedRuns int               `json:"requested_runs,omitempty"`
 	ValidRuns     int               `json:"valid_runs,omitempty"`
 	Attempts      []lmeJudgeAttempt `json:"attempts,omitempty"`
@@ -955,6 +957,7 @@ func runLongMemEvalMemory(ctx context.Context) error {
 			"answer_prompt_version":   lmeAnswerPromptVersion,
 			"answer_generation":       currentLongMemEvalAnswerGeneration(),
 			"judge_prompt_version":    lmeJudgePromptVersion,
+			"judge_protocol_version":  lmeJudgeProtocolVersion,
 			"judge_generation":        currentLongMemEvalJudgeGeneration(),
 			"model":                   modelName,
 			"model_variant":           modelVariant,
@@ -1579,20 +1582,12 @@ func reanswerLongMemEvalResult(
 	result.Metadata["answer_generation"] = currentLongMemEvalAnswerGeneration()
 	result.Metadata["answer_prompt_version"] = lmeAnswerPromptVersion
 	result.Metadata["judge_prompt_version"] = lmeJudgePromptVersion
+	result.Metadata["judge_protocol_version"] = lmeJudgeProtocolVersion
 	result.Metadata["judge_generation"] = currentLongMemEvalJudgeGeneration()
 	result.Metadata["reanswered_at"] = time.Now().UTC().Format(time.RFC3339)
 	result.Metadata["answer_scoring"] = "raw model output; no retrieval-assisted answer post-processing"
 	result.Metadata["reanswer_note"] = "Answers regenerated from saved ranked retrieval hits; backend-specific similarity scores are not shown to the answer model. Responses ending with a length finish reason are retried once with the recorded larger token limit."
-	for _, key := range []string{
-		"judge_model",
-		"judge_model_variant",
-		"judge_build",
-		"judge_runs",
-		"judged_at",
-		"judge_note",
-	} {
-		delete(result.Metadata, key)
-	}
+	clearLongMemEvalJudgeRunMetadata(result.Metadata)
 	for _, cr := range result.Cases {
 		if cr == nil {
 			continue
@@ -1699,9 +1694,45 @@ func judgeLongMemEvalResults(ctx context.Context, path, outputDir string) error 
 	}
 	modelName := getEvalModelName()
 	modelVariant := getModelVariant()
+	judgeCache, err := openLongMemEvalJudgeCache(*flagLMEJudgeCache)
+	if err != nil {
+		return err
+	}
 	baseLLM, err := newLongMemEvalModel(modelName, modelVariant)
 	if err != nil {
 		return err
+	}
+	outPath := filepath.Join(outputDir, longMemEvalJudgedOutputName(path))
+	return judgeLongMemEvalResult(
+		ctx,
+		&result,
+		baseLLM,
+		modelName,
+		modelVariant,
+		judgeRuns,
+		judgeCache,
+		outPath,
+	)
+}
+
+func judgeLongMemEvalResult(
+	ctx context.Context,
+	result *runResult,
+	baseLLM model.Model,
+	modelName string,
+	modelVariant string,
+	judgeRuns int,
+	judgeCache *longMemEvalJudgeCache,
+	outPath string,
+) error {
+	if result == nil {
+		return errors.New("LongMemEval judge result is nil")
+	}
+	if baseLLM == nil {
+		return errors.New("LongMemEval judge model is nil")
+	}
+	if judgeCache == nil {
+		return errors.New("LongMemEval judge cache is nil")
 	}
 	if result.Metadata == nil {
 		result.Metadata = make(map[string]any)
@@ -1710,15 +1741,23 @@ func judgeLongMemEvalResults(ctx context.Context, path, outputDir string) error 
 	result.Metadata["judge_model_variant"] = modelVariant
 	result.Metadata["judge_build"] = currentLongMemEvalBuildProvenance()
 	result.Metadata["judge_prompt_version"] = lmeJudgePromptVersion
+	result.Metadata["judge_protocol_version"] = lmeJudgeProtocolVersion
 	result.Metadata["judge_generation"] = currentLongMemEvalJudgeGeneration()
 	result.Metadata["judge_runs"] = judgeRuns
+	result.Metadata["judge_cache_format_version"] = lmeJudgeCacheFormatVersion
+	result.Metadata["judge_cache_shared"] = judgeCache.Persistent()
+	if ledgerID := judgeCache.LedgerID(); ledgerID != "" {
+		result.Metadata["judge_cache_ledger_id"] = ledgerID
+	} else {
+		delete(result.Metadata, "judge_cache_ledger_id")
+	}
+	result.Metadata["judge_cache_initial_entries"] = judgeCache.Len()
 	result.Metadata["judged_at"] = time.Now().UTC().Format(time.RFC3339)
-	result.Metadata["judge_note"] = "LLM semantic correctness judge adapted from the official LongMemEval QA evaluator; only explicit final VERDICT votes are accepted, and multiple requested runs use strict majority voting."
+	result.Metadata["judge_note"] = "LLM semantic correctness judge adapted from the official LongMemEval QA evaluator; only explicit final VERDICT votes are accepted, multiple requested runs use strict majority voting, and identical judge inputs reuse one content-addressed verdict."
 	result.Metadata["answer_scoring"] = "raw model output; no retrieval-assisted answer post-processing"
-	if err := os.MkdirAll(outputDir, 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(outPath), 0755); err != nil {
 		return fmt.Errorf("create judge output dir: %w", err)
 	}
-	outPath := filepath.Join(outputDir, longMemEvalJudgedOutputName(path))
 
 	for _, cr := range result.Cases {
 		if cr == nil {
@@ -1736,10 +1775,6 @@ func judgeLongMemEvalResults(ctx context.Context, path, outputDir string) error 
 				continue
 			}
 			restoreLongMemEvalRawAnswer(cr, br)
-			if shouldReuseLongMemEvalJudge(br, modelName, judgeRuns) {
-				log.Printf("  %s judge already valid; skipping", backendName)
-				continue
-			}
 			if strings.TrimSpace(br.Answer) == "" {
 				br.Judge = &lmeJudgeResult{
 					Model:         modelName,
@@ -1748,28 +1783,51 @@ func judgeLongMemEvalResults(ctx context.Context, path, outputDir string) error 
 				}
 				continue
 			}
-			judge := judgeLongMemEvalConsensus(
-				ctx, baseLLM, modelName, cr, br.Answer, judgeRuns,
+			judge, source, err := resolveLongMemEvalJudge(
+				ctx,
+				baseLLM,
+				modelName,
+				modelVariant,
+				cr,
+				br,
+				judgeRuns,
+				judgeCache,
 			)
+			if err != nil {
+				return fmt.Errorf("judge %s backend %s: %w", cr.QuestionID, backendName, err)
+			}
 			br.Judge = judge
 			if *flagLMEBlindProgress {
-				log.Printf("  %s judge completed votes=%d/%d err=%t",
-					backendName, judge.ValidRuns, judge.RequestedRuns, judge.Error != "")
+				log.Printf("  %s judge completed source=%s votes=%d/%d err=%t",
+					backendName, source, judge.ValidRuns, judge.RequestedRuns, judge.Error != "")
 			} else {
-				log.Printf("  %s judge correct=%v votes=%d/%d raw=%q err=%s",
-					backendName, judge.Correct, judge.ValidRuns, judge.RequestedRuns,
+				log.Printf("  %s judge source=%s correct=%v votes=%d/%d raw=%q err=%s",
+					backendName, source, judge.Correct, judge.ValidRuns, judge.RequestedRuns,
 					truncate(judge.Raw, 80), judge.Error)
 			}
 		}
+		updateLongMemEvalJudgeCacheMetadata(result.Metadata, judgeCache)
 		result.Summary = buildLongMemEvalSummary(result.Cases)
-		if err := writeLongMemEvalResults(outPath, &result); err != nil {
+		if err := writeLongMemEvalResults(outPath, result); err != nil {
 			return fmt.Errorf("checkpoint judged results: %w", err)
 		}
 	}
+	updateLongMemEvalJudgeCacheMetadata(result.Metadata, judgeCache)
 	result.Summary = buildLongMemEvalSummary(result.Cases)
-	printLongMemEvalSummary(&result)
+	printLongMemEvalSummary(result)
 	log.Printf("LongMemEval judged results written to %s", outPath)
 	return nil
+}
+
+func updateLongMemEvalJudgeCacheMetadata(
+	metadata map[string]any,
+	cache *longMemEvalJudgeCache,
+) {
+	if metadata == nil {
+		return
+	}
+	metadata["judge_cache_final_entries"] = cache.Len()
+	metadata["judge_cache_hits"] = cache.Hits()
 }
 
 func longMemEvalJudgedOutputName(path string) string {
@@ -1854,8 +1912,16 @@ func judgeLongMemEvalConsensus(
 	return judge
 }
 
-func shouldReuseLongMemEvalJudge(br *backendResult, modelName string, runs int) bool {
+func shouldReuseLongMemEvalJudge(
+	br *backendResult,
+	modelName string,
+	runs int,
+	cacheKey string,
+) bool {
 	if br == nil || br.Judge == nil || br.Judge.Model != modelName {
+		return false
+	}
+	if cacheKey == "" || br.Judge.CacheKey != cacheKey {
 		return false
 	}
 	savedRuns := br.Judge.RequestedRuns

@@ -1673,8 +1673,9 @@ func TestParseLongMemEvalJudge(t *testing.T) {
 func TestShouldReuseLongMemEvalJudge(t *testing.T) {
 	t.Parallel()
 
+	const cacheKey = "judge-cache-key"
 	valid := &backendResult{Judge: &lmeJudgeResult{
-		Model: "judge-model", Raw: "VERDICT: yes", Correct: true,
+		Model: "judge-model", Raw: "VERDICT: yes", Correct: true, CacheKey: cacheKey,
 		RequestedRuns: 3, ValidRuns: 3,
 		Attempts: []lmeJudgeAttempt{
 			{Raw: "VERDICT: yes", Correct: true},
@@ -1682,7 +1683,7 @@ func TestShouldReuseLongMemEvalJudge(t *testing.T) {
 			{Raw: "VERDICT: yes", Correct: true},
 		},
 	}}
-	if !shouldReuseLongMemEvalJudge(valid, "judge-model", 3) {
+	if !shouldReuseLongMemEvalJudge(valid, "judge-model", 3, cacheKey) {
 		t.Fatal("valid verdict from the same model should be reused")
 	}
 	for _, result := range []*backendResult{
@@ -1693,15 +1694,430 @@ func TestShouldReuseLongMemEvalJudge(t *testing.T) {
 		{Judge: &lmeJudgeResult{Model: "judge-model", Raw: "VERDICT: yes", Correct: false}},
 		{Judge: &lmeJudgeResult{Model: "judge-model", Raw: "VERDICT: yes", Correct: true, RequestedRuns: 1}},
 	} {
-		if shouldReuseLongMemEvalJudge(result, "judge-model", 3) {
+		if shouldReuseLongMemEvalJudge(result, "judge-model", 3, cacheKey) {
 			t.Fatalf("invalid or incompatible judge was reused: %#v", result)
 		}
 	}
 	legacy := &backendResult{Judge: &lmeJudgeResult{
 		Model: "judge-model", Raw: "VERDICT: no",
 	}}
-	if !shouldReuseLongMemEvalJudge(legacy, "judge-model", 1) {
-		t.Fatal("legacy single-run verdict should be reused for one requested run")
+	if shouldReuseLongMemEvalJudge(legacy, "judge-model", 1, cacheKey) {
+		t.Fatal("legacy verdict without a content-addressed key must be rejudged")
+	}
+}
+
+func TestResolveLongMemEvalJudgeDeduplicatesIdenticalInputs(t *testing.T) {
+	t.Parallel()
+
+	cache, err := openLongMemEvalJudgeCache("")
+	if err != nil {
+		t.Fatalf("open cache: %v", err)
+	}
+	llm := &queuedJudgeModel{
+		responses: []string{"VERDICT: yes"},
+		usage: &model.Usage{
+			PromptTokens: 10, CompletionTokens: 2, TotalTokens: 12,
+		},
+	}
+	cr := &caseResult{
+		QuestionType: "single-session-user",
+		Question:     "What did I wear?",
+		Answer:       "A yellow dress",
+	}
+	first, source, err := resolveLongMemEvalJudge(
+		context.Background(), llm, "judge-model", "glm", cr,
+		&backendResult{Answer: "A yellow dress and matching earrings"}, 1, cache,
+	)
+	if err != nil {
+		t.Fatalf("resolve first verdict: %v", err)
+	}
+	if source != lmeJudgeVerdictSourceModel || first.TokenUsage == nil {
+		t.Fatalf("first verdict source or usage = %q, %#v", source, first.TokenUsage)
+	}
+	second, source, err := resolveLongMemEvalJudge(
+		context.Background(), llm, "judge-model", "glm", cr,
+		&backendResult{Answer: "A yellow dress and matching earrings"}, 1, cache,
+	)
+	if err != nil {
+		t.Fatalf("resolve duplicate verdict: %v", err)
+	}
+	if llm.calls != 1 {
+		t.Fatalf("model calls = %d, want one shared call", llm.calls)
+	}
+	if source != lmeJudgeVerdictSourceCurrentRun || second.VerdictSource != source {
+		t.Fatalf("duplicate verdict source = %q, result=%q", source, second.VerdictSource)
+	}
+	if second.Correct != first.Correct || second.Raw != first.Raw ||
+		second.CacheKey != first.CacheKey {
+		t.Fatalf("duplicate verdict differs: first=%#v second=%#v", first, second)
+	}
+	if second.TokenUsage != nil || second.DurationMs != 0 ||
+		len(second.Attempts) != 1 || second.Attempts[0].TokenUsage != nil ||
+		len(second.Attempts[0].ModelCalls) != 0 {
+		t.Fatalf("cache reuse double-counted model work: %#v", second)
+	}
+}
+
+func TestJudgeLongMemEvalResultSharesVerdictsAndCheckpoints(t *testing.T) {
+	t.Parallel()
+
+	cache, err := openLongMemEvalJudgeCache(
+		filepath.Join(t.TempDir(), "judge-cache.json"),
+	)
+	if err != nil {
+		t.Fatalf("open cache: %v", err)
+	}
+	result := &runResult{Cases: []*caseResult{{
+		QuestionID:   "q-shared",
+		QuestionType: "single-session-user",
+		Question:     "What did I wear?",
+		Answer:       "A yellow dress",
+		BackendResults: map[string]*backendResult{
+			"empty":    {Backend: "empty"},
+			"mem0":     {Backend: "mem0", Answer: "A yellow dress and matching earrings"},
+			"pgvector": {Backend: "pgvector", Answer: "A yellow dress and matching earrings"},
+		},
+	}}}
+	llm := &queuedJudgeModel{
+		responses: []string{"VERDICT: yes"},
+		usage: &model.Usage{
+			PromptTokens: 10, CompletionTokens: 2, TotalTokens: 12,
+		},
+	}
+	outPath := filepath.Join(t.TempDir(), "judged_results.json")
+	if err := judgeLongMemEvalResult(
+		context.Background(), result, llm, "judge-model", "glm", 1, cache, outPath,
+	); err != nil {
+		t.Fatalf("judge result: %v", err)
+	}
+	if llm.calls != 1 {
+		t.Fatalf("model calls = %d, want one content-addressed verdict", llm.calls)
+	}
+	backends := result.Cases[0].BackendResults
+	if backends["empty"].Judge == nil || backends["empty"].Judge.Error != "missing answer" {
+		t.Fatalf("missing answer verdict = %#v", backends["empty"].Judge)
+	}
+	if backends["mem0"].Judge == nil || !backends["mem0"].Judge.Correct ||
+		backends["mem0"].Judge.VerdictSource != lmeJudgeVerdictSourceModel {
+		t.Fatalf("mem0 verdict = %#v", backends["mem0"].Judge)
+	}
+	if backends["pgvector"].Judge == nil || !backends["pgvector"].Judge.Correct ||
+		backends["pgvector"].Judge.VerdictSource != lmeJudgeVerdictSourceCurrentRun ||
+		backends["pgvector"].Judge.TokenUsage != nil {
+		t.Fatalf("pgvector shared verdict = %#v", backends["pgvector"].Judge)
+	}
+	if result.Metadata["judge_protocol_version"] != lmeJudgeProtocolVersion ||
+		result.Metadata["judge_cache_ledger_id"] != cache.LedgerID() ||
+		result.Metadata["judge_cache_initial_entries"] != 0 ||
+		result.Metadata["judge_cache_final_entries"] != 1 ||
+		result.Metadata["judge_cache_hits"] != 1 {
+		t.Fatalf("judge cache metadata = %#v", result.Metadata)
+	}
+	if result.Summary == nil || result.Summary.JudgeTokenUsage.LLMCalls != 1 ||
+		result.Summary.JudgeTokenUsage.TotalTokens != 12 {
+		t.Fatalf("judge summary double-counted cache reuse: %#v", result.Summary)
+	}
+	loaded, err := loadLongMemEvalResults(outPath)
+	if err != nil {
+		t.Fatalf("load judge checkpoint: %v", err)
+	}
+	if loaded.Metadata["judge_cache_ledger_id"] != cache.LedgerID() ||
+		loaded.Cases[0].BackendResults["pgvector"].Judge.CacheKey == "" {
+		t.Fatalf("judge checkpoint provenance = %#v", loaded)
+	}
+}
+
+func TestJudgeLongMemEvalResultValidatesDependencies(t *testing.T) {
+	t.Parallel()
+
+	cache, err := openLongMemEvalJudgeCache("")
+	if err != nil {
+		t.Fatalf("open cache: %v", err)
+	}
+	llm := &queuedJudgeModel{}
+	outPath := filepath.Join(t.TempDir(), "judged_results.json")
+	for _, test := range []struct {
+		name      string
+		result    *runResult
+		llm       model.Model
+		cache     *longMemEvalJudgeCache
+		wantError string
+	}{
+		{name: "nil result", llm: llm, cache: cache, wantError: "result is nil"},
+		{name: "nil model", result: &runResult{}, cache: cache, wantError: "model is nil"},
+		{name: "nil cache", result: &runResult{}, llm: llm, wantError: "cache is nil"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := judgeLongMemEvalResult(
+				context.Background(), test.result, test.llm,
+				"judge-model", "glm", 1, test.cache, outPath,
+			)
+			if err == nil || !strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf("dependency validation error = %v, want %q", err, test.wantError)
+			}
+		})
+	}
+}
+
+func TestLongMemEvalJudgeCachePersistsAndInvalidatesByAnswer(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "judge-cache.json")
+	cache, err := openLongMemEvalJudgeCache(path)
+	if err != nil {
+		t.Fatalf("open cache: %v", err)
+	}
+	if cache.LedgerID() == "" {
+		t.Fatal("persistent cache is missing a ledger id")
+	}
+	cr := &caseResult{
+		QuestionType: "single-session-user",
+		Question:     "Which option?",
+		Answer:       "Option B",
+	}
+	firstLLM := &queuedJudgeModel{responses: []string{"VERDICT: yes"}}
+	first, _, err := resolveLongMemEvalJudge(
+		context.Background(), firstLLM, "judge-model", "glm", cr,
+		&backendResult{Answer: "Option B"}, 1, cache,
+	)
+	if err != nil {
+		t.Fatalf("resolve persisted verdict: %v", err)
+	}
+	loaded, err := openLongMemEvalJudgeCache(path)
+	if err != nil {
+		t.Fatalf("reload cache: %v", err)
+	}
+	if loaded.LedgerID() != cache.LedgerID() {
+		t.Fatalf("ledger id changed after reload: got %q, want %q", loaded.LedgerID(), cache.LedgerID())
+	}
+	secondLLM := &queuedJudgeModel{responses: []string{"VERDICT: no"}}
+	second, source, err := resolveLongMemEvalJudge(
+		context.Background(), secondLLM, "judge-model", "glm", cr,
+		&backendResult{Answer: "Option B"}, 1, loaded,
+	)
+	if err != nil {
+		t.Fatalf("resolve loaded verdict: %v", err)
+	}
+	if source != lmeJudgeVerdictSourcePersistent || secondLLM.calls != 0 ||
+		second.Correct != first.Correct {
+		t.Fatalf("persistent cache miss: source=%q calls=%d result=%#v", source, secondLLM.calls, second)
+	}
+	third, source, err := resolveLongMemEvalJudge(
+		context.Background(), secondLLM, "judge-model", "glm", cr,
+		&backendResult{Answer: "Option A"}, 1, loaded,
+	)
+	if err != nil {
+		t.Fatalf("resolve changed answer: %v", err)
+	}
+	if source != lmeJudgeVerdictSourceModel || secondLLM.calls != 1 || third.CacheKey == first.CacheKey {
+		t.Fatalf("changed answer reused stale verdict: source=%q calls=%d result=%#v", source, secondLLM.calls, third)
+	}
+}
+
+func TestResolveLongMemEvalJudgeReusesExistingKeyedVerdict(t *testing.T) {
+	t.Parallel()
+
+	cr := &caseResult{
+		QuestionType: "single-session-user",
+		Question:     "Which option?",
+		Answer:       "Option B",
+	}
+	_, key, err := longMemEvalJudgeCacheKey(cr, "Option B", "judge-model", "glm", 1)
+	if err != nil {
+		t.Fatalf("build cache key: %v", err)
+	}
+	br := &backendResult{
+		Answer: "Option B",
+		Judge: &lmeJudgeResult{
+			Model:         "judge-model",
+			Correct:       true,
+			Raw:           "VERDICT: yes",
+			CacheKey:      key,
+			RequestedRuns: 1,
+			ValidRuns:     1,
+		},
+	}
+	cache, err := openLongMemEvalJudgeCache("")
+	if err != nil {
+		t.Fatalf("open cache: %v", err)
+	}
+	llm := &queuedJudgeModel{responses: []string{"VERDICT: no"}}
+	judge, source, err := resolveLongMemEvalJudge(
+		context.Background(), llm, "judge-model", "glm", cr, br, 1, cache,
+	)
+	if err != nil {
+		t.Fatalf("resolve existing verdict: %v", err)
+	}
+	if source != lmeJudgeVerdictSourceExisting || llm.calls != 0 || judge != br.Judge {
+		t.Fatalf("existing verdict was not reused: source=%q calls=%d judge=%#v", source, llm.calls, judge)
+	}
+	if judge.VerdictSource != lmeJudgeVerdictSourceExisting || cache.Len() != 1 {
+		t.Fatalf("existing verdict was not recorded in cache: judge=%#v entries=%d", judge, cache.Len())
+	}
+	identity, _, err := longMemEvalJudgeCacheKey(cr, "Option B", "judge-model", "glm", 1)
+	if err != nil {
+		t.Fatalf("rebuild cache identity: %v", err)
+	}
+	if err := cache.Put(key, identity, judge); err != nil || cache.Len() != 1 {
+		t.Fatalf("duplicate cache put = %v, entries=%d", err, cache.Len())
+	}
+}
+
+func TestOpenLongMemEvalJudgeCacheRejectsInvalidFiles(t *testing.T) {
+	t.Parallel()
+
+	write := func(t *testing.T, name string, value any) string {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), name)
+		var data []byte
+		if raw, ok := value.([]byte); ok {
+			data = raw
+		} else {
+			var err error
+			data, err = json.Marshal(value)
+			if err != nil {
+				t.Fatalf("marshal cache fixture: %v", err)
+			}
+		}
+		if err := os.WriteFile(path, data, 0644); err != nil {
+			t.Fatalf("write cache fixture: %v", err)
+		}
+		return path
+	}
+
+	for _, test := range []struct {
+		name      string
+		value     any
+		wantError string
+	}{
+		{
+			name:      "invalid json",
+			value:     []byte("{"),
+			wantError: "parse LongMemEval judge cache",
+		},
+		{
+			name: "unsupported version",
+			value: lmeJudgeCacheFile{
+				Version:  "future-version",
+				LedgerID: "ledger",
+				Entries:  map[string]lmeJudgeCacheEntry{},
+			},
+			wantError: "unsupported LongMemEval judge cache version",
+		},
+		{
+			name: "missing ledger id",
+			value: lmeJudgeCacheFile{
+				Version: lmeJudgeCacheFormatVersion,
+				Entries: map[string]lmeJudgeCacheEntry{},
+			},
+			wantError: "missing ledger_id",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := write(t, "judge-cache.json", test.value)
+			_, err := openLongMemEvalJudgeCache(path)
+			if err == nil || !strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf("open invalid cache error = %v, want %q", err, test.wantError)
+			}
+		})
+	}
+
+	path := filepath.Join(t.TempDir(), "judge-cache.json")
+	cache, err := openLongMemEvalJudgeCache(path)
+	if err != nil {
+		t.Fatalf("create valid cache: %v", err)
+	}
+	cr := &caseResult{
+		QuestionType: "single-session-user",
+		Question:     "Which option?",
+		Answer:       "Option B",
+	}
+	if _, _, err := resolveLongMemEvalJudge(
+		context.Background(),
+		&queuedJudgeModel{responses: []string{"VERDICT: yes"}},
+		"judge-model",
+		"glm",
+		cr,
+		&backendResult{Answer: "Option B"},
+		1,
+		cache,
+	); err != nil {
+		t.Fatalf("populate valid cache: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read valid cache: %v", err)
+	}
+	var file lmeJudgeCacheFile
+	if err := json.Unmarshal(data, &file); err != nil {
+		t.Fatalf("parse valid cache: %v", err)
+	}
+	for key, entry := range file.Entries {
+		delete(file.Entries, key)
+		file.Entries["tampered-key"] = entry
+		break
+	}
+	tampered := write(t, "tampered-cache.json", file)
+	if _, err := openLongMemEvalJudgeCache(tampered); err == nil ||
+		!strings.Contains(err.Error(), "key mismatch") {
+		t.Fatalf("tampered cache error = %v", err)
+	}
+}
+
+func TestLongMemEvalJudgeCacheNilHelpers(t *testing.T) {
+	t.Parallel()
+
+	var cache *longMemEvalJudgeCache
+	if cache.Persistent() || cache.LedgerID() != "" || cache.Len() != 0 || cache.Hits() != 0 {
+		t.Fatalf("nil cache helpers returned non-zero values")
+	}
+	if judge, source, ok := cache.Lookup("missing"); ok || judge != nil || source != "" {
+		t.Fatalf("nil cache lookup = %#v, %q, %v", judge, source, ok)
+	}
+	if err := cache.Put("", lmeJudgeCacheIdentity{}, nil); err != nil {
+		t.Fatalf("nil cache put: %v", err)
+	}
+	metadata := map[string]any{}
+	updateLongMemEvalJudgeCacheMetadata(metadata, cache)
+	if metadata["judge_cache_final_entries"] != 0 || metadata["judge_cache_hits"] != 0 {
+		t.Fatalf("nil cache metadata = %#v", metadata)
+	}
+	updateLongMemEvalJudgeCacheMetadata(nil, cache)
+}
+
+func TestClearLongMemEvalJudgeRunMetadata(t *testing.T) {
+	t.Parallel()
+
+	metadata := map[string]any{
+		"judge_model":                 "judge-model",
+		"judge_cache_format_version":  lmeJudgeCacheFormatVersion,
+		"judge_cache_shared":          true,
+		"judge_cache_ledger_id":       "ledger",
+		"judge_cache_initial_entries": 1,
+		"judge_cache_final_entries":   2,
+		"judge_cache_hits":            1,
+		"judged_at":                   "now",
+		"judge_prompt_version":        lmeJudgePromptVersion,
+		"judge_protocol_version":      lmeJudgeProtocolVersion,
+	}
+	clearLongMemEvalJudgeRunMetadata(metadata)
+	for _, key := range []string{
+		"judge_model",
+		"judge_cache_format_version",
+		"judge_cache_shared",
+		"judge_cache_ledger_id",
+		"judge_cache_initial_entries",
+		"judge_cache_final_entries",
+		"judge_cache_hits",
+		"judged_at",
+	} {
+		if _, ok := metadata[key]; ok {
+			t.Fatalf("stale judge run metadata %q was retained: %#v", key, metadata)
+		}
+	}
+	if metadata["judge_prompt_version"] != lmeJudgePromptVersion ||
+		metadata["judge_protocol_version"] != lmeJudgeProtocolVersion {
+		t.Fatalf("judge contract metadata was cleared: %#v", metadata)
 	}
 }
 
@@ -2280,23 +2696,27 @@ func TestCompareLongMemEvalResults(t *testing.T) {
 
 func testLongMemEvalComparisonMetadata(implementation string) map[string]any {
 	return map[string]any{
-		"implementation":        implementation,
-		"mem0_implementation":   "mem0-oss-test-revision",
-		"build":                 testLongMemEvalBuildProvenance("runner-revision"),
-		"judge_build":           testLongMemEvalBuildProvenance("judge-revision"),
-		"dataset_sha256":        "dataset-digest",
-		"selection_sha256":      "selection-digest",
-		"protocol_version":      lmeProtocolVersion,
-		"protocol_sha256":       "protocol-digest",
-		"model":                 "answer-model",
-		"model_variant":         "glm",
-		"model_temperature":     0,
-		"embedding_model":       "embedding-model",
-		"answer_prompt_version": lmeAnswerPromptVersion,
-		"answer_generation":     currentLongMemEvalAnswerGeneration(),
-		"judge_prompt_version":  lmeJudgePromptVersion,
-		"judge_generation":      currentLongMemEvalJudgeGeneration(),
-		"judge_runs":            3,
+		"implementation":             implementation,
+		"mem0_implementation":        "mem0-oss-test-revision",
+		"build":                      testLongMemEvalBuildProvenance("runner-revision"),
+		"judge_build":                testLongMemEvalBuildProvenance("judge-revision"),
+		"dataset_sha256":             "dataset-digest",
+		"selection_sha256":           "selection-digest",
+		"protocol_version":           lmeProtocolVersion,
+		"protocol_sha256":            "protocol-digest",
+		"model":                      "answer-model",
+		"model_variant":              "glm",
+		"model_temperature":          0,
+		"embedding_model":            "embedding-model",
+		"answer_prompt_version":      lmeAnswerPromptVersion,
+		"answer_generation":          currentLongMemEvalAnswerGeneration(),
+		"judge_prompt_version":       lmeJudgePromptVersion,
+		"judge_protocol_version":     lmeJudgeProtocolVersion,
+		"judge_generation":           currentLongMemEvalJudgeGeneration(),
+		"judge_runs":                 3,
+		"judge_cache_format_version": lmeJudgeCacheFormatVersion,
+		"judge_cache_shared":         true,
+		"judge_cache_ledger_id":      "shared-test-ledger",
 	}
 }
 
@@ -2415,6 +2835,50 @@ func TestValidateLongMemEvalComparisonRequiresPinnedReanswerBuild(t *testing.T) 
 	err := validateLongMemEvalComparison(baseline, candidate)
 	if err == nil || !strings.Contains(err.Error(), "reanswer_build provenance is missing benchmark_revision") {
 		t.Fatalf("reanswer build provenance error = %v", err)
+	}
+}
+
+func TestValidateLongMemEvalComparisonRequiresSharedJudgeLedger(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name      string
+		mutate    func(map[string]any)
+		wantError string
+	}{
+		{
+			name: "different ledger",
+			mutate: func(metadata map[string]any) {
+				metadata["judge_cache_ledger_id"] = "different-ledger"
+			},
+			wantError: "judge_cache_ledger_id",
+		},
+		{
+			name: "ephemeral cache",
+			mutate: func(metadata map[string]any) {
+				metadata["judge_cache_shared"] = false
+			},
+			wantError: "judge_cache_shared",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			baseline := &runResult{Metadata: testLongMemEvalComparisonMetadata("upstream-main")}
+			candidate := &runResult{Metadata: testLongMemEvalComparisonMetadata("candidate-2196")}
+			test.mutate(candidate.Metadata)
+			err := validateLongMemEvalComparison(baseline, candidate)
+			if err == nil || !strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf("shared judge ledger error = %v, want %q", err, test.wantError)
+			}
+		})
+	}
+
+	baseline := &runResult{Metadata: testLongMemEvalComparisonMetadata("upstream-main")}
+	candidate := &runResult{Metadata: testLongMemEvalComparisonMetadata("candidate-2196")}
+	baseline.Metadata["judge_cache_shared"] = false
+	candidate.Metadata["judge_cache_shared"] = false
+	err := validateLongMemEvalComparison(baseline, candidate)
+	if err == nil || !strings.Contains(err.Error(), "requires a shared judge cache") {
+		t.Fatalf("unshared judge cache error = %v", err)
 	}
 }
 

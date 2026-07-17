@@ -208,6 +208,7 @@ func validateLongMemEvalComparison(baseline, candidate *runResult) error {
 		"answer_prompt_version",
 		"answer_generation",
 		"judge_prompt_version",
+		"judge_protocol_version",
 		"judge_generation",
 	}
 	for _, key := range required {
@@ -263,6 +264,24 @@ func validateLongMemEvalComparison(baseline, candidate *runResult) error {
 	}
 	if longMemEvalMetadataPresent(baseline.Metadata, "judge_runs") ||
 		longMemEvalMetadataPresent(candidate.Metadata, "judge_runs") {
+		for _, key := range []string{
+			"judge_cache_format_version",
+			"judge_cache_shared",
+			"judge_cache_ledger_id",
+		} {
+			if err := compareLongMemEvalMetadataValue(
+				baseline.Metadata,
+				candidate.Metadata,
+				key,
+				true,
+			); err != nil {
+				return err
+			}
+		}
+		baselineShared, ok := baseline.Metadata["judge_cache_shared"].(bool)
+		if !ok || !baselineShared {
+			return errors.New("strict LongMemEval judged comparison requires a shared judge cache")
+		}
 		if err := validateLongMemEvalBuildPair(
 			baseline.Metadata,
 			candidate.Metadata,

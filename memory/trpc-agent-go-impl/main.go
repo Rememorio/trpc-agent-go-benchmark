@@ -232,6 +232,11 @@ var (
 		1,
 		"Odd number of independent LongMemEval judge votes",
 	)
+	flagLMEJudgeCache = flag.String(
+		"lme-judge-cache",
+		"",
+		"Shared content-addressed LongMemEval judge cache file",
+	)
 	flagLoCoMoReuseMemories = flag.Bool(
 		"locomo-reuse-memories",
 		false,

@@ -310,6 +310,7 @@ LME_AGENT_PROFILE=upstream \
   -dataset-format longmemeval \
   -lme-judge-results ../results/lme-upstream/results.json \
   -lme-judge-runs 3 \
+  -lme-judge-cache ../results/lme-judge-cache.json \
   -output ../results/lme-upstream
 
 # Regenerate only the answers from saved retrieval hits after changing the
@@ -322,6 +323,7 @@ LME_AGENT_PROFILE=upstream \
   -dataset-format longmemeval \
   -lme-judge-results ../results/lme-upstream/reanswered_results.json \
   -lme-judge-runs 3 \
+  -lme-judge-cache ../results/lme-judge-cache.json \
   -output ../results/lme-upstream
 
 # Re-run pgvector retrieval and answers against the exact persisted memories
@@ -371,9 +373,13 @@ go run . \
 
 The judge command checkpoints `judged_results.json` after each case. An odd
 `-lme-judge-runs` value greater than one records every independent vote and
-uses a strict majority. When resuming from that file with the same judge model
-and run count, it keeps validated verdicts and retries only missing or invalid
-ones. Analysis treats a valid
+uses a strict majority. `-lme-judge-cache` supplies a shared, content-addressed
+verdict ledger. The key covers the exact judge prompt, model, variant,
+generation settings, protocol version, and vote count, so identical answers
+across backends or result files receive the same verdict. Cache reuse is
+recorded per result and does not double-count judge tokens. When resuming from
+that file with the same keyed judge contract, it keeps validated verdicts and
+retries only missing or invalid ones. Analysis treats a valid
 semantic-judge result as the primary correctness signal and falls back to exact
 match when no judge result is available. It writes `analysis.md` and
 `bad_cases.tsv`, including raw pipeline stages, evidence status, backend
@@ -382,7 +388,9 @@ rule and rejects runs whose dataset, selection, replay protocol, retrieval
 depth, answer model, embedding model, prompt versions, or judge configuration
 differ. It writes `comparison.md` and `comparison.tsv`, compares upstream and
 candidate pgvector quality and cost, and presents Mem0 from the upstream run as
-a frozen third arm.
+a frozen third arm. Pass the same persistent judge-cache file to every formal
+arm; judged comparison verifies its stable ledger ID and rejects results from
+different or ephemeral caches.
 When normalized questions, references, and answers are identical, comparison
 treats conflicting judge verdicts as unchanged and reports the ignored judge
 drift instead of a model regression.
@@ -479,6 +487,7 @@ LongMemEval-specific options:
 | `-lme-rerank-topn`        | 12      | Maximum memories selected by the reranker    |
 | `-lme-judge-results`     |         | Add semantic judge results to `results.json` |
 | `-lme-judge-runs`        | 1       | Odd number of independent semantic votes     |
+| `-lme-judge-cache`       |         | Shared content-addressed judge verdict cache  |
 | `-lme-analyze-results`   |         | Analyze one saved LongMemEval `results.json` |
 | `-lme-compare-results`   |         | Compare baseline,candidate `results.json`    |
 | `-mem0-host`             | (env)   | Self-hosted mem0 OSS host                    |

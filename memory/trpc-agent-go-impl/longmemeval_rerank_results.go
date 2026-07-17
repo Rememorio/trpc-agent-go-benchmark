@@ -116,14 +116,10 @@ func rerankLongMemEvalResult(
 	result.Metadata["answer_generation"] = currentLongMemEvalAnswerGeneration()
 	result.Metadata["answer_prompt_version"] = lmeAnswerPromptVersion
 	result.Metadata["judge_prompt_version"] = lmeJudgePromptVersion
+	result.Metadata["judge_protocol_version"] = lmeJudgeProtocolVersion
 	result.Metadata["judge_generation"] = currentLongMemEvalJudgeGeneration()
 	result.Metadata["answer_scoring"] = "raw model output; no retrieval-assisted answer post-processing"
-	for _, key := range []string{
-		"judge_model", "judge_model_variant", "judge_build", "judge_runs",
-		"judged_at", "judge_note",
-	} {
-		delete(result.Metadata, key)
-	}
+	clearLongMemEvalJudgeRunMetadata(result.Metadata)
 	for _, cr := range result.Cases {
 		if cr == nil {
 			continue
