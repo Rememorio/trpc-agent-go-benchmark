@@ -1,0 +1,1207 @@
+{
+  "protocol": {
+    "name": "skillcraft-5-family-3-arm-v1",
+    "expectedFamilies": [
+      "cat-facts-collector",
+      "openmeteo-weather",
+      "pokeapi-pokedex",
+      "recipe-cookbook-builder",
+      "world-bank-economic-snapshot"
+    ],
+    "expectedScales": [
+      "e1",
+      "e2",
+      "e3",
+      "m1",
+      "m2",
+      "h1"
+    ],
+    "minimumRuns": 3,
+    "overallQualityTolerancePP": 0.25,
+    "familyQualityTolerancePP": 1,
+    "meaningfulQualityBenefitPP": 0.5,
+    "meaningfulTokenReduction": 0.05
+  },
+  "runs": [
+    {
+      "name": "reflective_glm_full_matrix_701",
+      "rootSeed": 701,
+      "runOrder": [
+        "optimized_evolution",
+        "evolution",
+        "baseline"
+      ],
+      "requestedModel": "glm52",
+      "requestedReviewerModel": "glm52",
+      "evaluationTemperature": 0,
+      "maxToolIterations": 80,
+      "maxTokens": 8192,
+      "arms": {
+        "baseline": {
+          "tasks": 30,
+          "passedTasks": 30,
+          "passRate": 100,
+          "averageQuality": 98.15,
+          "averageAgentTokens": 306475,
+          "averageReviewerTokens": 0,
+          "averageEndToEndTokens": 306475,
+          "averageToolCalls": 21.53,
+          "averageDurationSeconds": 117.16
+        },
+        "evolution": {
+          "tasks": 30,
+          "passedTasks": 29,
+          "passRate": 96.67,
+          "averageQuality": 94.97,
+          "averageAgentTokens": 323850,
+          "averageReviewerTokens": 15421,
+          "averageEndToEndTokens": 339270,
+          "averageToolCalls": 20.87,
+          "averageDurationSeconds": 100.1
+        },
+        "optimized_evolution": {
+          "tasks": 30,
+          "passedTasks": 30,
+          "passRate": 100,
+          "averageQuality": 98.23,
+          "averageAgentTokens": 339541,
+          "averageReviewerTokens": 15859,
+          "averageEndToEndTokens": 355400,
+          "averageToolCalls": 22.17,
+          "averageDurationSeconds": 133.44
+        }
+      },
+      "families": {
+        "cat-facts-collector": {
+          "baseline": {
+            "tasks": 6,
+            "passedTasks": 6,
+            "passRate": 100,
+            "averageQuality": 97.12,
+            "averageAgentTokens": 146152,
+            "averageReviewerTokens": 0,
+            "averageEndToEndTokens": 146152,
+            "averageToolCalls": 17.5,
+            "averageDurationSeconds": 67.06
+          },
+          "evolution": {
+            "tasks": 6,
+            "passedTasks": 6,
+            "passRate": 100,
+            "averageQuality": 97.95,
+            "averageAgentTokens": 265859,
+            "averageReviewerTokens": 14462,
+            "averageEndToEndTokens": 280320,
+            "averageToolCalls": 19.17,
+            "averageDurationSeconds": 82.18
+          },
+          "optimized_evolution": {
+            "tasks": 6,
+            "passedTasks": 6,
+            "passRate": 100,
+            "averageQuality": 97.95,
+            "averageAgentTokens": 154265,
+            "averageReviewerTokens": 14229,
+            "averageEndToEndTokens": 168494,
+            "averageToolCalls": 18.33,
+            "averageDurationSeconds": 94.03
+          }
+        },
+        "openmeteo-weather": {
+          "baseline": {
+            "tasks": 6,
+            "passedTasks": 6,
+            "passRate": 100,
+            "averageQuality": 100,
+            "averageAgentTokens": 301942,
+            "averageReviewerTokens": 0,
+            "averageEndToEndTokens": 301942,
+            "averageToolCalls": 20.83,
+            "averageDurationSeconds": 110.37
+          },
+          "evolution": {
+            "tasks": 6,
+            "passedTasks": 6,
+            "passRate": 100,
+            "averageQuality": 100,
+            "averageAgentTokens": 366378,
+            "averageReviewerTokens": 15054,
+            "averageEndToEndTokens": 381432,
+            "averageToolCalls": 20.67,
+            "averageDurationSeconds": 100.38
+          },
+          "optimized_evolution": {
+            "tasks": 6,
+            "passedTasks": 6,
+            "passRate": 100,
+            "averageQuality": 100,
+            "averageAgentTokens": 377062,
+            "averageReviewerTokens": 15174,
+            "averageEndToEndTokens": 392236,
+            "averageToolCalls": 21.5,
+            "averageDurationSeconds": 107.17
+          }
+        },
+        "pokeapi-pokedex": {
+          "baseline": {
+            "tasks": 6,
+            "passedTasks": 6,
+            "passRate": 100,
+            "averageQuality": 98.55,
+            "averageAgentTokens": 497033,
+            "averageReviewerTokens": 0,
+            "averageEndToEndTokens": 497033,
+            "averageToolCalls": 26.5,
+            "averageDurationSeconds": 176.46
+          },
+          "evolution": {
+            "tasks": 6,
+            "passedTasks": 5,
+            "passRate": 83.33,
+            "averageQuality": 81.8,
+            "averageAgentTokens": 423859,
+            "averageReviewerTokens": 18197,
+            "averageEndToEndTokens": 442056,
+            "averageToolCalls": 23.17,
+            "averageDurationSeconds": 159.23
+          },
+          "optimized_evolution": {
+            "tasks": 6,
+            "passedTasks": 6,
+            "passRate": 100,
+            "averageQuality": 98.08,
+            "averageAgentTokens": 607028,
+            "averageReviewerTokens": 21514,
+            "averageEndToEndTokens": 628542,
+            "averageToolCalls": 29.67,
+            "averageDurationSeconds": 223.75
+          }
+        },
+        "recipe-cookbook-builder": {
+          "baseline": {
+            "tasks": 6,
+            "passedTasks": 6,
+            "passRate": 100,
+            "averageQuality": 95.1,
+            "averageAgentTokens": 288725,
+            "averageReviewerTokens": 0,
+            "averageEndToEndTokens": 288725,
+            "averageToolCalls": 23.17,
+            "averageDurationSeconds": 133.88
+          },
+          "evolution": {
+            "tasks": 6,
+            "passedTasks": 6,
+            "passRate": 100,
+            "averageQuality": 95.1,
+            "averageAgentTokens": 294524,
+            "averageReviewerTokens": 17547,
+            "averageEndToEndTokens": 312071,
+            "averageToolCalls": 23.17,
+            "averageDurationSeconds": 91.76
+          },
+          "optimized_evolution": {
+            "tasks": 6,
+            "passedTasks": 6,
+            "passRate": 100,
+            "averageQuality": 95.1,
+            "averageAgentTokens": 274830,
+            "averageReviewerTokens": 16626,
+            "averageEndToEndTokens": 291456,
+            "averageToolCalls": 22.5,
+            "averageDurationSeconds": 97.47
+          }
+        },
+        "world-bank-economic-snapshot": {
+          "baseline": {
+            "tasks": 6,
+            "passedTasks": 6,
+            "passRate": 100,
+            "averageQuality": 100,
+            "averageAgentTokens": 298522,
+            "averageReviewerTokens": 0,
+            "averageEndToEndTokens": 298522,
+            "averageToolCalls": 19.67,
+            "averageDurationSeconds": 98.01
+          },
+          "evolution": {
+            "tasks": 6,
+            "passedTasks": 6,
+            "passRate": 100,
+            "averageQuality": 100,
+            "averageAgentTokens": 268630,
+            "averageReviewerTokens": 11843,
+            "averageEndToEndTokens": 280473,
+            "averageToolCalls": 18.17,
+            "averageDurationSeconds": 66.96
+          },
+          "optimized_evolution": {
+            "tasks": 6,
+            "passedTasks": 6,
+            "passRate": 100,
+            "averageQuality": 100,
+            "averageAgentTokens": 284522,
+            "averageReviewerTokens": 11751,
+            "averageEndToEndTokens": 296272,
+            "averageToolCalls": 18.83,
+            "averageDurationSeconds": 144.76
+          }
+        }
+      },
+      "evolutionVsBaseline": {
+        "control": "baseline",
+        "candidate": "evolution",
+        "delta": {
+          "passRatePP": -3.33,
+          "qualityPP": -3.18,
+          "agentTokens": 17375,
+          "reviewerTokens": 15421,
+          "endToEndTokens": 32795,
+          "endToEndTokensPercent": 10.7,
+          "toolCalls": -0.66,
+          "durationSeconds": -17.06
+        },
+        "pairs": {
+          "pairs": 30,
+          "passWins": 0,
+          "passTies": 29,
+          "passLosses": 1,
+          "qualityWins": 2,
+          "qualityTies": 26,
+          "qualityLosses": 2
+        }
+      },
+      "optimizedEvolutionVsEvolution": {
+        "control": "evolution",
+        "candidate": "optimized_evolution",
+        "delta": {
+          "passRatePP": 3.33,
+          "qualityPP": 3.26,
+          "agentTokens": 15691,
+          "reviewerTokens": 438,
+          "endToEndTokens": 16130,
+          "endToEndTokensPercent": 4.75,
+          "toolCalls": 1.3,
+          "durationSeconds": 33.34
+        },
+        "pairs": {
+          "pairs": 30,
+          "passWins": 1,
+          "passTies": 29,
+          "passLosses": 0,
+          "qualityWins": 2,
+          "qualityTies": 27,
+          "qualityLosses": 1
+        }
+      }
+    },
+    {
+      "name": "reflective_glm_full_matrix_702",
+      "rootSeed": 702,
+      "runOrder": [
+        "baseline",
+        "evolution",
+        "optimized_evolution"
+      ],
+      "requestedModel": "glm52",
+      "requestedReviewerModel": "glm52",
+      "evaluationTemperature": 0,
+      "maxToolIterations": 80,
+      "maxTokens": 8192,
+      "arms": {
+        "baseline": {
+          "tasks": 30,
+          "passedTasks": 29,
+          "passRate": 96.67,
+          "averageQuality": 94.92,
+          "averageAgentTokens": 335723,
+          "averageReviewerTokens": 0,
+          "averageEndToEndTokens": 335723,
+          "averageToolCalls": 21.8,
+          "averageDurationSeconds": 141.57
+        },
+        "evolution": {
+          "tasks": 30,
+          "passedTasks": 30,
+          "passRate": 100,
+          "averageQuality": 97.93,
+          "averageAgentTokens": 346749,
+          "averageReviewerTokens": 15896,
+          "averageEndToEndTokens": 362645,
+          "averageToolCalls": 21.83,
+          "averageDurationSeconds": 155.16
+        },
+        "optimized_evolution": {
+          "tasks": 30,
+          "passedTasks": 29,
+          "passRate": 96.67,
+          "averageQuality": 94.9,
+          "averageAgentTokens": 352082,
+          "averageReviewerTokens": 16044,
+          "averageEndToEndTokens": 368126,
+          "averageToolCalls": 22.03,
+          "averageDurationSeconds": 136.01
+        }
+      },
+      "families": {
+        "cat-facts-collector": {
+          "baseline": {
+            "tasks": 6,
+            "passedTasks": 5,
+            "passRate": 83.33,
+            "averageQuality": 81.83,
+            "averageAgentTokens": 146555,
+            "averageReviewerTokens": 0,
+            "averageEndToEndTokens": 146555,
+            "averageToolCalls": 17.33,
+            "averageDurationSeconds": 96.38
+          },
+          "evolution": {
+            "tasks": 6,
+            "passedTasks": 6,
+            "passRate": 100,
+            "averageQuality": 97.95,
+            "averageAgentTokens": 221597,
+            "averageReviewerTokens": 14106,
+            "averageEndToEndTokens": 235703,
+            "averageToolCalls": 18.17,
+            "averageDurationSeconds": 95.88
+          },
+          "optimized_evolution": {
+            "tasks": 6,
+            "passedTasks": 6,
+            "passRate": 100,
+            "averageQuality": 97.95,
+            "averageAgentTokens": 293562,
+            "averageReviewerTokens": 14746,
+            "averageEndToEndTokens": 308307,
+            "averageToolCalls": 19.67,
+            "averageDurationSeconds": 105.08
+          }
+        },
+        "openmeteo-weather": {
+          "baseline": {
+            "tasks": 6,
+            "passedTasks": 6,
+            "passRate": 100,
+            "averageQuality": 100,
+            "averageAgentTokens": 356143,
+            "averageReviewerTokens": 0,
+            "averageEndToEndTokens": 356143,
+            "averageToolCalls": 20.33,
+            "averageDurationSeconds": 123.5
+          },
+          "evolution": {
+            "tasks": 6,
+            "passedTasks": 6,
+            "passRate": 100,
+            "averageQuality": 100,
+            "averageAgentTokens": 371665,
+            "averageReviewerTokens": 15285,
+            "averageEndToEndTokens": 386949,
+            "averageToolCalls": 20.67,
+            "averageDurationSeconds": 181.9
+          },
+          "optimized_evolution": {
+            "tasks": 6,
+            "passedTasks": 6,
+            "passRate": 100,
+            "averageQuality": 100,
+            "averageAgentTokens": 390618,
+            "averageReviewerTokens": 15440,
+            "averageEndToEndTokens": 406058,
+            "averageToolCalls": 21.67,
+            "averageDurationSeconds": 112.05
+          }
+        },
+        "pokeapi-pokedex": {
+          "baseline": {
+            "tasks": 6,
+            "passedTasks": 6,
+            "passRate": 100,
+            "averageQuality": 97.67,
+            "averageAgentTokens": 591890,
+            "averageReviewerTokens": 0,
+            "averageEndToEndTokens": 591890,
+            "averageToolCalls": 29,
+            "averageDurationSeconds": 241.4
+          },
+          "evolution": {
+            "tasks": 6,
+            "passedTasks": 6,
+            "passRate": 100,
+            "averageQuality": 96.62,
+            "averageAgentTokens": 518795,
+            "averageReviewerTokens": 20643,
+            "averageEndToEndTokens": 539437,
+            "averageToolCalls": 27.33,
+            "averageDurationSeconds": 234.93
+          },
+          "optimized_evolution": {
+            "tasks": 6,
+            "passedTasks": 5,
+            "passRate": 83.33,
+            "averageQuality": 81.47,
+            "averageAgentTokens": 534856,
+            "averageReviewerTokens": 20563,
+            "averageEndToEndTokens": 555418,
+            "averageToolCalls": 26.5,
+            "averageDurationSeconds": 248.87
+          }
+        },
+        "recipe-cookbook-builder": {
+          "baseline": {
+            "tasks": 6,
+            "passedTasks": 6,
+            "passRate": 100,
+            "averageQuality": 95.1,
+            "averageAgentTokens": 280862,
+            "averageReviewerTokens": 0,
+            "averageEndToEndTokens": 280862,
+            "averageToolCalls": 22.67,
+            "averageDurationSeconds": 133.05
+          },
+          "evolution": {
+            "tasks": 6,
+            "passedTasks": 6,
+            "passRate": 100,
+            "averageQuality": 95.1,
+            "averageAgentTokens": 342980,
+            "averageReviewerTokens": 18631,
+            "averageEndToEndTokens": 361611,
+            "averageToolCalls": 24.5,
+            "averageDurationSeconds": 149.82
+          },
+          "optimized_evolution": {
+            "tasks": 6,
+            "passedTasks": 6,
+            "passRate": 100,
+            "averageQuality": 95.1,
+            "averageAgentTokens": 256273,
+            "averageReviewerTokens": 17660,
+            "averageEndToEndTokens": 273933,
+            "averageToolCalls": 23.33,
+            "averageDurationSeconds": 118.09
+          }
+        },
+        "world-bank-economic-snapshot": {
+          "baseline": {
+            "tasks": 6,
+            "passedTasks": 6,
+            "passRate": 100,
+            "averageQuality": 100,
+            "averageAgentTokens": 303166,
+            "averageReviewerTokens": 0,
+            "averageEndToEndTokens": 303166,
+            "averageToolCalls": 19.67,
+            "averageDurationSeconds": 113.49
+          },
+          "evolution": {
+            "tasks": 6,
+            "passedTasks": 6,
+            "passRate": 100,
+            "averageQuality": 100,
+            "averageAgentTokens": 278708,
+            "averageReviewerTokens": 10814,
+            "averageEndToEndTokens": 289522,
+            "averageToolCalls": 18.5,
+            "averageDurationSeconds": 113.3
+          },
+          "optimized_evolution": {
+            "tasks": 6,
+            "passedTasks": 6,
+            "passRate": 100,
+            "averageQuality": 100,
+            "averageAgentTokens": 285101,
+            "averageReviewerTokens": 11813,
+            "averageEndToEndTokens": 296913,
+            "averageToolCalls": 19,
+            "averageDurationSeconds": 95.96
+          }
+        }
+      },
+      "evolutionVsBaseline": {
+        "control": "baseline",
+        "candidate": "evolution",
+        "delta": {
+          "passRatePP": 3.33,
+          "qualityPP": 3.01,
+          "agentTokens": 11026,
+          "reviewerTokens": 15896,
+          "endToEndTokens": 26922,
+          "endToEndTokensPercent": 8.02,
+          "toolCalls": 0.03,
+          "durationSeconds": 13.59
+        },
+        "pairs": {
+          "pairs": 30,
+          "passWins": 1,
+          "passTies": 29,
+          "passLosses": 0,
+          "qualityWins": 1,
+          "qualityTies": 27,
+          "qualityLosses": 2
+        }
+      },
+      "optimizedEvolutionVsEvolution": {
+        "control": "evolution",
+        "candidate": "optimized_evolution",
+        "delta": {
+          "passRatePP": -3.33,
+          "qualityPP": -3.03,
+          "agentTokens": 5333,
+          "reviewerTokens": 148,
+          "endToEndTokens": 5481,
+          "endToEndTokensPercent": 1.51,
+          "toolCalls": 0.2,
+          "durationSeconds": -19.15
+        },
+        "pairs": {
+          "pairs": 30,
+          "passWins": 0,
+          "passTies": 29,
+          "passLosses": 1,
+          "qualityWins": 2,
+          "qualityTies": 27,
+          "qualityLosses": 1
+        }
+      }
+    },
+    {
+      "name": "reflective_glm_full_matrix_703",
+      "rootSeed": 703,
+      "runOrder": [
+        "optimized_evolution",
+        "evolution",
+        "baseline"
+      ],
+      "requestedModel": "glm52",
+      "requestedReviewerModel": "glm52",
+      "evaluationTemperature": 0,
+      "maxToolIterations": 80,
+      "maxTokens": 8192,
+      "arms": {
+        "baseline": {
+          "tasks": 30,
+          "passedTasks": 29,
+          "passRate": 96.67,
+          "averageQuality": 94.86,
+          "averageAgentTokens": 273524,
+          "averageReviewerTokens": 0,
+          "averageEndToEndTokens": 273524,
+          "averageToolCalls": 20.83,
+          "averageDurationSeconds": 94.07
+        },
+        "evolution": {
+          "tasks": 30,
+          "passedTasks": 29,
+          "passRate": 96.67,
+          "averageQuality": 94.98,
+          "averageAgentTokens": 341265,
+          "averageReviewerTokens": 15732,
+          "averageEndToEndTokens": 356998,
+          "averageToolCalls": 21.67,
+          "averageDurationSeconds": 141.77
+        },
+        "optimized_evolution": {
+          "tasks": 30,
+          "passedTasks": 30,
+          "passRate": 100,
+          "averageQuality": 98.51,
+          "averageAgentTokens": 349312,
+          "averageReviewerTokens": 14266,
+          "averageEndToEndTokens": 363578,
+          "averageToolCalls": 21.87,
+          "averageDurationSeconds": 115.87
+        }
+      },
+      "families": {
+        "cat-facts-collector": {
+          "baseline": {
+            "tasks": 6,
+            "passedTasks": 6,
+            "passRate": 100,
+            "averageQuality": 97.95,
+            "averageAgentTokens": 168090,
+            "averageReviewerTokens": 0,
+            "averageEndToEndTokens": 168090,
+            "averageToolCalls": 18,
+            "averageDurationSeconds": 76.53
+          },
+          "evolution": {
+            "tasks": 6,
+            "passedTasks": 6,
+            "passRate": 100,
+            "averageQuality": 97.95,
+            "averageAgentTokens": 229008,
+            "averageReviewerTokens": 13582,
+            "averageEndToEndTokens": 242589,
+            "averageToolCalls": 18.17,
+            "averageDurationSeconds": 101.33
+          },
+          "optimized_evolution": {
+            "tasks": 6,
+            "passedTasks": 6,
+            "passRate": 100,
+            "averageQuality": 97.95,
+            "averageAgentTokens": 153465,
+            "averageReviewerTokens": 13719,
+            "averageEndToEndTokens": 167184,
+            "averageToolCalls": 18.33,
+            "averageDurationSeconds": 80.51
+          }
+        },
+        "openmeteo-weather": {
+          "baseline": {
+            "tasks": 6,
+            "passedTasks": 6,
+            "passRate": 100,
+            "averageQuality": 100,
+            "averageAgentTokens": 355201,
+            "averageReviewerTokens": 0,
+            "averageEndToEndTokens": 355201,
+            "averageToolCalls": 20.5,
+            "averageDurationSeconds": 97.92
+          },
+          "evolution": {
+            "tasks": 6,
+            "passedTasks": 6,
+            "passRate": 100,
+            "averageQuality": 100,
+            "averageAgentTokens": 344433,
+            "averageReviewerTokens": 14867,
+            "averageEndToEndTokens": 359299,
+            "averageToolCalls": 20.83,
+            "averageDurationSeconds": 153.2
+          },
+          "optimized_evolution": {
+            "tasks": 6,
+            "passedTasks": 6,
+            "passRate": 100,
+            "averageQuality": 100,
+            "averageAgentTokens": 373127,
+            "averageReviewerTokens": 15120,
+            "averageEndToEndTokens": 388247,
+            "averageToolCalls": 20.83,
+            "averageDurationSeconds": 113.06
+          }
+        },
+        "pokeapi-pokedex": {
+          "baseline": {
+            "tasks": 6,
+            "passedTasks": 5,
+            "passRate": 83.33,
+            "averageQuality": 81.27,
+            "averageAgentTokens": 451910,
+            "averageReviewerTokens": 0,
+            "averageEndToEndTokens": 451910,
+            "averageToolCalls": 24.17,
+            "averageDurationSeconds": 160.55
+          },
+          "evolution": {
+            "tasks": 6,
+            "passedTasks": 5,
+            "passRate": 83.33,
+            "averageQuality": 81.83,
+            "averageAgentTokens": 482842,
+            "averageReviewerTokens": 20626,
+            "averageEndToEndTokens": 503468,
+            "averageToolCalls": 26.5,
+            "averageDurationSeconds": 257.64
+          },
+          "optimized_evolution": {
+            "tasks": 6,
+            "passedTasks": 6,
+            "passRate": 100,
+            "averageQuality": 98.55,
+            "averageAgentTokens": 610521,
+            "averageReviewerTokens": 17481,
+            "averageEndToEndTokens": 628002,
+            "averageToolCalls": 28.67,
+            "averageDurationSeconds": 174.06
+          }
+        },
+        "recipe-cookbook-builder": {
+          "baseline": {
+            "tasks": 6,
+            "passedTasks": 6,
+            "passRate": 100,
+            "averageQuality": 95.1,
+            "averageAgentTokens": 116855,
+            "averageReviewerTokens": 0,
+            "averageEndToEndTokens": 116855,
+            "averageToolCalls": 22.67,
+            "averageDurationSeconds": 60.2
+          },
+          "evolution": {
+            "tasks": 6,
+            "passedTasks": 6,
+            "passRate": 100,
+            "averageQuality": 95.1,
+            "averageAgentTokens": 381158,
+            "averageReviewerTokens": 17905,
+            "averageEndToEndTokens": 399063,
+            "averageToolCalls": 24.5,
+            "averageDurationSeconds": 119.91
+          },
+          "optimized_evolution": {
+            "tasks": 6,
+            "passedTasks": 6,
+            "passRate": 100,
+            "averageQuality": 96.05,
+            "averageAgentTokens": 336173,
+            "averageReviewerTokens": 12935,
+            "averageEndToEndTokens": 349108,
+            "averageToolCalls": 23.5,
+            "averageDurationSeconds": 126.04
+          }
+        },
+        "world-bank-economic-snapshot": {
+          "baseline": {
+            "tasks": 6,
+            "passedTasks": 6,
+            "passRate": 100,
+            "averageQuality": 100,
+            "averageAgentTokens": 275562,
+            "averageReviewerTokens": 0,
+            "averageEndToEndTokens": 275562,
+            "averageToolCalls": 18.83,
+            "averageDurationSeconds": 75.17
+          },
+          "evolution": {
+            "tasks": 6,
+            "passedTasks": 6,
+            "passRate": 100,
+            "averageQuality": 100,
+            "averageAgentTokens": 268887,
+            "averageReviewerTokens": 11682,
+            "averageEndToEndTokens": 280569,
+            "averageToolCalls": 18.33,
+            "averageDurationSeconds": 76.76
+          },
+          "optimized_evolution": {
+            "tasks": 6,
+            "passedTasks": 6,
+            "passRate": 100,
+            "averageQuality": 100,
+            "averageAgentTokens": 273274,
+            "averageReviewerTokens": 12076,
+            "averageEndToEndTokens": 285351,
+            "averageToolCalls": 18,
+            "averageDurationSeconds": 85.69
+          }
+        }
+      },
+      "evolutionVsBaseline": {
+        "control": "baseline",
+        "candidate": "evolution",
+        "delta": {
+          "passRatePP": 0,
+          "qualityPP": 0.12,
+          "agentTokens": 67741,
+          "reviewerTokens": 15732,
+          "endToEndTokens": 83474,
+          "endToEndTokensPercent": 30.52,
+          "toolCalls": 0.84,
+          "durationSeconds": 47.7
+        },
+        "pairs": {
+          "pairs": 30,
+          "passWins": 1,
+          "passTies": 28,
+          "passLosses": 1,
+          "qualityWins": 2,
+          "qualityTies": 27,
+          "qualityLosses": 1
+        }
+      },
+      "optimizedEvolutionVsEvolution": {
+        "control": "evolution",
+        "candidate": "optimized_evolution",
+        "delta": {
+          "passRatePP": 3.33,
+          "qualityPP": 3.53,
+          "agentTokens": 8047,
+          "reviewerTokens": -1466,
+          "endToEndTokens": 6580,
+          "endToEndTokensPercent": 1.84,
+          "toolCalls": 0.2,
+          "durationSeconds": -25.9
+        },
+        "pairs": {
+          "pairs": 30,
+          "passWins": 1,
+          "passTies": 29,
+          "passLosses": 0,
+          "qualityWins": 3,
+          "qualityTies": 26,
+          "qualityLosses": 1
+        }
+      }
+    }
+  ],
+  "coverage": {
+    "runs": 3,
+    "tasksPerArm": 30,
+    "totalArmCases": 270,
+    "families": [
+      "cat-facts-collector",
+      "openmeteo-weather",
+      "pokeapi-pokedex",
+      "recipe-cookbook-builder",
+      "world-bank-economic-snapshot"
+    ],
+    "scales": [
+      "e1",
+      "e2",
+      "e3",
+      "m1",
+      "m2",
+      "h1"
+    ]
+  },
+  "arms": {
+    "baseline": {
+      "tasks": 90,
+      "passedTasks": 88,
+      "passRate": 97.78,
+      "averageQuality": 95.98,
+      "averageAgentTokens": 305240,
+      "averageReviewerTokens": 0,
+      "averageEndToEndTokens": 305240,
+      "averageToolCalls": 21.39,
+      "averageDurationSeconds": 117.6
+    },
+    "evolution": {
+      "tasks": 90,
+      "passedTasks": 88,
+      "passRate": 97.78,
+      "averageQuality": 95.96,
+      "averageAgentTokens": 337288,
+      "averageReviewerTokens": 15683,
+      "averageEndToEndTokens": 352971,
+      "averageToolCalls": 21.46,
+      "averageDurationSeconds": 132.34
+    },
+    "optimized_evolution": {
+      "tasks": 90,
+      "passedTasks": 89,
+      "passRate": 98.89,
+      "averageQuality": 97.21,
+      "averageAgentTokens": 346978,
+      "averageReviewerTokens": 15390,
+      "averageEndToEndTokens": 362368,
+      "averageToolCalls": 22.02,
+      "averageDurationSeconds": 128.44
+    }
+  },
+  "families": {
+    "cat-facts-collector": {
+      "baseline": {
+        "tasks": 18,
+        "passedTasks": 17,
+        "passRate": 94.44,
+        "averageQuality": 92.3,
+        "averageAgentTokens": 153599,
+        "averageReviewerTokens": 0,
+        "averageEndToEndTokens": 153599,
+        "averageToolCalls": 17.61,
+        "averageDurationSeconds": 79.99
+      },
+      "evolution": {
+        "tasks": 18,
+        "passedTasks": 18,
+        "passRate": 100,
+        "averageQuality": 97.95,
+        "averageAgentTokens": 238821,
+        "averageReviewerTokens": 14050,
+        "averageEndToEndTokens": 252871,
+        "averageToolCalls": 18.5,
+        "averageDurationSeconds": 93.13
+      },
+      "optimized_evolution": {
+        "tasks": 18,
+        "passedTasks": 18,
+        "passRate": 100,
+        "averageQuality": 97.95,
+        "averageAgentTokens": 200431,
+        "averageReviewerTokens": 14231,
+        "averageEndToEndTokens": 214662,
+        "averageToolCalls": 18.78,
+        "averageDurationSeconds": 93.21
+      }
+    },
+    "openmeteo-weather": {
+      "baseline": {
+        "tasks": 18,
+        "passedTasks": 18,
+        "passRate": 100,
+        "averageQuality": 100,
+        "averageAgentTokens": 337762,
+        "averageReviewerTokens": 0,
+        "averageEndToEndTokens": 337762,
+        "averageToolCalls": 20.56,
+        "averageDurationSeconds": 110.6
+      },
+      "evolution": {
+        "tasks": 18,
+        "passedTasks": 18,
+        "passRate": 100,
+        "averageQuality": 100,
+        "averageAgentTokens": 360825,
+        "averageReviewerTokens": 15069,
+        "averageEndToEndTokens": 375893,
+        "averageToolCalls": 20.72,
+        "averageDurationSeconds": 145.16
+      },
+      "optimized_evolution": {
+        "tasks": 18,
+        "passedTasks": 18,
+        "passRate": 100,
+        "averageQuality": 100,
+        "averageAgentTokens": 380269,
+        "averageReviewerTokens": 15245,
+        "averageEndToEndTokens": 395514,
+        "averageToolCalls": 21.33,
+        "averageDurationSeconds": 110.76
+      }
+    },
+    "pokeapi-pokedex": {
+      "baseline": {
+        "tasks": 18,
+        "passedTasks": 17,
+        "passRate": 94.44,
+        "averageQuality": 92.49,
+        "averageAgentTokens": 513611,
+        "averageReviewerTokens": 0,
+        "averageEndToEndTokens": 513611,
+        "averageToolCalls": 26.56,
+        "averageDurationSeconds": 192.8
+      },
+      "evolution": {
+        "tasks": 18,
+        "passedTasks": 16,
+        "passRate": 88.89,
+        "averageQuality": 86.75,
+        "averageAgentTokens": 475165,
+        "averageReviewerTokens": 19822,
+        "averageEndToEndTokens": 494987,
+        "averageToolCalls": 25.67,
+        "averageDurationSeconds": 217.27
+      },
+      "optimized_evolution": {
+        "tasks": 18,
+        "passedTasks": 17,
+        "passRate": 94.44,
+        "averageQuality": 92.7,
+        "averageAgentTokens": 584135,
+        "averageReviewerTokens": 19852,
+        "averageEndToEndTokens": 603987,
+        "averageToolCalls": 28.28,
+        "averageDurationSeconds": 215.56
+      }
+    },
+    "recipe-cookbook-builder": {
+      "baseline": {
+        "tasks": 18,
+        "passedTasks": 18,
+        "passRate": 100,
+        "averageQuality": 95.1,
+        "averageAgentTokens": 228814,
+        "averageReviewerTokens": 0,
+        "averageEndToEndTokens": 228814,
+        "averageToolCalls": 22.83,
+        "averageDurationSeconds": 109.04
+      },
+      "evolution": {
+        "tasks": 18,
+        "passedTasks": 18,
+        "passRate": 100,
+        "averageQuality": 95.1,
+        "averageAgentTokens": 339554,
+        "averageReviewerTokens": 18028,
+        "averageEndToEndTokens": 357582,
+        "averageToolCalls": 24.06,
+        "averageDurationSeconds": 120.49
+      },
+      "optimized_evolution": {
+        "tasks": 18,
+        "passedTasks": 18,
+        "passRate": 100,
+        "averageQuality": 95.42,
+        "averageAgentTokens": 289092,
+        "averageReviewerTokens": 15740,
+        "averageEndToEndTokens": 304832,
+        "averageToolCalls": 23.11,
+        "averageDurationSeconds": 113.87
+      }
+    },
+    "world-bank-economic-snapshot": {
+      "baseline": {
+        "tasks": 18,
+        "passedTasks": 18,
+        "passRate": 100,
+        "averageQuality": 100,
+        "averageAgentTokens": 292417,
+        "averageReviewerTokens": 0,
+        "averageEndToEndTokens": 292417,
+        "averageToolCalls": 19.39,
+        "averageDurationSeconds": 95.56
+      },
+      "evolution": {
+        "tasks": 18,
+        "passedTasks": 18,
+        "passRate": 100,
+        "averageQuality": 100,
+        "averageAgentTokens": 272075,
+        "averageReviewerTokens": 11446,
+        "averageEndToEndTokens": 283521,
+        "averageToolCalls": 18.33,
+        "averageDurationSeconds": 85.67
+      },
+      "optimized_evolution": {
+        "tasks": 18,
+        "passedTasks": 18,
+        "passRate": 100,
+        "averageQuality": 100,
+        "averageAgentTokens": 280965,
+        "averageReviewerTokens": 11880,
+        "averageEndToEndTokens": 292845,
+        "averageToolCalls": 18.61,
+        "averageDurationSeconds": 108.8
+      }
+    }
+  },
+  "evolutionVsBaseline": {
+    "control": "baseline",
+    "candidate": "evolution",
+    "delta": {
+      "passRatePP": 0,
+      "qualityPP": -0.02,
+      "agentTokens": 32048,
+      "reviewerTokens": 15683,
+      "endToEndTokens": 47731,
+      "endToEndTokensPercent": 15.64,
+      "toolCalls": 0.07,
+      "durationSeconds": 14.74
+    },
+    "pairs": {
+      "pairs": 90,
+      "passWins": 2,
+      "passTies": 86,
+      "passLosses": 2,
+      "qualityWins": 5,
+      "qualityTies": 80,
+      "qualityLosses": 5
+    }
+  },
+  "optimizedEvolutionVsEvolution": {
+    "control": "evolution",
+    "candidate": "optimized_evolution",
+    "delta": {
+      "passRatePP": 1.11,
+      "qualityPP": 1.25,
+      "agentTokens": 9690,
+      "reviewerTokens": -293,
+      "endToEndTokens": 9397,
+      "endToEndTokensPercent": 2.66,
+      "toolCalls": 0.56,
+      "durationSeconds": -3.9
+    },
+    "pairs": {
+      "pairs": 90,
+      "passWins": 2,
+      "passTies": 87,
+      "passLosses": 1,
+      "qualityWins": 7,
+      "qualityTies": 80,
+      "qualityLosses": 3
+    }
+  },
+  "failures": [
+    {
+      "rootSeed": 701,
+      "arm": "evolution",
+      "taskId": "pokeapi-pokedex/m2",
+      "quality": 0,
+      "agentTokens": 256925,
+      "reviewerTokens": 17478,
+      "endToEndTokens": 274403,
+      "toolCalls": 20
+    },
+    {
+      "rootSeed": 702,
+      "arm": "baseline",
+      "taskId": "cat-facts-collector/h1",
+      "quality": 0,
+      "agentTokens": 389980,
+      "reviewerTokens": 0,
+      "endToEndTokens": 389980,
+      "toolCalls": 31
+    },
+    {
+      "rootSeed": 702,
+      "arm": "optimized_evolution",
+      "taskId": "pokeapi-pokedex/e2",
+      "quality": 0,
+      "agentTokens": 212262,
+      "reviewerTokens": 14812,
+      "endToEndTokens": 227074,
+      "toolCalls": 16
+    },
+    {
+      "rootSeed": 703,
+      "arm": "baseline",
+      "taskId": "pokeapi-pokedex/h1",
+      "quality": 0,
+      "agentTokens": 272694,
+      "reviewerTokens": 0,
+      "endToEndTokens": 272694,
+      "toolCalls": 20
+    },
+    {
+      "rootSeed": 703,
+      "arm": "evolution",
+      "taskId": "pokeapi-pokedex/m2",
+      "quality": 0,
+      "agentTokens": 417922,
+      "reviewerTokens": 26526,
+      "endToEndTokens": 444448,
+      "toolCalls": 33
+    }
+  ],
+  "gates": [
+    {
+      "name": "coverage",
+      "passed": true,
+      "details": "3 run(s), minimum 3; each arm has 30 expected tasks per run"
+    },
+    {
+      "name": "overall-pass-non-regression",
+      "passed": true,
+      "details": "optimized 98.89% vs evolution 97.78%"
+    },
+    {
+      "name": "overall-quality-non-regression",
+      "passed": true,
+      "details": "optimized 97.21 vs evolution 95.96; tolerance 0.25pp"
+    },
+    {
+      "name": "family-pass-non-regression",
+      "passed": true,
+      "details": "all expected families passed"
+    },
+    {
+      "name": "family-quality-non-regression",
+      "passed": true,
+      "details": "all expected families passed"
+    },
+    {
+      "name": "meaningful-benefit",
+      "passed": true,
+      "details": "quality delta 1.25pp (need +0.50pp) or end-to-end token delta 2.66% (need -5.00%)"
+    }
+  ],
+  "promotionEligible": true,
+  "promotionReason": "all preregistered coverage, non-regression, and meaningful-benefit gates passed"
+}

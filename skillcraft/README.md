@@ -35,19 +35,24 @@ matrix in
 three root seeds, all six scales, and three arms: 90 tasks per arm and 270
 arm-cases total.
 
-- Baseline: 97.78% pass rate, 96.06% quality.
-- Evolution: 100% pass rate, 98.24% quality, and 9.36% more end-to-end tokens
-  than baseline.
-- Optimized evolution: 100% pass rate, 98.16% quality, and 5.79% more
-  end-to-end tokens than evolution.
+- Baseline: 97.78% pass rate, 95.98% quality.
+- Evolution: 97.78% pass rate, 95.96% quality.
+- Optimized evolution: 98.89% pass rate, 97.21% quality.
 
-The search and frozen stages used the self-deployed GLM-5.2 route (`glm52`),
-while this operational matrix requested GPT-5.2. The optimized overlay passed
-safety and non-regression limits but failed the fixed meaningful-benefit gate
-on GPT-5.2. This is a cross-model transfer result, not a same-model GLM-5.2
-runtime verdict. The same evidence package records both accepted frozen
-candidates and an important rejection: a Recipe candidate saved tokens on
-validation but lost a deliverable on untouched holdout.
+Search, review, and task execution all requested the self-deployed GLM-5.2
+route (`glm52`). The global aggregate passed the fixed mechanical gate, but
+promotion is decided per changed family because no-overlay task failures
+dominated the global quality delta. Pooling the two changed families gives a
+causal 6.77% end-to-end token reduction. Recipe is the stronger attributable
+result: it passed all 18 tasks in both arms, improved quality by 0.32 percentage
+points, and reduced end-to-end tokens by 14.75%, with a reduction in all three
+root seeds. World Bank kept pass and quality unchanged but cost 3.29% more and
+was rejected.
+
+The evidence package also retains an earlier negative GPT-5.2 cross-model
+portability replay and an important holdout rejection: a separate Recipe
+candidate saved tokens on validation but lost a deliverable on untouched
+holdout.
 
 The older **v19** and **v20** batches below remain the source of historical
 online-evolution behavior. They use a different model, task subset, budget, and

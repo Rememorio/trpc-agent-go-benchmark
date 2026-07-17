@@ -41,6 +41,14 @@ func TestAggregatePassesCompleteImprovingMatrix(t *testing.T) {
 	require.Equal(t, 80, evidence.Runs[0].MaxToolIterations)
 	require.InDelta(t, 0, *evidence.Runs[0].EvaluationTemperature, 0)
 	require.Equal(t, 30, evidence.Runs[0].Arms[armOptimized].Tasks)
+	require.Equal(t, 6,
+		evidence.Runs[0].Families["recipe-cookbook-builder"][armOptimized].Tasks,
+	)
+	require.InDelta(t, 800,
+		evidence.Runs[0].Families["recipe-cookbook-builder"][armOptimized].AverageEndToEndTokens,
+		0.001,
+	)
+	require.Empty(t, evidence.Failures)
 	require.InDelta(t, -11.11,
 		evidence.Runs[0].OptimizedEvolutionVsEvolution.Delta.EndToEndTokensPC,
 		0.001,
@@ -70,6 +78,30 @@ func TestAggregateRejectsFamilyPassRegression(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, evidence.PromotionEligible)
 	require.False(t, gateByName(t, evidence.Gates, "family-pass-non-regression").Passed)
+	require.Equal(t, []CaseFailure{{
+		RootSeed:       10,
+		Arm:            armOptimized,
+		TaskID:         "cat-facts-collector/e1",
+		Quality:        96,
+		AgentTokens:    700,
+		ReviewerTokens: 100,
+		EndToEndTokens: 800,
+		ToolCalls:      2,
+	}}, evidence.Failures)
+}
+
+func TestAggregateRoundsTokenAveragesToWholeTokens(t *testing.T) {
+	protocol := DefaultProtocol()
+	input := completeInput(protocol, 10)
+	input.OptimizedEvolution.Cases[0].TotalTokens = 720
+	input.OptimizedEvolution.Cases[0].EndToEndTotalTokens = 820
+	path := filepath.Join(t.TempDir(), "results.json")
+	writeInput(t, path, input)
+
+	evidence, err := Aggregate([]string{path}, protocol)
+	require.NoError(t, err)
+	require.Equal(t, float64(701), evidence.Arms[armOptimized].AverageAgentTokens)
+	require.Equal(t, float64(801), evidence.Arms[armOptimized].AverageEndToEndTokens)
 }
 
 func TestAggregateRejectsUnpairedTaskSeed(t *testing.T) {

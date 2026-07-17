@@ -16,26 +16,32 @@ an untouched holdout before any candidate can be promoted.
 
 The latest experiment uses the same five SkillCraft families and six scales in
 three paired arms: `baseline`, `evolution`, and `optimized_evolution`. Three
-root seeds produce 90 tasks per arm and 270 arm-cases in total.
+fresh root seeds produce 90 tasks per arm and 270 arm-cases in total. Search,
+review, and task execution all requested the self-deployed GLM-5.2 route
+(`glm52`).
 
 | Metric | Baseline | Evolution | Optimized evolution |
 | --- | ---: | ---: | ---: |
-| Pass rate | 97.78% | **100.00%** | **100.00%** |
-| Official quality | 96.06% | **98.24%** | 98.16% |
-| End-to-end tokens / task | **311,870** | 341,055 | 360,816 |
+| Pass rate | 97.78% | 97.78% | **98.89%** |
+| Official quality | 95.98% | 95.96% | **97.21%** |
+| End-to-end tokens / task | **305,240** | 352,971 | 362,368 |
 
-Online evolution rescued two baseline failures and improved quality, at a
-9.36% end-to-end token cost. The optimized overlay preserved pass rate but did
-not improve quality and cost another 5.79%, so it failed the fixed
-meaningful-benefit gate on the tested runtime. Search and frozen confirmation
-used the self-deployed GLM-5.2 route (`glm52`), while this operational matrix
-requested GPT-5.2. The result is therefore a negative cross-model transfer
-result, not a same-model GLM-5.2 runtime verdict or a failure of holdout gating:
-the offline process also caught and rejected a Recipe candidate that regressed
-badly outside validation.
+The global optimized arm passed the fixed aggregate gate, but that verdict is
+not sufficient to promote every overlay: most of its quality delta came from
+Pokémon completion variance even though Pokémon received no optimized skill.
+Pooling the two changed families gives a causal `6.77%` end-to-end token
+reduction. The individual candidate result is clearer still: Recipe passed all
+18 tasks in both arms, improved quality by 0.32 percentage points, and reduced
+end-to-end tokens by 14.75%, with a token reduction in every root seed. World
+Bank also kept pass and quality unchanged, but cost 3.29% more and was rejected.
+
+An earlier GPT-5.2 runtime matrix is retained as a negative cross-model
+portability test. It is not pooled with the same-model result. The offline
+process also caught and rejected a separate Recipe candidate that saved tokens
+on validation but regressed badly on untouched holdout.
 
 The exact per-run, per-family, paired, and gate results are in
-[`gepa_reflective_optimization/full_matrix_evidence.json`](gepa_reflective_optimization/full_matrix_evidence.json).
+[`gepa_reflective_optimization/glm_full_matrix_evidence.json`](gepa_reflective_optimization/glm_full_matrix_evidence.json).
 
 ## Evidence Layout
 
@@ -51,7 +57,8 @@ results/
 |   |-- evidence.json                 # accepted Recipe repair
 |   |-- recipe_candidate.json
 |   |-- model_routing_evidence.json   # proves gpt-5.2 != glm52 routing
-|   |-- full_matrix_evidence.json     # 3 x 5 x 6 x 3 aggregate
+|   |-- glm_full_matrix_evidence.json # same-model GLM-5.2 aggregate
+|   |-- full_matrix_evidence.json     # earlier GPT-5.2 aggregate
 |   +-- full_matrix/
 |       |-- generic_candidate_frozen_evidence.json
 |       |-- worldbank_candidate_frozen_evidence_v1.json
@@ -59,6 +66,9 @@ results/
 |-- reflective_full_matrix_601/       # canonical result, raw runs ignored
 |-- reflective_full_matrix_602/
 |-- reflective_full_matrix_603/
+|-- reflective_glm_full_matrix_701/
+|-- reflective_glm_full_matrix_702/
+|-- reflective_glm_full_matrix_703/
 |-- tools/
 |-- full_compare_run1/                # older online-evolution batches
 |-- full_compare_run2/

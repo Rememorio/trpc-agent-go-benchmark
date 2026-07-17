@@ -2,77 +2,86 @@
 
 ## 1. 引言
 
-本报告评估 `trpc-agent-go/evolution/optimization` 的纯 Go 反思式优化器，
-并把两个问题明确分开：
+本报告评估 `trpc-agent-go/evolution/optimization` 中的纯 Go 反思式优化器，
+并把三个容易混淆的问题分开：
 
-1. 离线 reflection 能否找到更好的 skill，并通过 frozen holdout 拒绝不安全
-   候选；
-2. 已通过 frozen confirmation 的 skill 放回完整异步 evolution loop 后，是否仍然
-   有用。
+1. 离线 reflection 能否发现更好的 skill，并通过 frozen holdout 拒绝不安全候选；
+2. 已接受的 skill 放回完整异步 evolution loop，而且继续使用生成它的同一模型时，
+   是否仍然有用；
+3. 即使某个具体 candidate 不值得部署，框架 API 本身是否仍是合理的基础能力。
 
-两个问题的答案并不相同：
+最终同模型 GLM-5.2 回放给出了有边界的正面结论：
 
-- **Optimizer 作为有门禁的离线搜索与修复原语是有用的。** 它修复了 reviewer
-  产出的 Recipe skill，找到 World Bank 效率候选，也拒绝了一个 validation 上更省
-  token、但在 untouched holdout 上失败的 Recipe 候选。
-- **当前 optimized overlay 不具备在本次 GPT-5.2 运行时晋升的资格。** 在预注册的
-  5 族、3 seed、3 arm 全量回放中，optimized evolution 保持了通过率，并满足质量
-  容忍门槛；但相对 evolution 的质量变化为 `-0.08pp`，端到端 tokens 增加 `5.79%`，
-  没有达到“有意义收益”要求。这还不是同模型 GLM-5.2 运行时结论。
+- **Recipe candidate 有用，可以在本次运行时晋升。** 18 个配对任务全部通过，
+  官方质量提升 `0.32pp`，端到端 tokens 降低 `14.75%`；三个 root seed 的 token
+  方向全部为正收益。
+- **World Bank candidate 不应晋升。** 两个 arm 的通过率和质量都保持 100%，但端到端
+  tokens 增加 `3.29%`，且三个 root seed 都变贵。
+- **全局 gate 不足以完成因果归因。** 预注册门禁在机械意义上通过了，但 `+1.25pp`
+  质量收益主要来自没有使用离线 overlay 的 Pokémon 偶发收尾失败。只聚合真正发生变化
+  的两个任务族时，overlay 的端到端 tokens 降低 `6.77%`、质量提升 `0.16pp`；进一步
+  分解可见收益由 Recipe 产生，World Bank 是负贡献。
+- **Optimizer API 已具备评审条件。** 它找到了稳定收益，拒绝了一个 validation winner
+  的安全回退，也允许一个 frozen winner 在完整在线证据无法复现收益时被再次拒绝。
 
-**表 1：完整运行时回放（3 轮，每个 arm n = 90）**
+**表 1：同模型 GLM-5.2 完整运行时回放（3 轮，每个 arm n = 90）**
 
 | 指标 | Baseline | Evolution | Optimized evolution |
 | --- | ---: | ---: | ---: |
-| 通过率 | 97.78% | **100.00%** | **100.00%** |
-| 官方质量 | 96.06% | **98.24%** | 98.16% |
-| 每任务 agent tokens | **311,870** | 325,887 | 344,727 |
-| 每任务 reviewer tokens | 0 | 15,168 | 16,089 |
-| 每任务端到端 tokens | **311,870** | 341,055 | 360,816 |
+| 通过率 | 97.78% | 97.78% | **98.89%** |
+| 官方质量 | 95.98% | 95.96% | **97.21%** |
+| 每任务 agent tokens | **305,240** | 337,288 | 346,978 |
+| 每任务 reviewer tokens | 0 | 15,683 | 15,390 |
+| 每任务端到端 tokens | **305,240** | 352,971 | 362,368 |
 
-Evolution 挽救了两个 baseline 失败，但端到端成本增加 `9.36%`；加入离线 overlay
-没有再挽救额外失败，成本又增加 `5.79%`。因此，当前证据支持评审框架 API，但不支持
-在该 GPT-5.2 运行时晋升这组 overlay。
+全局 optimized arm 相对 evolution 的通过率提升 `1.11pp`、质量提升 `1.25pp`，
+但端到端成本增加 `2.66%`。这些总数适合检查固定门禁；candidate 是否应晋升，则必须
+以下面的逐族结果为依据。
 
 ## 2. 实验设计
 
-### 2.1 三阶段证据
+### 2.1 三阶段证据链
 
 实验把发现、确认和运行时使用拆成三个阶段：
 
 1. **Search：** 从五个真实或结构等价的 evolution revision 出发，使用配对 feedback
-   case，每次只变更一个 skill 组件；存活候选再进入独立 validation split。
-2. **Frozen confirmation：** 固定候选、关闭 reflection，在 validation 与 holdout
-   case 上比较 seed 和 candidate，并使用独立随机种子复现。
-3. **Operational replay：** 在现有 evolution benchmark 使用的同一套 5 个任务族、
-   6 个尺度上比较 `baseline`、`evolution`、`optimized_evolution`。
+   case，每次只修改一个 skill 组件；存活候选再进入独立 validation split。
+2. **Frozen confirmation：** 固定候选、关闭 reflection，在 validation 和 untouched
+   holdout case 上比较 seed 与 candidate，并使用独立随机种子复现。
+3. **Operational replay：** 在现有 evolution benchmark 的同一套 5 个任务族、6 个尺度
+   上比较 `baseline`、`evolution`、`optimized_evolution`。
 
-Search 与 frozen confirmation 阶段使用自部署 GLM-5.2 路由，请求 model ID 为
-`glm52`，frozen 机器证据也记录了该值。完整运行时矩阵则通过同一个内部
-OpenAI-compatible endpoint 请求了 `gpt-5.2`。事后路由探针显示，`gpt-5.2` 的响应
-model 为 `gpt-5.2-2025-12-11`，而 `glm52` 的响应仍为 `glm52`；二者是不同路由，
-不能当作别名。
+Search 可以 abstain，frozen confirmation 可以拒绝 search winner，operational replay
+也可以拒绝 frozen winner。这是设计目标：每个阶段都在回答比前一阶段更严格的部署问题。
 
-因此，运行时三个 arm 彼此仍使用相同的 GPT-5.2 路由、temperature 0、80 次工具迭代，
-以及按任务配对的 sampling seed。启动参数将最大响应 tokens 设为 8,192；历史结果
-schema 没有持久化该 flag，runner 现在已补充记录，供后续实验审计。奇偶 root seed 会
-反转整个 arm 的执行顺序。模型端对 sampling seed 的支持仍是 best effort，因此必须
-保留多轮 root seed。
+### 2.2 模型、任务与配对
 
-这保证了三臂运行时比较内部仍然公平，但完整链路实际上是跨模型迁移测试：GLM-5.2
-生成并 frozen 确认候选，GPT-5.2 再消费这些候选。它不能回答这些候选是否会改善在线
-GLM-5.2 evolution loop。路由确认记录在
-[`model_routing_evidence.json`](model_routing_evidence.json)。
+Search、frozen confirmation 和最终运行时回放都通过 model ID `glm52` 请求自部署的
+GLM-5.2 路由。最终矩阵显式使用
+`-model glm52 -reviewer-model glm52`、temperature 0、最大响应 8,192 tokens 和
+80 次工具迭代。聚合器会校验这些配置，而不是从 endpoint 设置猜测模型。
+
+本轮使用全新的 root seed `701`、`702`、`703`。同一 run 中，三个 arm 使用相同的
+task-specific sampling seed。奇偶 root seed 反转整个 arm 的执行顺序，但不改变各 arm
+内部的在线学习顺序：
+
+- `701`：optimized evolution → evolution → baseline；
+- `702`：baseline → evolution → optimized evolution；
+- `703`：optimized evolution → evolution → baseline。
 
 五个任务族为 `cat-facts-collector`、`openmeteo-weather`、
 `pokeapi-pokedex`、`recipe-cookbook-builder` 和
-`world-bank-economic-snapshot`；每个族均包含 `e1`、`e2`、`e3`、`m1`、`m2`、
-`h1`。
+`world-bank-economic-snapshot`。每族均包含 `e1`、`e2`、`e3`、`m1`、`m2`、`h1`，
+即每个 arm 每轮 30 个任务、三轮 90 个任务，总计 270 个 arm-case。
 
-### 2.2 预注册运行时门禁
+更早的矩阵使用 root seed `601`--`603`，但在 GLM-5.2 发现 candidate 之后，运行时
+请求了 GPT-5.2。路由探针已确认 `gpt-5.2` 与 `glm52` 是两个不同路由。该矩阵仍是
+有价值的跨模型可迁移性测试，将在第 5 节单独报告，不与同模型结果混合聚合。
 
-仓库中的 `skillcraft-5-family-3-arm-v1` protocol 在最终矩阵结果出现前已经固定。
-晋升必须同时满足：
+### 2.3 预注册运行时门禁
+
+仓库中的 `skillcraft-5-family-3-arm-v1` protocol 在两个最终矩阵出结果前已经固定。
+机械意义上的晋升资格要求同时满足：
 
 - 至少 3 个完整 run，每个 arm 都包含全部 30 个任务；
 - 整体与逐族通过率均不回退；
@@ -80,8 +89,11 @@ GLM-5.2 evolution loop。路由确认记录在
 - 每个任务族质量相对 evolution 最多下降 `1.00pp`；
 - 至少一个有意义收益：质量 `+0.50pp`，或端到端 tokens `-5%`。
 
-聚合命令还会拒绝重复 root seed、缺失官方评测、额外/缺失任务，以及 arm 间没有配对
-的任务 seed。输出包含去除本机路径和模型 transcript 的逐轮机器汇总。
+聚合命令还会拒绝重复 root seed、缺失官方评测、额外或缺失任务、arm 间没有配对的
+task seed，以及实验配置漂移。输出经过清理，不包含本机路径、模型 transcript 或凭据。
+
+该 gate 是必要的聚合安全检查，不是因果归因方法。只有部分任务族使用 overlay 时，
+晋升还必须证明收益确实发生在这些任务族，并且能跨 root seed 保持方向稳定。
 
 ## 3. Search 与 Frozen Confirmation
 
@@ -99,8 +111,7 @@ Optimizer 没有强迫每个任务族都产生不同的 skill。
 | Recipe | validation 选中效率 mutation | Frozen comparison |
 | World Bank | validation 选中效率 mutation | Frozen comparison |
 
-Abstain 本身很重要：完成一次搜索并不等于 mutation 应当发布，validation 与 frozen
-holdout 必须是独立决策。
+Abstain 本身很重要：完成一次搜索并不等于 mutation 应当发布。
 
 ### 3.2 Frozen 结果
 
@@ -120,27 +131,20 @@ holdout 必须是独立决策。
 |  | Holdout 通过率 / 质量 | 100% / 100% | 100% / 100% | 接受 |
 |  | Holdout 每 case tokens | 421,255 | **385,355 (-8.52%)** |  |
 
-早期 Recipe 修复使用两个独立 optimizer seed 和 8 个 holdout pair，得到 4 个质量 win、
-4 个 tie、0 个 loss，且通过率没有回退。该候选保存在 `recipe_candidate.json`，也是
-运行时全量回放使用的 Recipe overlay。
+已接受的 Recipe 修复使用两个独立 optimizer seed 和 8 个 holdout pair，得到 4 个质量
+win、4 个 tie、0 个 loss，且通过率没有回退。该候选保存在
+`recipe_candidate.json`，也是两个运行时矩阵使用的 Recipe overlay。
 
 后续 generic Recipe mutation 是最重要的拒绝案例：它在 validation 上保持质量并降低
-token，但一个 untouched `e3` pair 失败；在 untouched 子集上，通过率从 `100%` 降到
-`75%`，质量下降 `24.17pp`。即使 pooled holdout tokens 更少，它仍然被丢弃。
+token，但一个 untouched `e3` pair 失败；在 untouched 子集上，通过率从 100% 降到
+75%，质量下降 `24.17pp`。即使 pooled holdout tokens 更低，它仍被丢弃。
 
-World Bank 首轮确认暴露了 optimizer 内部 scalar tie-breaker 与真实部署目标的错位：
-官方通过率/质量保持满分，holdout token 也改善，但 scalar 噪声阻止晋升。在采集新的
-确认 seed 之前，v2 protocol 将官方通过率与质量设为主安全条件，要求配对主指标零
-loss，并以 `5%` holdout token 收益作为效率门槛。新的 `507`、`508` seed 随后复现
-`8.52%` token 降低，且通过率与质量均无 loss。
+World Bank 首轮确认暴露了 scalar tie-breaker 与部署目标的错位。在采集新确认 seed
+之前，v2 protocol 将官方通过率和质量设为主安全条件，要求配对主指标零 loss，并以
+5% holdout token 收益作为效率门槛。新 seed `507`、`508` 随后复现 `8.52%` token
+降低且没有通过率或质量 loss。完整运行时回放再验证这一隔离收益能否存活于在线 loop。
 
-对应机器证据位于
-[`evidence.json`](evidence.json)、
-[`generic_candidate_frozen_evidence.json`](full_matrix/generic_candidate_frozen_evidence.json)
-和
-[`worldbank_candidate_frozen_evidence_v2.json`](full_matrix/worldbank_candidate_frozen_evidence_v2.json)。
-
-## 4. 完整运行时回放
+## 4. 同模型 GLM-5.2 运行时回放
 
 ### 4.1 逐 Root Seed 结果
 
@@ -148,116 +152,176 @@ loss，并以 `5%` holdout token 收益作为效率门槛。新的 `507`、`508`
 
 | Root seed | Arm 顺序 | Baseline 通过率 / 质量 / E2E | Evolution 通过率 / 质量 / E2E | Optimized 通过率 / 质量 / E2E | Optimized 相对 evolution |
 | ---: | --- | --- | --- | --- | --- |
-| 601 | optimized → evolution → baseline | 100% / 98.12% / 343,425 | 100% / 98.21% / 341,727 | 100% / 98.23% / 360,892 | +0.02pp，+5.61% tokens |
-| 602 | baseline → evolution → optimized | 96.67% / 95.08% / 271,517 | 100% / 98.21% / 342,637 | 100% / 98.02% / 351,420 | -0.19pp，+2.56% tokens |
-| 603 | optimized → evolution → baseline | 96.67% / 94.99% / 320,668 | 100% / 98.29% / 338,802 | 100% / 98.24% / 370,136 | -0.05pp，+9.25% tokens |
+| 701 | optimized → evolution → baseline | 100% / 98.15% / 306,475 | 96.67% / 94.97% / 339,270 | 100% / 98.23% / 355,400 | 通过率 +3.33pp，质量 +3.26pp，tokens +4.75% |
+| 702 | baseline → evolution → optimized | 96.67% / 94.92% / 335,723 | 100% / 97.93% / 362,645 | 96.67% / 94.90% / 368,126 | 通过率 -3.33pp，质量 -3.03pp，tokens +1.51% |
+| 703 | optimized → evolution → baseline | 96.67% / 94.86% / 273,524 | 96.67% / 94.98% / 356,998 | 100% / 98.51% / 363,578 | 通过率 +3.33pp，质量 +3.53pp，tokens +1.84% |
 
-Optimized evolution 在三个 root seed 上都更贵。只有 seed `601` 出现很小的质量提升，
-而且远低于预注册的 `0.50pp` 有意义收益门槛。
+全局结果噪声较大，因为 evolution 与 optimized 之间三个非 tie 的通过率差异都来自没有
+使用 overlay 的任务族中的孤立失败。配对结果为 2 个 pass win、87 个 tie、1 个 loss；
+质量为 7 个 win、80 个 tie、3 个 loss。预注册聚合门禁通过，但具体 candidate 的有效性
+必须由下一节判断。
 
-### 4.2 逐族结果
+### 4.2 逐族因果归因
 
-只有 Recipe 与 World Bank 使用了离线 overlay。另三个族是有用的负控制：对这些族，
-`evolution` 与 `optimized_evolution` 的起始 skill 相同。
+只有 Recipe 与 World Bank 使用离线 overlay。Cat、Weather、Pokémon 是负控制，因为
+这些任务族的 evolution 与 optimized evolution 使用相同起始 skill。
 
 **表 5：逐族 optimized evolution 相对 evolution（每个 arm n = 18）**
 
-| 任务族 | 有 overlay | 通过率变化 | 质量变化 | E2E token 变化 |
-| --- | --- | ---: | ---: | ---: |
-| Cat facts | 否 | 0.00pp | 0.00pp | -4.34% |
-| Weather | 否 | 0.00pp | 0.00pp | +5.78% |
-| Pokémon | 否 | 0.00pp | -0.38pp | +14.43% |
-| Recipe | 是 | 0.00pp | 0.00pp | -2.68% |
-| World Bank | 是 | 0.00pp | 0.00pp | +6.07% |
+| 任务族 | 有 overlay | 通过率变化 | 质量变化 | Agent token 变化 | E2E token 变化 |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Cat facts | 否 | 0.00pp | 0.00pp | -16.08% | -15.11% |
+| Weather | 否 | 0.00pp | 0.00pp | +5.39% | +5.22% |
+| Pokémon | 否 | +5.55pp | +5.95pp | +22.93% | +22.02% |
+| Recipe | **是** | 0.00pp | **+0.32pp** | **-14.86%** | **-14.75%** |
+| World Bank | **是** | 0.00pp | 0.00pp | +3.27% | +3.29% |
 
-只看两个 overlay 族，质量持平，端到端 tokens 增加 `1.46%`。Recipe 保留了一点成本
-改善，但未达到 `5%` 门槛；World Bank 的 frozen 收益没有迁移到运行时，反而变成成本
-增加。没有 overlay 的控制族也出现了双向大幅变化，说明一次运行时轨迹中的小 token
-差异不能直接归因于 skill mutation。
+全局质量 win 主要由 Pokémon 贡献，但两个 arm 在这里使用相同的 warm-start skill，
+只是 evolution arm 偶发丢失了两个最终产物，因此不能把该收益归因于 optimized
+candidate。相反，Recipe 和 World Bank 才是在相同在线机制下直接比较发生变化与未变化
+的 skill library。
 
-### 4.3 Evolution 相对 Baseline
+只汇总两个发生变化的任务族时，两个 arm 的通过率均为 100%，质量变化 `+0.16pp`，
+agent tokens 变化 `-6.80%`，端到端 tokens 变化 `-6.77%`。这个 attribution-aware
+范围独立跨过了 5% 有意义收益门槛，说明 optimized overlay 作为实验单元确实有用；
+但两个 revision 并非同样有价值：全部节省由 Recipe 提供，World Bank 反而让 bundle
+比 Recipe 单独部署更低效。生产晋升单位是单个 skill revision，所以更精确的决策仍是
+晋升 Recipe、拒绝 World Bank。
 
-同一轮实验也给出了更新后的 evolution 结果：
+### 4.3 Recipe：可重复的运行时收益
 
-- evolution 整体通过率提升 `2.22pp`，质量提升 `2.18pp`；
-- 两个 pass win 都来自 Pokémon 产物收尾失败：seed `602` 的 baseline `m1` 和
-  seed `603` 的 baseline `m2` 都没有生成 `pokedex_entries.json`，两个 evolution
-  arm 则均完成；
-- evolution 没有 pass loss，但计入 reviewer 后端到端 tokens 增加 `9.36%`；
-- 其他四个任务族的 baseline 通过率已经是 100%，所以可靠性收益集中在 Pokémon，
-  不是所有任务族普遍提升。
+**表 6：Recipe optimized evolution 相对 evolution**
 
-这组数据不能直接与主 evolution 报告中旧的 `gpt-4o-mini` headline 比较。本实验使用
-不同模型、更高且三臂对称的任务预算、entity-serial checkpoint，并完整计入 reviewer
-成本。
+| Root seed | 通过率变化 | 质量变化 | Agent token 变化 | E2E token 变化 |
+| ---: | ---: | ---: | ---: | ---: |
+| 701 | 0.00pp | 0.00pp | -6.69% | -6.61% |
+| 702 | 0.00pp | 0.00pp | -25.28% | -24.25% |
+| 703 | 0.00pp | +0.95pp | -11.80% | -12.52% |
+| **聚合** | **0.00pp** | **+0.32pp** | **-14.86%** | **-14.75%** |
 
-## 5. Bad Cases 与实验修复
+Recipe 两个 arm 的 18 个任务全部通过。收益不是单轮离群点：三个 root seed 都降低
+tokens，而且每轮都超过 5% 有意义收益门槛。seed `703` 的 optimized `h1` reviewer
+发生一次 timeout，但该 seed 的 agent-only tokens 仍降低 `11.80%`，聚合降低
+`14.86%`，所以晋升结论不依赖遗漏 reviewer 成本。
 
-### 5.1 Validation 上省 Token 不代表安全
+这是本实验最强的证据：optimizer 修复 skill，frozen confirmation 接受它，新的同模型
+在线矩阵又在不产生安全回退的前提下复现了更大的效率收益。
 
-被拒绝的 Recipe mutation 正是 holdout 应捕获的模式：validation 质量持平且 token
-下降，但 untouched scale 丢失最终产物。如果 selector 只看 validation scalar，它会
-错误发布该候选。
+### 4.4 World Bank：Frozen Winner 被运行时拒绝
 
-### 5.2 GLM-5.2 Frozen 收益没有迁移到 GPT-5.2 Loop
+World Bank 两个 arm 的 18 个任务也全部通过，质量同为 100%；但 seed `701`、`702`、
+`703` 的端到端 tokens 分别变化 `+5.63%`、`+2.55%`、`+1.70%`，聚合增加
+`3.29%`。seed `702/e3` 的 evolution reviewer 结果缺失也不会反转结论：agent-only
+tokens 聚合仍增加 `3.27%`。
 
-World Bank 在隔离 frozen holdout 上改善，但在完整在线 loop 中成本回退。运行时还
-同时改变了执行环境和模型：它在 GLM-5.2 确认候选之后，加入顺序 managed-skill 状态、
-reviewer 调用、更多任务尺度和 GPT-5.2 轨迹。因此，frozen confirmation 是必要证据，
-但不足以支持默认 runtime overlay 或跨模型可迁移性；本实验无法进一步分离是哪项变化
-导致迁移失败。
+因此，隔离 frozen holdout 上的收益没有存活于顺序 managed-skill 状态和完整在线 loop。
+两层门禁都按预期工作：frozen confirmation 允许合理候选继续，operational evidence
+则阻止它部署。
 
-### 5.3 产物收尾失败是真实可靠性问题
+### 4.5 Evolution 相对 Baseline
 
-两个 baseline Pokémon 失败都有有效中间工作，但没有最终产物或 completion signal。
-实验过程中，benchmark 被统一加固为：长任务一次处理一个实体、覆盖写入紧凑的
-`working_notes.json`，并允许 finalize-only recovery 读取 notes，但禁止再次调用 domain
-API。三个 arm 使用相同修复和相同预算；剩余的两个 baseline 失败被原样保留，没有
-选择性重跑。
+在 GLM-5.2 下，evolution 和 baseline 都通过 88/90 个任务。Evolution 质量变化
+`-0.02pp`，端到端 tokens 增加 `15.64%`；配对结果包含 2 个 pass win 与 2 个 loss，
+以及 5 个质量 win 与 5 个 loss。因此，这组矩阵不能证明未叠加离线优化的 online
+evolution arm 在该模型和预算下普遍有益。
 
-### 5.4 控制族揭示了残余方差
+该结论不会替代旧 online-evolution 报告。旧实验在不同模型和预算下显示，它能避免少数
+灾难性循环。两个实验回答不同运行时问题，不能混合聚合。
 
-Cat、Weather、Pokémon 没有 optimized overlay，但 optimized arm 的 token 变化仍在
-`-4.34%` 到 `+14.43%` 之间。反转 arm 顺序和配对 task seed 能降低系统偏差，却不能
-消除 provider 与模型轨迹方差。三个 root seed 足以执行这里预先固定的门禁，但不足以
-宣称模型无关的统计显著性。
+## 5. 早期 GPT-5.2 跨模型回放
 
-## 6. 框架与 API 判断
+同模型矩阵之前，同一组 GLM 产生的 overlay 已在独立 GPT-5.2 路由上使用 root seed
+`601`--`603` 回放。
+
+**表 7：GPT-5.2 完整运行时回放（3 轮，每个 arm n = 90）**
+
+| 指标 | Baseline | Evolution | Optimized evolution |
+| --- | ---: | ---: | ---: |
+| 通过率 | 97.78% | **100.00%** | **100.00%** |
+| 官方质量 | 96.06% | **98.24%** | 98.16% |
+| 每任务端到端 tokens | **311,870** | 341,055 | 360,816 |
+
+Optimized evolution 相对 evolution 的质量变化为 `-0.08pp`，端到端 tokens 增加
+`5.79%`，没有通过有意义收益门槛。Recipe 端到端只节省 `2.68%`，World Bank 则
+增加 `6.07%`。这个负结果仍然有价值：它说明 GLM-5.2 上的 skill 改进不会自动迁移
+到 GPT-5.2，也说明必须运行同模型矩阵，而不能给旧结果换一个标签。
+
+## 6. Bad Cases 与局限
+
+### 6.1 五个收尾失败被原样保留
+
+同模型矩阵共有五个失败 arm-case，全部不在两个 overlay 任务族中：
+
+- seed `701`，evolution Pokémon `m2`：没有最终产物；
+- seed `702`，baseline Cat `h1`：最终响应输出了文本形式的 tool call，却没有真正执行；
+- seed `702`，optimized Pokémon `e2`：同类文本 tool-call 失败；
+- seed `703`，evolution Pokémon `m2`：长工具输出和重复恢复后仍未生成产物；
+- seed `703`，baseline Pokémon `h1`：在 finalization 前停止。
+
+两个 optimized/evolution Pokémon arm 使用相同起始 skill，因此它们的 pass 差异是运行时
+方差，不是 overlay 证据。没有任何失败 case 被选择性重跑。
+
+### 6.2 负控制揭示残余轨迹方差
+
+无 overlay 任务族的 token 变化从 Cat 的 `-15.11%` 到 Pokémon 的 `+22.02%`。
+Cat 在 seed `702` 的方向甚至与另两个 seed 相反。反转 arm 顺序和配对 task seed 可以
+降低系统性偏差，但不能让 provider sampling 完全确定。三个 seed 满足固定 protocol，
+并不等于获得了模型无关的统计显著性。
+
+### 6.3 Reviewer 隔离按预期工作
+
+三次 reviewer timeout 没有使任务结果无效：seed `702` 的 evolution World Bank `e3`，
+以及 seed `703` 的 optimized Pokémon `m2` 与 Recipe `h1`。同时报告 agent-only 和
+端到端敏感性，可以确认这些缺失 reviewer tokens 既没有制造 Recipe 的 win，也没有制造
+World Bank 的 loss。
+
+### 6.4 Tool Response 鲁棒性仍是 Benchmark 问题
+
+多个 arm 都出现过可恢复的 filesystem MCP response 错误。两个文本 tool-call 失败还
+说明 OpenAI-compatible endpoint 可能把预期工具调用编码为普通文本。Pokémon 尤其容易
+受到大工具响应和长上下文恢复循环影响。这些是后续值得加固的 harness 能力，但在观察
+矩阵结果后修改会破坏 frozen protocol，所以本轮没有针对性调整。
+
+## 7. 框架与 API 判断
 
 Benchmark 不需要 Python GEPA bridge，也不需要公开 optimizer 内部结构。Adapter 只
-提供公开的 task cases、`Evaluator`、`Dataset`、`Request`、reflection model 和 options，
+提供公开 task cases、`Evaluator`、`Dataset`、`Request`、reflection model 和 options，
 然后调用 `New` 与 `Optimize`。Candidate graph、Pareto bookkeeping、mutation 解析、
-实验存储和晋升逻辑都保持在包内部。
+实验存储和晋升机制都保持在包内部。
 
-主库 API 已具备评审条件，原因是：
+主库 API 具备评审条件，原因是：
 
-- optimization 是 opt-in 的离线流程，不会直接修改 live skill；
+- optimization 是 opt-in 离线流程，不会直接修改 live skill；
 - evaluator 由应用提供，各业务可以保留原生质量和成本目标；
 - validation 与 holdout 是显式 dataset contract；
 - metric calls、iterations、time 和 reflection batch size 都有界；
 - revision submission 通过小型 `RevisionSubmitter` 接口可选接入，成功提交仍进入审批，
   不会静默变成 active；
-- 即使调用方晋升策略拒绝候选，框架仍能返回可分析的优化结果。
+- search 可以 abstain，promotion policy 仍由应用拥有；
+- 即使调用方正确拒绝 candidate，框架仍返回可分析的完整 evidence。
 
-因此，主库 PR 可以作为 API primitive 进入代码评审；这与两个 benchmark candidate
-是否应部署是两个独立结论。
+本次实验也验证了预期的扩展边界：框架保持不变，benchmark 在外部表达 SkillCraft 专属
+评测、token 计费、frozen holdout policy 和部署门禁。
 
-## 7. 结论与下一步
+## 8. 结论与下一步
 
-当前 benchmark 支持一个有边界的结论：
+完整证据支持以下有边界的结论：
 
-> 反思式优化在 GLM-5.2 下对离线 skill 修复、候选搜索和基于证据的拒绝是有用的；
-> 已接受候选没有成功迁移到本次 GPT-5.2 运行时。同模型 GLM-5.2 operational replay
-> 尚未执行。
+> 纯 Go 反思式 optimizer 在 SkillCraft 上是有用的。它找到一个 Recipe skill，
+> 在同模型 GLM-5.2 在线回放中保持 100% 通过率，并在三个方向一致的 root seed 上将
+> 端到端 tokens 聚合降低 14.75%。它还拒绝了一个不安全 Recipe mutation，并在
+> World Bank frozen winner 的运行时收益无法复现时阻止其晋升。
 
-基于当前证据，正确动作是：
+正确的后续动作是：
 
-1. 评审纯 Go optimizer API；
-2. 不在本次 GPT-5.2 运行时把当前 Recipe 与 World Bank overlay 设为默认晋升结果；
-3. 保留已接受 candidate 作为研究产物；
-4. 在给出 GLM-5.2 运行时结论前，使用显式
-   `-model glm52 -reviewer-model glm52` 和全新 root seed 重跑 operational protocol，
-   而不是重命名已有结果或针对 `601`--`603` 调参。
+1. 让主库 optimizer PR 进入正常代码评审；
+2. 针对本次 GLM-5.2 运行时晋升或打包已接受的 Recipe candidate；
+3. 不晋升 World Bank candidate；combined experimental overlay 在 changed-family
+   范围为正收益，但只部署 Recipe 是严格更优的选择；
+4. 保留 GPT-5.2 结果作为负面的跨模型可迁移性证据；
+5. 把更广泛的模型可迁移性和 Pokémon tool-response 鲁棒性作为后续工作，而不是阻塞
+   API 评审。
 
-精确聚合数值、逐轮摘要、逐族指标、配对结果和门禁判定见
+同模型精确聚合值、逐轮摘要、逐族指标、配对结果和预注册门禁见
+[`glm_full_matrix_evidence.json`](glm_full_matrix_evidence.json)。早期跨模型聚合仍保存在
 [`full_matrix_evidence.json`](full_matrix_evidence.json)。

@@ -64,7 +64,8 @@ func DefaultProtocol() Protocol {
 	}
 }
 
-// Metrics is a pooled arm summary. Tokens and duration are per task.
+// Metrics is a pooled arm summary. Tokens and duration are per task. Token
+// averages are rounded to whole tokens; other averages retain two decimals.
 type Metrics struct {
 	Tasks                 int     `json:"tasks"`
 	PassedTasks           int     `json:"passedTasks"`
@@ -118,17 +119,31 @@ type GateCheck struct {
 // RunSummary keeps one input run auditable without retaining machine-specific
 // paths or task transcripts.
 type RunSummary struct {
-	Name                          string             `json:"name"`
-	RootSeed                      int64              `json:"rootSeed"`
-	RunOrder                      []string           `json:"runOrder"`
-	RequestedModel                string             `json:"requestedModel"`
-	RequestedReviewerModel        string             `json:"requestedReviewerModel"`
-	EvaluationTemperature         *float64           `json:"evaluationTemperature"`
-	MaxToolIterations             int                `json:"maxToolIterations"`
-	MaxTokens                     *int               `json:"maxTokens,omitempty"`
-	Arms                          map[string]Metrics `json:"arms"`
-	EvolutionVsBaseline           Comparison         `json:"evolutionVsBaseline"`
-	OptimizedEvolutionVsEvolution Comparison         `json:"optimizedEvolutionVsEvolution"`
+	Name                          string                        `json:"name"`
+	RootSeed                      int64                         `json:"rootSeed"`
+	RunOrder                      []string                      `json:"runOrder"`
+	RequestedModel                string                        `json:"requestedModel"`
+	RequestedReviewerModel        string                        `json:"requestedReviewerModel"`
+	EvaluationTemperature         *float64                      `json:"evaluationTemperature"`
+	MaxToolIterations             int                           `json:"maxToolIterations"`
+	MaxTokens                     *int                          `json:"maxTokens,omitempty"`
+	Arms                          map[string]Metrics            `json:"arms"`
+	Families                      map[string]map[string]Metrics `json:"families"`
+	EvolutionVsBaseline           Comparison                    `json:"evolutionVsBaseline"`
+	OptimizedEvolutionVsEvolution Comparison                    `json:"optimizedEvolutionVsEvolution"`
+}
+
+// CaseFailure identifies an official task failure without retaining the task
+// workspace or model transcript.
+type CaseFailure struct {
+	RootSeed       int64   `json:"rootSeed"`
+	Arm            string  `json:"arm"`
+	TaskID         string  `json:"taskId"`
+	Quality        float64 `json:"quality"`
+	AgentTokens    int     `json:"agentTokens"`
+	ReviewerTokens int     `json:"reviewerTokens"`
+	EndToEndTokens int     `json:"endToEndTokens"`
+	ToolCalls      int     `json:"toolCalls"`
 }
 
 // Coverage records the realized matrix.
@@ -149,6 +164,7 @@ type Evidence struct {
 	Families                      map[string]map[string]Metrics `json:"families"`
 	EvolutionVsBaseline           Comparison                    `json:"evolutionVsBaseline"`
 	OptimizedEvolutionVsEvolution Comparison                    `json:"optimizedEvolutionVsEvolution"`
+	Failures                      []CaseFailure                 `json:"failures"`
 	Gates                         []GateCheck                   `json:"gates"`
 	PromotionEligible             bool                          `json:"promotionEligible"`
 	PromotionReason               string                        `json:"promotionReason"`
@@ -192,9 +208,10 @@ type inputEval struct {
 }
 
 type collectedCase struct {
-	arm  string
-	run  int
-	data inputCase
+	arm      string
+	run      int
+	rootSeed int64
+	data     inputCase
 }
 
 // Aggregate validates and aggregates result files in one operation.
@@ -226,12 +243,14 @@ func Aggregate(paths []string, protocol Protocol) (*Evidence, error) {
 		runCases := make(map[string][]collectedCase, 3)
 		for arm, cases := range inputArms(input) {
 			for _, item := range cases {
-				collected := collectedCase{arm: arm, run: idx, data: item}
+				collected := collectedCase{
+					arm: arm, run: idx, rootSeed: *input.EvaluationSeed, data: item,
+				}
 				all[arm] = append(all[arm], collected)
 				runCases[arm] = append(runCases[arm], collected)
 			}
 		}
-		run := summarizeRun(path, input, runCases)
+		run := summarizeRun(path, input, runCases, protocol.ExpectedFamilies)
 		if len(runs) > 0 {
 			if err := validateMatchingRuntime(runs[0], run); err != nil {
 				return nil, fmt.Errorf("experiment: %s: %w", path, err)
@@ -269,6 +288,7 @@ func Aggregate(paths []string, protocol Protocol) (*Evidence, error) {
 	evidence.OptimizedEvolutionVsEvolution = compare(
 		armEvolution, armOptimized, all[armEvolution], all[armOptimized],
 	)
+	evidence.Failures = collectFailures(all)
 	evidence.Gates = promotionGates(evidence)
 	evidence.PromotionEligible = true
 	for _, gate := range evidence.Gates {
@@ -289,10 +309,18 @@ func summarizeRun(
 	path string,
 	input inputResult,
 	cases map[string][]collectedCase,
+	families []string,
 ) RunSummary {
 	arms := make(map[string]Metrics, len(cases))
 	for arm, items := range cases {
 		arms[arm] = summarize(items)
+	}
+	familyMetrics := make(map[string]map[string]Metrics, len(families))
+	for _, family := range families {
+		familyMetrics[family] = make(map[string]Metrics, len(cases))
+		for arm, items := range cases {
+			familyMetrics[family][arm] = summarize(filterFamily(items, family))
+		}
 	}
 	return RunSummary{
 		Name:                   filepath.Base(filepath.Dir(path)),
@@ -304,6 +332,7 @@ func summarizeRun(
 		MaxToolIterations:      input.MaxToolIterations,
 		MaxTokens:              input.MaxTokens,
 		Arms:                   arms,
+		Families:               familyMetrics,
 		EvolutionVsBaseline: compare(
 			armBaseline, armEvolution, cases[armBaseline], cases[armEvolution],
 		),
@@ -311,6 +340,37 @@ func summarizeRun(
 			armEvolution, armOptimized, cases[armEvolution], cases[armOptimized],
 		),
 	}
+}
+
+func collectFailures(all map[string][]collectedCase) []CaseFailure {
+	failures := make([]CaseFailure, 0)
+	for arm, cases := range all {
+		for _, item := range cases {
+			if item.data.Evaluation.Passed {
+				continue
+			}
+			failures = append(failures, CaseFailure{
+				RootSeed:       item.rootSeed,
+				Arm:            arm,
+				TaskID:         item.data.TaskID,
+				Quality:        round(item.data.Evaluation.Score.Percent),
+				AgentTokens:    item.data.TotalTokens,
+				ReviewerTokens: item.data.ReviewerTotalTokens,
+				EndToEndTokens: item.data.EndToEndTotalTokens,
+				ToolCalls:      len(item.data.ToolCalls),
+			})
+		}
+	}
+	sort.Slice(failures, func(i, j int) bool {
+		if failures[i].RootSeed != failures[j].RootSeed {
+			return failures[i].RootSeed < failures[j].RootSeed
+		}
+		if failures[i].TaskID != failures[j].TaskID {
+			return failures[i].TaskID < failures[j].TaskID
+		}
+		return failures[i].Arm < failures[j].Arm
+	})
+	return failures
 }
 
 func validateMatchingRuntime(reference, candidate RunSummary) error {
@@ -429,9 +489,9 @@ func summarize(cases []collectedCase) Metrics {
 	count := float64(len(cases))
 	metrics.PassRate = round(float64(metrics.PassedTasks) / count * 100)
 	metrics.AverageQuality = round(quality / count)
-	metrics.AverageAgentTokens = round(agent / count)
-	metrics.AverageReviewerTokens = round(reviewer / count)
-	metrics.AverageEndToEndTokens = round(endToEnd / count)
+	metrics.AverageAgentTokens = math.Round(agent / count)
+	metrics.AverageReviewerTokens = math.Round(reviewer / count)
+	metrics.AverageEndToEndTokens = math.Round(endToEnd / count)
 	metrics.AverageToolCalls = round(tools / count)
 	metrics.AverageDurationSec = round(duration / count)
 	return metrics
