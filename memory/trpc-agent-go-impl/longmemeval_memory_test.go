@@ -12,6 +12,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -26,6 +27,7 @@ import (
 	embeddingopenai "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
+	memorymem0 "trpc.group/trpc-go/trpc-agent-go/memory/mem0"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -622,6 +624,65 @@ func TestMem0OSSIngestRetriesTransientStatus(t *testing.T) {
 	}
 	if got := attempts.Load(); got != 2 {
 		t.Fatalf("unexpected attempts: got %d want 2", got)
+	}
+}
+
+func TestMem0OSSSnapshotUsesServerLimitAndReportsBoundary(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name      string
+		count     int
+		truncated bool
+	}{
+		{name: "complete below limit", count: 600},
+		{name: "ambiguous at limit", count: lmeMem0OSSSnapshotLimit, truncated: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if got := r.URL.Query().Get("top_k"); got != "1000" {
+					t.Errorf("top_k = %q, want 1000", got)
+				}
+				results := make([]map[string]any, test.count)
+				for i := range results {
+					results[i] = map[string]any{
+						"id":      fmt.Sprintf("memory-%04d", i),
+						"memory":  fmt.Sprintf("memory %d", i),
+						"user_id": "user",
+						"metadata": map[string]any{
+							"trpc_app_name": lmeAppName,
+						},
+					}
+				}
+				if err := json.NewEncoder(w).Encode(map[string]any{"results": results}); err != nil {
+					t.Errorf("encode response: %v", err)
+				}
+			}))
+			defer server.Close()
+
+			svc, err := memorymem0.NewService(
+				memorymem0.WithHost(server.URL),
+				memorymem0.WithHTTPClient(server.Client()),
+				memorymem0.WithSelfHostedOSS(),
+			)
+			if err != nil {
+				t.Fatalf("new mem0 service: %v", err)
+			}
+			defer svc.Close()
+			backend := &mem0Backend{svc: svc, selfHosted: true}
+			memories, truncated, err := backend.Read(context.Background(), memory.UserKey{
+				AppName: lmeAppName,
+				UserID:  "user",
+			})
+			if err != nil {
+				t.Fatalf("read snapshot: %v", err)
+			}
+			if len(memories) != test.count || truncated != test.truncated {
+				t.Fatalf("snapshot count=%d truncated=%v, want count=%d truncated=%v",
+					len(memories), truncated, test.count, test.truncated)
+			}
+		})
 	}
 }
 
@@ -1365,11 +1426,12 @@ func TestStripLegacyLongMemEvalAnswerErrors(t *testing.T) {
 func TestClassifyFailurePreservesEvidenceGranularity(t *testing.T) {
 	inst := &lmeInstance{}
 	tests := []struct {
-		name     string
-		evidence evidenceMetrics
-		exact    bool
-		want     string
-		status   string
+		name      string
+		evidence  evidenceMetrics
+		exact     bool
+		truncated bool
+		want      string
+		status    string
 	}{
 		{
 			name: "answer turn extraction miss",
@@ -1387,6 +1449,16 @@ func TestClassifyFailurePreservesEvidenceGranularity(t *testing.T) {
 			},
 			want:   "extraction_session_miss",
 			status: "extraction_session_miss",
+		},
+		{
+			name: "truncated extraction evidence",
+			evidence: evidenceMetrics{
+				HasEvidenceLabels:   true,
+				HasAnswerTurnLabels: true,
+			},
+			truncated: true,
+			want:      "extraction_snapshot_incomplete",
+			status:    "extraction_turn_miss",
 		},
 		{
 			name: "answer turn retrieval miss",
@@ -1441,8 +1513,9 @@ func TestClassifyFailurePreservesEvidenceGranularity(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			got := classifyFailure(inst, &backendResult{
-				Evidence:   &test.evidence,
-				ExactMatch: test.exact,
+				Evidence:          &test.evidence,
+				ExactMatch:        test.exact,
+				SnapshotTruncated: test.truncated,
 			})
 			if got != test.want {
 				t.Fatalf("classifyFailure() = %q, want %q", got, test.want)

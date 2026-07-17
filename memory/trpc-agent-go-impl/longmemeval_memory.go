@@ -129,10 +129,15 @@ type memoryBackend interface {
 	IngestPair(ctx context.Context, sess *session.Session, meta ingestMeta) (*extractionTrace, error)
 	Flush(ctx context.Context) error
 	Search(ctx context.Context, userKey memory.UserKey, query string, topK int) ([]memoryHit, error)
-	Read(ctx context.Context, userKey memory.UserKey, limit int) ([]memorySnapshot, error)
+	Read(ctx context.Context, userKey memory.UserKey) ([]memorySnapshot, bool, error)
 	SnapshotProviderUsage() lmeProviderUsage
 	Close() error
 }
+
+// Mem0 OSS exposes a capped top_k list API rather than pagination. Reading at
+// the server cap captures normal runs and lets the result mark the ambiguous
+// boundary instead of silently treating a partial snapshot as complete.
+const lmeMem0OSSSnapshotLimit = 1000
 
 type ingestMeta struct {
 	QuestionID string
@@ -184,6 +189,7 @@ type ingestTrace struct {
 	Extraction            *extractionTrace   `json:"extraction,omitempty"`
 	NewMemories           []memorySnapshot   `json:"new_memories,omitempty"`
 	MemoryCount           int                `json:"memory_count"`
+	SnapshotTruncated     bool               `json:"snapshot_truncated,omitempty"`
 	TokenUsage            *lmeTokenUsage     `json:"token_usage,omitempty"`
 	EmbeddingUsage        *lmeEmbeddingUsage `json:"embedding_usage,omitempty"`
 	ProviderUsageReported bool               `json:"provider_usage_reported,omitempty"`
@@ -240,6 +246,7 @@ type backendResult struct {
 	IngestedPairs         int                 `json:"ingested_pairs"`
 	IngestTraces          []ingestTrace       `json:"ingest_traces"`
 	FinalMemories         []memorySnapshot    `json:"final_memories"`
+	SnapshotTruncated     bool                `json:"snapshot_truncated,omitempty"`
 	Retrieval             []memoryHit         `json:"retrieval"`
 	PreRerankRetrieval    []memoryHit         `json:"pre_rerank_retrieval,omitempty"`
 	RerankModelCalls      []lmeModelCallTrace `json:"rerank_model_calls,omitempty"`
@@ -321,6 +328,7 @@ type backendSummary struct {
 	JudgeCorrect       int               `json:"judge_correct,omitempty"`
 	TotalPairs         int               `json:"total_pairs"`
 	TotalMemories      int               `json:"total_memories"`
+	TruncatedSnapshots int               `json:"truncated_snapshots,omitempty"`
 	TotalHits          int               `json:"total_hits"`
 	EvidenceCases      int               `json:"evidence_cases"`
 	ExtractRecallAny   int               `json:"extract_recall_any"`
@@ -499,12 +507,15 @@ func (b *pgvectorBackend) Search(ctx context.Context, userKey memory.UserKey, qu
 	return hitsFromEntries(entries), nil
 }
 
-func (b *pgvectorBackend) Read(ctx context.Context, userKey memory.UserKey, limit int) ([]memorySnapshot, error) {
-	entries, err := b.svc.ReadMemories(ctx, userKey, limit)
+func (b *pgvectorBackend) Read(
+	ctx context.Context,
+	userKey memory.UserKey,
+) ([]memorySnapshot, bool, error) {
+	entries, err := b.svc.ReadMemories(ctx, userKey, 0)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	return snapshotsFromEntries(entries), nil
+	return snapshotsFromEntries(entries), false, nil
 }
 
 func (b *pgvectorBackend) SnapshotProviderUsage() lmeProviderUsage {
@@ -671,12 +682,19 @@ func (b *mem0Backend) Search(ctx context.Context, userKey memory.UserKey, query 
 	return hitsFromEntries(entries), nil
 }
 
-func (b *mem0Backend) Read(ctx context.Context, userKey memory.UserKey, limit int) ([]memorySnapshot, error) {
+func (b *mem0Backend) Read(
+	ctx context.Context,
+	userKey memory.UserKey,
+) ([]memorySnapshot, bool, error) {
+	limit := 0
+	if b.selfHosted {
+		limit = lmeMem0OSSSnapshotLimit
+	}
 	entries, err := b.svc.ReadMemories(ctx, userKey, limit)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	return snapshotsFromEntries(entries), nil
+	return snapshotsFromEntries(entries), b.selfHosted && len(entries) >= limit, nil
 }
 
 func (b *mem0Backend) SnapshotProviderUsage() lmeProviderUsage {
@@ -959,6 +977,8 @@ func runLongMemEvalMemory(ctx context.Context) error {
 			"evidence_note":  "source_sessions are inferred from the pair after which a memory first appeared or changed.",
 			"answer_scoring": "raw model output; no retrieval-assisted answer post-processing",
 			"blind_progress": *flagLMEBlindProgress,
+			"memory_snapshot": "pgvector and hosted mem0 read all memories; self-hosted mem0 OSS " +
+				"reads its 1000-item API cap and marks snapshot_truncated at the boundary",
 			"token_usage_scope": "LLM and embedding usage made in this process. Self-hosted mem0 internal " +
 				"usage is included when its server returns X-Mem0-Usage; provider_usage_reported marks coverage.",
 		},
@@ -1037,14 +1057,14 @@ func longMemEvalCaseProgress(index, total int, inst *lmeInstance, blind bool) st
 
 func longMemEvalBackendProgress(backendName string, br *backendResult, blind bool) string {
 	if blind {
-		return fmt.Sprintf("  %s pairs=%d memories=%d hits=%d calls=%d tokens=%d cached=%d embed_calls=%d embed_tokens=%d provider_usage=%v",
-			backendName, br.IngestedPairs, len(br.FinalMemories), len(br.Retrieval),
+		return fmt.Sprintf("  %s pairs=%d memories=%d snapshot_truncated=%v hits=%d calls=%d tokens=%d cached=%d embed_calls=%d embed_tokens=%d provider_usage=%v",
+			backendName, br.IngestedPairs, len(br.FinalMemories), br.SnapshotTruncated, len(br.Retrieval),
 			tokenCalls(br.TokenUsage), tokenTotal(br.TokenUsage), tokenCached(br.TokenUsage),
 			embeddingCalls(br.EmbeddingUsage), embeddingTokens(br.EmbeddingUsage),
 			br.ProviderUsageReported)
 	}
-	return fmt.Sprintf("  %s pairs=%d memories=%d hits=%d evidence=%s calls=%d tokens=%d cached=%d embed_calls=%d embed_tokens=%d provider_usage=%v em=%v f1=%.3f answer=%q",
-		backendName, br.IngestedPairs, len(br.FinalMemories), len(br.Retrieval),
+	return fmt.Sprintf("  %s pairs=%d memories=%d snapshot_truncated=%v hits=%d evidence=%s calls=%d tokens=%d cached=%d embed_calls=%d embed_tokens=%d provider_usage=%v em=%v f1=%.3f answer=%q",
+		backendName, br.IngestedPairs, len(br.FinalMemories), br.SnapshotTruncated, len(br.Retrieval),
 		br.FailureStage,
 		tokenCalls(br.TokenUsage), tokenTotal(br.TokenUsage), tokenCached(br.TokenUsage),
 		embeddingCalls(br.EmbeddingUsage), embeddingTokens(br.EmbeddingUsage),
@@ -1117,7 +1137,7 @@ func runCaseBackend(
 			if *flagLMEIngestWait > 0 {
 				time.Sleep(*flagLMEIngestWait)
 			}
-			memories, readErr := backend.Read(ctx, userKey, 500)
+			memories, snapshotTruncated, readErr := backend.Read(ctx, userKey)
 			if readErr != nil && err == nil {
 				err = readErr
 			}
@@ -1146,8 +1166,10 @@ func runCaseBackend(
 			newOrChanged = annotateSnapshots(newOrChanged, provenance, answerProvenance)
 			memories = annotateSnapshots(memories, provenance, answerProvenance)
 			trace.MemoryCount = len(memories)
+			trace.SnapshotTruncated = snapshotTruncated
 			trace.NewMemories = newOrChanged
 			br.FinalMemories = memories
+			br.SnapshotTruncated = snapshotTruncated
 			if err != nil {
 				trace.Error = err.Error()
 				br.Error = err.Error()
@@ -1178,12 +1200,13 @@ afterIngest:
 	if err := backend.Flush(ctx); err != nil {
 		br.Error = appendError(br.Error, "flush: "+err.Error())
 	}
-	if memories, err := backend.Read(ctx, userKey, 500); err == nil {
+	if memories, snapshotTruncated, err := backend.Read(ctx, userKey); err == nil {
 		newOrChanged := diffSnapshots(br.FinalMemories, memories)
 		if len(newOrChanged) > 0 {
 			recordProvenance(provenance, answerProvenance, newOrChanged, sortedSet(pendingSources), pendingHasAnswer)
 		}
 		br.FinalMemories = annotateSnapshots(memories, provenance, answerProvenance)
+		br.SnapshotTruncated = snapshotTruncated
 	} else {
 		br.Error = appendError(br.Error, "final read: "+err.Error())
 	}
@@ -2546,8 +2569,8 @@ func saveCaseLog(outputDir string, cr *caseResult, br *backendResult) {
 	fmt.Fprintf(&b, "QuestionID: %s\nType: %s\nDate: %s\n", cr.QuestionID, cr.QuestionType, cr.QuestionDate)
 	fmt.Fprintf(&b, "Question: %s\nReference: %s\nAnswerSessions: %s\n\n",
 		cr.Question, cr.Answer, strings.Join(cr.AnswerSessionIDs, ","))
-	fmt.Fprintf(&b, "Backend: %s\nUserID: %s\nPairs: %d\nError: %s\nAnswerError: %s\n\n",
-		br.Backend, br.UserID, br.IngestedPairs, br.Error, br.AnswerError)
+	fmt.Fprintf(&b, "Backend: %s\nUserID: %s\nPairs: %d\nSnapshotTruncated: %v\nError: %s\nAnswerError: %s\n\n",
+		br.Backend, br.UserID, br.IngestedPairs, br.SnapshotTruncated, br.Error, br.AnswerError)
 	if br.Evidence != nil {
 		fmt.Fprintf(&b, "Evidence: stage=%s has_labels=%v abstention=%v extract_any=%v retrieval_any=%v retrieval_all=%v turn_extract_any=%v turn_retrieval_any=%v extracted=%s retrieved=%s\n\n",
 			br.FailureStage,
@@ -2676,8 +2699,8 @@ func printLongMemEvalSummary(result *runResult) {
 	for _, cr := range result.Cases {
 		fmt.Printf("- %s (%s): %s\n", cr.QuestionID, cr.QuestionType, cr.Question)
 		for _, br := range cr.BackendResults {
-			fmt.Printf("  %s: pairs=%d memories=%d hits=%d stage=%s calls=%d tokens=%d cached=%d embedCalls=%d embedTokens=%d providerUsage=%v EM=%v F1=%.3f BLEU=%.3f err=%s\n",
-				br.Backend, br.IngestedPairs, len(br.FinalMemories), len(br.Retrieval),
+			fmt.Printf("  %s: pairs=%d memories=%d snapshotTruncated=%v hits=%d stage=%s calls=%d tokens=%d cached=%d embedCalls=%d embedTokens=%d providerUsage=%v EM=%v F1=%.3f BLEU=%.3f err=%s\n",
+				br.Backend, br.IngestedPairs, len(br.FinalMemories), br.SnapshotTruncated, len(br.Retrieval),
 				br.FailureStage,
 				tokenCalls(br.TokenUsage), tokenTotal(br.TokenUsage), tokenCached(br.TokenUsage),
 				embeddingCalls(br.EmbeddingUsage), embeddingTokens(br.EmbeddingUsage),
@@ -2695,9 +2718,9 @@ func printLongMemEvalSummary(result *runResult) {
 		if summary.JudgedCases > 0 {
 			judgeText = fmt.Sprintf(" judge=%d/%d", summary.JudgeCorrect, summary.JudgedCases)
 		}
-		fmt.Printf("  %s: cases=%d EM=%d%s evidence=%d extractAny=%d retrievalAny=%d retrievalAll=%d turnEvidence=%d turnExtractAny=%d turnRetrievalAny=%d avgF1=%.3f avgBLEU=%.3f calls=%d tokens=%d cached=%d cacheHit=%.3f embedCalls=%d embedTokens=%d providerUsage=%d/%d\n",
+		fmt.Printf("  %s: cases=%d EM=%d%s truncatedSnapshots=%d evidence=%d extractAny=%d retrievalAny=%d retrievalAll=%d turnEvidence=%d turnExtractAny=%d turnRetrievalAny=%d avgF1=%.3f avgBLEU=%.3f calls=%d tokens=%d cached=%d cacheHit=%.3f embedCalls=%d embedTokens=%d providerUsage=%d/%d\n",
 			backend, summary.Cases, summary.ExactMatches,
-			judgeText,
+			judgeText, summary.TruncatedSnapshots,
 			summary.EvidenceCases, summary.ExtractRecallAny, summary.RetrievalRecallAny, summary.RetrievalRecallAll,
 			summary.TurnEvidenceCases, summary.ExtractTurnAny, summary.RetrievalTurnAny,
 			summary.AvgF1, summary.AvgBLEU,
@@ -2740,6 +2763,9 @@ func buildLongMemEvalSummary(cases []*caseResult) *runSummary {
 			}
 			bs.TotalPairs += br.IngestedPairs
 			bs.TotalMemories += len(br.FinalMemories)
+			if br.SnapshotTruncated {
+				bs.TruncatedSnapshots++
+			}
 			bs.TotalHits += len(br.Retrieval)
 			if br.Evidence != nil && br.Evidence.HasEvidenceLabels {
 				bs.EvidenceCases++
@@ -3130,6 +3156,10 @@ func classifyFailure(inst *lmeInstance, br *backendResult) string {
 	}
 	if !br.Evidence.HasEvidenceLabels {
 		return "no_evidence_labels"
+	}
+	if br.SnapshotTruncated && (!br.Evidence.ExtractRecallAny ||
+		(br.Evidence.HasAnswerTurnLabels && !br.Evidence.ExtractTurnRecallAny)) {
+		return "extraction_snapshot_incomplete"
 	}
 	if br.Evidence.HasAnswerTurnLabels && !br.Evidence.ExtractTurnRecallAny {
 		return "extraction_turn_miss"

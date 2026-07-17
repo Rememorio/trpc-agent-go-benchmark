@@ -211,9 +211,8 @@ func (b *refreshTestBackend) Search(
 func (b *refreshTestBackend) Read(
 	context.Context,
 	memory.UserKey,
-	int,
-) ([]memorySnapshot, error) {
-	return append([]memorySnapshot(nil), b.stored...), nil
+) ([]memorySnapshot, bool, error) {
+	return append([]memorySnapshot(nil), b.stored...), false, nil
 }
 
 func (*refreshTestBackend) SnapshotProviderUsage() lmeProviderUsage {

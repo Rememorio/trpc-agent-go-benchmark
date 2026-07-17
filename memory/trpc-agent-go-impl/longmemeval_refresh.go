@@ -214,9 +214,12 @@ func refreshLongMemEvalRetrievalResult(
 		}
 		log.Printf("refreshing retrieval %s type=%s", cr.QuestionID, cr.QuestionType)
 		userKey := memory.UserKey{AppName: lmeAppName, UserID: br.UserID}
-		stored, readErr := backend.Read(ctx, userKey, len(br.FinalMemories)+1)
+		stored, snapshotTruncated, readErr := backend.Read(ctx, userKey)
 		if readErr != nil {
 			return fmt.Errorf("read persisted memories for %s: %w", cr.QuestionID, readErr)
+		}
+		if snapshotTruncated {
+			return fmt.Errorf("verify persisted memories for %s: snapshot is truncated", cr.QuestionID)
 		}
 		if err := verifyLongMemEvalPersistedMemories(br.FinalMemories, stored); err != nil {
 			return fmt.Errorf("verify persisted memories for %s: %w", cr.QuestionID, err)
