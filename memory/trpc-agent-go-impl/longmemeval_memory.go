@@ -1213,18 +1213,15 @@ func runCaseBackend(
 			trace.ProviderUsageReported = providerUsage.Reported
 			trace.ProviderUsageError = providerUsage.Error
 			addLongMemEvalBackendUsage(br, usage, embeddingUsage, providerUsage)
-			inheritUpdateProvenance(
+			memories, newOrChanged := applySnapshotProvenance(
 				br.FinalMemories, memories,
 				provenance, answerProvenance,
+				sortedSet(pendingSources), pendingHasAnswer,
 			)
-			newOrChanged := diffSnapshots(br.FinalMemories, memories)
 			if len(newOrChanged) > 0 {
-				recordProvenance(provenance, answerProvenance, newOrChanged, sortedSet(pendingSources), pendingHasAnswer)
 				pendingSources = make(map[string]bool)
 				pendingHasAnswer = false
 			}
-			newOrChanged = annotateSnapshots(newOrChanged, provenance, answerProvenance)
-			memories = annotateSnapshots(memories, provenance, answerProvenance)
 			trace.MemoryCount = len(memories)
 			trace.SnapshotTruncated = snapshotTruncated
 			trace.NewMemories = newOrChanged
@@ -1261,11 +1258,11 @@ afterIngest:
 		br.Error = appendError(br.Error, "flush: "+err.Error())
 	}
 	if memories, snapshotTruncated, err := backend.Read(ctx, userKey); err == nil {
-		newOrChanged := diffSnapshots(br.FinalMemories, memories)
-		if len(newOrChanged) > 0 {
-			recordProvenance(provenance, answerProvenance, newOrChanged, sortedSet(pendingSources), pendingHasAnswer)
-		}
-		br.FinalMemories = annotateSnapshots(memories, provenance, answerProvenance)
+		br.FinalMemories, _ = applySnapshotProvenance(
+			br.FinalMemories, memories,
+			provenance, answerProvenance,
+			sortedSet(pendingSources), pendingHasAnswer,
+		)
 		br.SnapshotTruncated = snapshotTruncated
 	} else {
 		br.Error = appendError(br.Error, "final read: "+err.Error())
@@ -3092,6 +3089,26 @@ func equalMemorySnapshotContent(left, right memorySnapshot) bool {
 		left.EventTime == right.EventTime &&
 		slices.Equal(left.Participants, right.Participants) &&
 		left.Location == right.Location
+}
+
+func applySnapshotProvenance(
+	before []memorySnapshot,
+	after []memorySnapshot,
+	provenance map[string]map[string]bool,
+	answerProvenance map[string]bool,
+	sourceSessions []string,
+	hasAnswer bool,
+) ([]memorySnapshot, []memorySnapshot) {
+	inheritUpdateProvenance(before, after, provenance, answerProvenance)
+	newOrChanged := diffSnapshots(before, after)
+	if len(newOrChanged) > 0 {
+		recordProvenance(
+			provenance, answerProvenance,
+			newOrChanged, sourceSessions, hasAnswer,
+		)
+	}
+	return annotateSnapshots(after, provenance, answerProvenance),
+		annotateSnapshots(newOrChanged, provenance, answerProvenance)
 }
 
 func recordProvenance(

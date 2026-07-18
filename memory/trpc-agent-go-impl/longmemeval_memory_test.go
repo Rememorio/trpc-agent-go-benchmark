@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -2480,6 +2481,39 @@ func TestInheritUpdateProvenance(t *testing.T) {
 		len(annotated[0].SourceSessions) != 1 ||
 		annotated[0].SourceSessions[0] != "answer-session" {
 		t.Fatalf("stable snapshot provenance was not inherited: %+v", annotated)
+	}
+}
+
+func TestApplySnapshotProvenancePreservesUpdatedLineage(t *testing.T) {
+	t.Parallel()
+
+	createdAt := time.Date(2026, 7, 17, 20, 17, 38, 0, time.UTC)
+	before := []memorySnapshot{{
+		ID: "old-id", Memory: "old", CreatedAt: createdAt,
+	}}
+	after := []memorySnapshot{{
+		ID: "new-id", Memory: "new", CreatedAt: createdAt,
+	}}
+	provenance := map[string]map[string]bool{
+		"old-id": {"answer-session": true},
+	}
+	answerProvenance := map[string]bool{"old-id": true}
+
+	annotated, changed := applySnapshotProvenance(
+		before, after, provenance, answerProvenance,
+		[]string{"update-session"}, false,
+	)
+	for name, snapshots := range map[string][]memorySnapshot{
+		"final": annotated,
+		"trace": changed,
+	} {
+		if len(snapshots) != 1 || !snapshots[0].SourceHasAnswer ||
+			!slices.Equal(
+				snapshots[0].SourceSessions,
+				[]string{"answer-session", "update-session"},
+			) {
+			t.Fatalf("%s snapshots lost updated lineage: %+v", name, snapshots)
+		}
 	}
 }
 
