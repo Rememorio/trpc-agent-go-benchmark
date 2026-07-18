@@ -1080,7 +1080,7 @@ func TestRetryableMem0Response(t *testing.T) {
 	}
 }
 
-func TestMem0IngestRetryDelay(t *testing.T) {
+func TestMem0RequestRetryDelay(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -1098,7 +1098,7 @@ func TestMem0IngestRetryDelay(t *testing.T) {
 		{attempt: 8, want: time.Minute},
 	}
 	for _, test := range tests {
-		if got := mem0IngestRetryDelay(test.attempt); got != test.want {
+		if got := mem0RequestRetryDelay(test.attempt); got != test.want {
 			t.Fatalf("attempt %d delay = %s, want %s",
 				test.attempt, got, test.want)
 		}

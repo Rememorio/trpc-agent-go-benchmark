@@ -636,7 +636,7 @@ func (b *mem0Backend) ingestPairOSS(ctx context.Context, sess *session.Session, 
 	var lastErr error
 	for attempt := 0; attempt <= lmeMem0RequestRetries; attempt++ {
 		if attempt > 0 {
-			delay := mem0IngestRetryDelay(attempt)
+			delay := mem0RequestRetryDelay(attempt)
 			log.Printf("mem0 OSS ingest retry %d/%d in %s after transient error: %v",
 				attempt, lmeMem0RequestRetries, delay, lastErr)
 			if err := sleepWithContext(ctx, delay); err != nil {
@@ -679,7 +679,7 @@ func (b *mem0Backend) Search(ctx context.Context, userKey memory.UserKey, query 
 	var lastErr error
 	for attempt := 0; attempt <= lmeMem0RequestRetries; attempt++ {
 		if attempt > 0 {
-			delay := mem0IngestRetryDelay(attempt)
+			delay := mem0RequestRetryDelay(attempt)
 			log.Printf("mem0 OSS search retry %d/%d in %s after transient error: %v",
 				attempt, lmeMem0RequestRetries, delay, lastErr)
 			if err := sleepWithContext(ctx, delay); err != nil {
@@ -3476,7 +3476,7 @@ func mem0ProviderRateLimited(body []byte) bool {
 		payload.Code == "provider_rate_limited"
 }
 
-func mem0IngestRetryDelay(attempt int) time.Duration {
+func mem0RequestRetryDelay(attempt int) time.Duration {
 	if attempt <= 0 {
 		return 0
 	}
