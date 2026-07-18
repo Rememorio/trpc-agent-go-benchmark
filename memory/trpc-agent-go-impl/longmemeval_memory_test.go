@@ -12,6 +12,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"net/http"
@@ -591,7 +592,7 @@ func TestLMETracingExtractorStagesFallback(t *testing.T) {
 	}
 }
 
-func TestMem0OSSIngestRetriesTransientStatus(t *testing.T) {
+func TestMem0OSSIngestRetriesProviderRateLimit(t *testing.T) {
 	t.Parallel()
 
 	var attempts atomic.Int32
@@ -601,7 +602,10 @@ func TestMem0OSSIngestRetriesTransientStatus(t *testing.T) {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
 		if attempt == 1 {
-			http.Error(w, "busy", http.StatusTooManyRequests)
+			w.WriteHeader(http.StatusBadGateway)
+			_, _ = w.Write([]byte(
+				`{"detail":"Provider rate limit hit.","code":"provider_rate_limited"}`,
+			))
 			return
 		}
 		w.WriteHeader(http.StatusOK)
@@ -621,6 +625,47 @@ func TestMem0OSSIngestRetriesTransientStatus(t *testing.T) {
 	err := backend.ingestPairOSS(context.Background(), sess, ingestMeta{SessionID: "source"})
 	if err != nil {
 		t.Fatalf("ingest pair: %v", err)
+	}
+	if got := attempts.Load(); got != 2 {
+		t.Fatalf("unexpected attempts: got %d want 2", got)
+	}
+}
+
+func TestMem0OSSSearchRetriesProviderRateLimit(t *testing.T) {
+	t.Parallel()
+
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/search" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		if attempts.Add(1) == 1 {
+			w.WriteHeader(http.StatusBadGateway)
+			_, _ = w.Write([]byte(
+				`{"detail":"Provider rate limit hit.","code":"provider_rate_limited"}`,
+			))
+			return
+		}
+		_, _ = w.Write([]byte(`{"results":[]}`))
+	}))
+	defer server.Close()
+
+	svc, err := memorymem0.NewService(
+		memorymem0.WithHost(server.URL),
+		memorymem0.WithHTTPClient(server.Client()),
+		memorymem0.WithSelfHostedOSS(),
+	)
+	if err != nil {
+		t.Fatalf("new mem0 service: %v", err)
+	}
+	defer svc.Close()
+	backend := &mem0Backend{svc: svc, selfHosted: true}
+	_, err = backend.Search(context.Background(), memory.UserKey{
+		AppName: lmeAppName,
+		UserID:  "user",
+	}, "query", 30)
+	if err != nil {
+		t.Fatalf("search: %v", err)
 	}
 	if got := attempts.Load(); got != 2 {
 		t.Fatalf("unexpected attempts: got %d want 2", got)
@@ -999,11 +1044,17 @@ func TestPrepareLongMemEvalMem0Failures(t *testing.T) {
 	})
 }
 
-func TestRetryableMem0Status(t *testing.T) {
+func TestRetryableMem0Response(t *testing.T) {
 	t.Parallel()
 
-	if !isRetryableMem0Status(http.StatusTooManyRequests) {
+	if !isRetryableMem0Response(http.StatusTooManyRequests, nil) {
 		t.Fatal("status 429 should be retryable")
+	}
+	providerRateLimit := []byte(
+		`{"detail":"Provider rate limit hit.","code":"provider_rate_limited"}`,
+	)
+	if !isRetryableMem0Response(http.StatusBadGateway, providerRateLimit) {
+		t.Fatal("wrapped provider rate limit should be retryable")
 	}
 	for _, status := range []int{
 		http.StatusBadRequest,
@@ -1013,9 +1064,19 @@ func TestRetryableMem0Status(t *testing.T) {
 		http.StatusBadGateway,
 		http.StatusServiceUnavailable,
 	} {
-		if isRetryableMem0Status(status) {
+		if isRetryableMem0Response(status, []byte(`{"code":"other"}`)) {
 			t.Fatalf("status %d should not be retryable", status)
 		}
+	}
+	if !isRetryableMem0Error(errors.New(
+		`mem0 api request failed: status=502 body={"code":"provider_rate_limited"}`,
+	)) {
+		t.Fatal("wrapped provider rate limit error should be retryable")
+	}
+	if isRetryableMem0Error(errors.New(
+		`mem0 api request failed: status=502 body={"code":"other"}`,
+	)) {
+		t.Fatal("unrelated gateway error should not be retryable")
 	}
 }
 
@@ -1032,13 +1093,43 @@ func TestMem0IngestRetryDelay(t *testing.T) {
 		{attempt: 3, want: 4 * time.Second},
 		{attempt: 4, want: 8 * time.Second},
 		{attempt: 5, want: 16 * time.Second},
-		{attempt: 6, want: 16 * time.Second},
+		{attempt: 6, want: 32 * time.Second},
+		{attempt: 7, want: time.Minute},
+		{attempt: 8, want: time.Minute},
 	}
 	for _, test := range tests {
 		if got := mem0IngestRetryDelay(test.attempt); got != test.want {
 			t.Fatalf("attempt %d delay = %s, want %s",
 				test.attempt, got, test.want)
 		}
+	}
+}
+
+func TestLongMemEvalRuntimeError(t *testing.T) {
+	t.Parallel()
+
+	if err := longMemEvalRuntimeError(&runResult{Cases: []*caseResult{{
+		QuestionID: "question",
+		BackendResults: map[string]*backendResult{
+			"pgvector": {Backend: "pgvector"},
+		},
+	}}}); err != nil {
+		t.Fatalf("healthy run: %v", err)
+	}
+
+	err := longMemEvalRuntimeError(&runResult{Cases: []*caseResult{{
+		QuestionID: "question",
+		BackendResults: map[string]*backendResult{
+			"mem0": {
+				Backend:     "mem0",
+				Error:       "ingest failed",
+				AnswerError: "answer failed",
+			},
+		},
+	}}})
+	if err == nil || !strings.Contains(err.Error(), "question/mem0: ingest failed") ||
+		!strings.Contains(err.Error(), "question/mem0 answer: answer failed") {
+		t.Fatalf("runtime error = %v", err)
 	}
 }
 

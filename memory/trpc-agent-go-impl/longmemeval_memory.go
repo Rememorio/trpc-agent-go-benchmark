@@ -50,9 +50,9 @@ const (
 
 	lmePGVectorTableBase     = "lme_memory_eval"
 	defaultMem0Host          = "http://localhost:8888"
-	lmeMem0IngestRetries     = 5
+	lmeMem0RequestRetries    = 8
 	lmeMem0InitialRetryDelay = time.Second
-	lmeMem0MaximumRetryDelay = 16 * time.Second
+	lmeMem0MaximumRetryDelay = time.Minute
 	lmeMem0RequestOverhead   = time.Minute
 	lmeMem0RequestTimeout    = 10 * time.Minute
 	lmeAutoMemoryPoll        = 20 * time.Millisecond
@@ -634,11 +634,11 @@ func (b *mem0Backend) ingestPairOSS(ctx context.Context, sess *session.Session, 
 	}
 	endpoint := strings.TrimRight(b.host, "/") + "/memories"
 	var lastErr error
-	for attempt := 0; attempt <= lmeMem0IngestRetries; attempt++ {
+	for attempt := 0; attempt <= lmeMem0RequestRetries; attempt++ {
 		if attempt > 0 {
 			delay := mem0IngestRetryDelay(attempt)
 			log.Printf("mem0 OSS ingest retry %d/%d in %s after transient error: %v",
-				attempt, lmeMem0IngestRetries, delay, lastErr)
+				attempt, lmeMem0RequestRetries, delay, lastErr)
 			if err := sleepWithContext(ctx, delay); err != nil {
 				return err
 			}
@@ -665,7 +665,7 @@ func (b *mem0Backend) ingestPairOSS(ctx context.Context, sess *session.Session, 
 		}
 		lastErr = fmt.Errorf("mem0 OSS ingest failed: status=%d body=%s",
 			resp.StatusCode, strings.TrimSpace(string(body)))
-		if !isRetryableMem0Status(resp.StatusCode) {
+		if !isRetryableMem0Response(resp.StatusCode, body) {
 			return lastErr
 		}
 	}
@@ -673,14 +673,31 @@ func (b *mem0Backend) ingestPairOSS(ctx context.Context, sess *session.Session, 
 }
 
 func (b *mem0Backend) Search(ctx context.Context, userKey memory.UserKey, query string, topK int) ([]memoryHit, error) {
-	entries, err := b.svc.SearchMemories(ctx, userKey, query, memory.WithSearchOptions(memory.SearchOptions{
-		Query:      query,
-		MaxResults: topK,
-	}))
-	if err != nil {
-		return nil, err
+	searchOptions := memory.WithSearchOptions(memory.SearchOptions{
+		Query: query, MaxResults: topK,
+	})
+	var lastErr error
+	for attempt := 0; attempt <= lmeMem0RequestRetries; attempt++ {
+		if attempt > 0 {
+			delay := mem0IngestRetryDelay(attempt)
+			log.Printf("mem0 OSS search retry %d/%d in %s after transient error: %v",
+				attempt, lmeMem0RequestRetries, delay, lastErr)
+			if err := sleepWithContext(ctx, delay); err != nil {
+				return nil, err
+			}
+		}
+		entries, err := b.svc.SearchMemories(
+			ctx, userKey, query, searchOptions,
+		)
+		if err == nil {
+			return hitsFromEntries(entries), nil
+		}
+		lastErr = err
+		if !b.selfHosted || !isRetryableMem0Error(err) {
+			return nil, err
+		}
 	}
-	return hitsFromEntries(entries), nil
+	return nil, lastErr
 }
 
 func (b *mem0Backend) Read(
@@ -1050,7 +1067,39 @@ func runLongMemEvalMemory(ctx context.Context) error {
 	}
 	results.Summary = buildLongMemEvalSummary(results.Cases)
 	printLongMemEvalSummary(results)
-	return nil
+	return longMemEvalRuntimeError(results)
+}
+
+func longMemEvalRuntimeError(results *runResult) error {
+	if results == nil {
+		return errors.New("LongMemEval run produced no results")
+	}
+	var failures []string
+	for _, cr := range results.Cases {
+		if cr == nil {
+			continue
+		}
+		for backendName, br := range cr.BackendResults {
+			if br == nil {
+				failures = append(failures,
+					fmt.Sprintf("%s/%s: missing backend result", cr.QuestionID, backendName))
+				continue
+			}
+			if br.Error != "" {
+				failures = append(failures,
+					fmt.Sprintf("%s/%s: %s", cr.QuestionID, backendName, br.Error))
+			}
+			if br.AnswerError != "" {
+				failures = append(failures,
+					fmt.Sprintf("%s/%s answer: %s", cr.QuestionID, backendName, br.AnswerError))
+			}
+		}
+	}
+	if len(failures) == 0 {
+		return nil
+	}
+	return fmt.Errorf("LongMemEval run completed with %d backend error(s): %s",
+		len(failures), strings.Join(failures, "; "))
 }
 
 func longMemEvalCaseProgress(index, total int, inst *lmeInstance, blind bool) string {
@@ -3396,8 +3445,35 @@ func lmeObservationDate(date string) (string, bool) {
 	return t.Format(time.DateOnly), true
 }
 
-func isRetryableMem0Status(status int) bool {
-	return status == http.StatusTooManyRequests
+func isRetryableMem0Response(status int, body []byte) bool {
+	return status == http.StatusTooManyRequests ||
+		mem0ProviderRateLimited(body)
+}
+
+func isRetryableMem0Error(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := err.Error()
+	if strings.Contains(message, "status=429") {
+		return true
+	}
+	bodyMarker := " body="
+	bodyIndex := strings.LastIndex(message, bodyMarker)
+	if bodyIndex < 0 {
+		return false
+	}
+	return mem0ProviderRateLimited(
+		[]byte(message[bodyIndex+len(bodyMarker):]),
+	)
+}
+
+func mem0ProviderRateLimited(body []byte) bool {
+	var payload struct {
+		Code string `json:"code"`
+	}
+	return json.Unmarshal(body, &payload) == nil &&
+		payload.Code == "provider_rate_limited"
 }
 
 func mem0IngestRetryDelay(attempt int) time.Duration {
