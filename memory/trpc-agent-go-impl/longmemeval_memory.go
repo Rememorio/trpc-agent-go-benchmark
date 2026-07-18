@@ -257,6 +257,8 @@ type backendResult struct {
 	RerankError           string              `json:"rerank_error,omitempty"`
 	Answer                string              `json:"answer,omitempty"`
 	RawAnswer             string              `json:"raw_answer,omitempty"`
+	AnswerCacheKey        string              `json:"answer_cache_key,omitempty"`
+	AnswerSource          string              `json:"answer_source,omitempty"`
 	AnswerModelCalls      []lmeModelCallTrace `json:"answer_model_calls,omitempty"`
 	TokenUsage            *lmeTokenUsage      `json:"token_usage,omitempty"`
 	EmbeddingUsage        *lmeEmbeddingUsage  `json:"embedding_usage,omitempty"`
@@ -945,6 +947,10 @@ func runLongMemEvalMemory(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	answerCache, err := openConfiguredLongMemEvalAnswerCache()
+	if err != nil {
+		return err
+	}
 
 	backends := parseMemoryBackends(*flagMemoryBackends)
 	mem0Implementation := ""
@@ -1020,6 +1026,7 @@ func runLongMemEvalMemory(ctx context.Context) error {
 	if mem0Implementation != "" {
 		results.Metadata["mem0_implementation"] = mem0Implementation
 	}
+	initializeLongMemEvalAnswerCacheMetadata(results.Metadata, answerCache)
 	for _, backend := range backends {
 		if backend == "mem0" {
 			mode := "self-hosted-oss"
@@ -1061,13 +1068,17 @@ func runLongMemEvalMemory(ctx context.Context) error {
 				continue
 			}
 			tracker.Snapshot()
-			br := runCaseBackend(ctx, llm, tracker, backend, inst, runID)
+			br := runCaseBackend(
+				ctx, llm, tracker, backend, inst, runID,
+				modelName, modelVariant, answerCache,
+			)
 			cr.BackendResults[backendName] = br
 			_ = backend.Close()
 			log.Print(longMemEvalBackendProgress(backendName, br, *flagLMEBlindProgress))
 			saveCaseLog(*flagOutput, cr, br)
 		}
 		results.Cases = append(results.Cases, cr)
+		updateLongMemEvalAnswerCacheMetadata(results.Metadata, answerCache)
 		results.Summary = buildLongMemEvalSummary(results.Cases)
 		saveLongMemEvalResults(*flagOutput, results)
 	}
@@ -1141,6 +1152,9 @@ func runCaseBackend(
 	backend memoryBackend,
 	inst *lmeInstance,
 	runID string,
+	modelName string,
+	modelVariant string,
+	answerCache *longMemEvalAnswerCache,
 ) *backendResult {
 	start := time.Now()
 	userID := fmt.Sprintf("%s-%s-%s", backend.Name(), inst.QuestionID, runID)
@@ -1294,7 +1308,9 @@ afterIngest:
 
 	if *flagLMEAnswer {
 		answerStart := time.Now()
-		rawAnswer, err := answerFromMemories(ctx, llm, inst, hits)
+		rawAnswer, cacheKey, source, err := resolveLongMemEvalAnswer(
+			ctx, llm, modelName, modelVariant, inst, hits, answerCache, "",
+		)
 		br.AnswerModelCalls = tracker.SnapshotCalls()
 		usage, embeddingUsage, providerUsage := snapshotLongMemEvalUsage(
 			tracker,
@@ -1308,6 +1324,8 @@ afterIngest:
 		}
 		br.RawAnswer = rawAnswer
 		br.Answer = strings.TrimSpace(rawAnswer)
+		br.AnswerCacheKey = cacheKey
+		br.AnswerSource = source
 	}
 	usage, embeddingUsage, providerUsage := snapshotLongMemEvalUsage(
 		tracker,
@@ -1604,6 +1622,10 @@ func reanswerLongMemEvalResults(ctx context.Context, path, outputDir string) err
 	if err != nil {
 		return err
 	}
+	answerCache, err := openConfiguredLongMemEvalAnswerCache()
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(outputDir, 0755); err != nil {
 		return fmt.Errorf("create re-answer output dir: %w", err)
 	}
@@ -1613,6 +1635,7 @@ func reanswerLongMemEvalResults(ctx context.Context, path, outputDir string) err
 		baseLLM,
 		modelName,
 		modelVariant,
+		answerCache,
 		filepath.Join(outputDir, "reanswered_results.json"),
 	)
 }
@@ -1623,6 +1646,7 @@ func reanswerLongMemEvalResult(
 	baseLLM model.Model,
 	modelName string,
 	modelVariant string,
+	answerCache *longMemEvalAnswerCache,
 	outPath string,
 ) error {
 	if result == nil {
@@ -1631,6 +1655,9 @@ func reanswerLongMemEvalResult(
 	if result.Metadata == nil {
 		result.Metadata = make(map[string]any)
 	}
+	reuseExistingAnswers := longMemEvalAnswerProvenanceMatches(
+		result.Metadata, modelName, modelVariant,
+	)
 	result.Metadata["reanswer_model"] = modelName
 	result.Metadata["reanswer_model_variant"] = modelVariant
 	result.Metadata["reanswer_build"] = currentLongMemEvalBuildProvenance()
@@ -1642,6 +1669,7 @@ func reanswerLongMemEvalResult(
 	result.Metadata["reanswered_at"] = time.Now().UTC().Format(time.RFC3339)
 	result.Metadata["answer_scoring"] = "raw model output; no retrieval-assisted answer post-processing"
 	result.Metadata["reanswer_note"] = "Answers regenerated from saved ranked retrieval hits; backend-specific similarity scores are not shown to the answer model. Responses ending with a length finish reason are retried once with the recorded larger token limit."
+	initializeLongMemEvalAnswerCacheMetadata(result.Metadata, answerCache)
 	clearLongMemEvalJudgeRunMetadata(result.Metadata)
 	for _, cr := range result.Cases {
 		if cr == nil {
@@ -1683,13 +1711,22 @@ func reanswerLongMemEvalResult(
 				timeout: *flagLMEModelCallTimeout,
 			}
 			start := time.Now()
-			raw, answerErr := answerFromMemories(ctx, llm, inst, br.Retrieval)
+			existingAnswer := ""
+			if answerCache != nil && reuseExistingAnswers && br.AnswerError == "" {
+				existingAnswer = br.RawAnswer
+			}
+			raw, cacheKey, source, answerErr := resolveLongMemEvalAnswer(
+				ctx, llm, modelName, modelVariant, inst, br.Retrieval,
+				answerCache, existingAnswer,
+			)
 			br.AnswerModelCalls = tracker.SnapshotCalls()
 			usage := tracker.Snapshot()
 			replaceLongMemEvalAnswerUsage(br, usage)
 			br.AnswerDuration = time.Since(start).Milliseconds()
 			br.RawAnswer = raw
 			br.Answer = strings.TrimSpace(raw)
+			br.AnswerCacheKey = cacheKey
+			br.AnswerSource = source
 			resetLongMemEvalAnswerError(br)
 			if answerErr != nil {
 				br.AnswerError = answerErr.Error()
@@ -1707,11 +1744,13 @@ func reanswerLongMemEvalResult(
 					usage.TotalTokens, answerErr)
 			}
 		}
+		updateLongMemEvalAnswerCacheMetadata(result.Metadata, answerCache)
 		result.Summary = buildLongMemEvalSummary(result.Cases)
 		if err := writeLongMemEvalResults(outPath, result); err != nil {
 			return fmt.Errorf("checkpoint re-answered results: %w", err)
 		}
 	}
+	updateLongMemEvalAnswerCacheMetadata(result.Metadata, answerCache)
 	result.Summary = buildLongMemEvalSummary(result.Cases)
 	printLongMemEvalSummary(result)
 	log.Printf("LongMemEval re-answered results written to %s", outPath)
@@ -2804,8 +2843,12 @@ func saveCaseLog(outputDir string, cr *caseResult, br *backendResult) {
 		}
 		fmt.Fprintf(&b, "%d. score=%.4f%s has_answer=%v %s\n", i+1, hit.Score, source, hit.SourceHasAnswer, hit.Memory)
 	}
-	fmt.Fprintf(&b, "\n=== Answer ===\n%s\n\nExactMatch: %v\nF1: %.4f\nBLEU: %.4f\n",
-		br.Answer, br.ExactMatch, br.F1, br.BLEU)
+	fmt.Fprintf(
+		&b,
+		"\n=== Answer ===\n%s\n\nAnswerSource: %s\nAnswerCacheKey: %s\nExactMatch: %v\nF1: %.4f\nBLEU: %.4f\n",
+		br.Answer, br.AnswerSource, br.AnswerCacheKey,
+		br.ExactMatch, br.F1, br.BLEU,
+	)
 	if br.AnswerUsage != nil {
 		fmt.Fprintf(&b, "AnswerTokenUsage: prompt=%d completion=%d total=%d cached=%d calls=%d cache_hit=%.4f\n",
 			br.AnswerUsage.PromptTokens,

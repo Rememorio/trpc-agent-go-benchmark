@@ -276,6 +276,27 @@ func validateLongMemEvalComparison(baseline, candidate *runResult) error {
 			return err
 		}
 	}
+	if longMemEvalMetadataPresent(baseline.Metadata, "answer_cache_format_version") ||
+		longMemEvalMetadataPresent(candidate.Metadata, "answer_cache_format_version") {
+		for _, key := range []string{
+			"answer_cache_format_version",
+			"answer_cache_shared",
+			"answer_cache_ledger_id",
+		} {
+			if err := compareLongMemEvalMetadataValue(
+				baseline.Metadata,
+				candidate.Metadata,
+				key,
+				true,
+			); err != nil {
+				return err
+			}
+		}
+		baselineShared, ok := baseline.Metadata["answer_cache_shared"].(bool)
+		if !ok || !baselineShared {
+			return errors.New("strict LongMemEval comparison requires a shared answer cache")
+		}
+	}
 	if longMemEvalMetadataPresent(baseline.Metadata, "judge_runs") ||
 		longMemEvalMetadataPresent(candidate.Metadata, "judge_runs") {
 		for _, key := range []string{

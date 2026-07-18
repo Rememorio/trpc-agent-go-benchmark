@@ -78,6 +78,10 @@ func rerankLongMemEvalResult(
 			*flagLMERerankTopN,
 		)
 	}
+	answerCache, err := openConfiguredLongMemEvalAnswerCache()
+	if err != nil {
+		return err
+	}
 	sourceTopK, err := validateLongMemEvalRerankSource(result)
 	if err != nil {
 		return err
@@ -119,6 +123,7 @@ func rerankLongMemEvalResult(
 	result.Metadata["judge_protocol_version"] = lmeJudgeProtocolVersion
 	result.Metadata["judge_generation"] = currentLongMemEvalJudgeGeneration()
 	result.Metadata["answer_scoring"] = "raw model output; no retrieval-assisted answer post-processing"
+	initializeLongMemEvalAnswerCacheMetadata(result.Metadata, answerCache)
 	clearLongMemEvalJudgeRunMetadata(result.Metadata)
 	for _, cr := range result.Cases {
 		if cr == nil {
@@ -191,14 +196,17 @@ func rerankLongMemEvalResult(
 				base: baseLLM, tracker: answerTracker, timeout: *flagLMEModelCallTimeout,
 			}
 			answerStart := time.Now()
-			rawAnswer, answerErr := answerFromMemories(
-				ctx, answerLLM, inst, br.Retrieval,
+			rawAnswer, cacheKey, source, answerErr := resolveLongMemEvalAnswer(
+				ctx, answerLLM, modelName, modelVariant, inst, br.Retrieval,
+				answerCache, "",
 			)
 			br.AnswerDuration = time.Since(answerStart).Milliseconds()
 			br.AnswerModelCalls = answerTracker.SnapshotCalls()
 			replaceLongMemEvalAnswerUsage(br, answerTracker.Snapshot())
 			br.RawAnswer = rawAnswer
 			br.Answer = strings.TrimSpace(rawAnswer)
+			br.AnswerCacheKey = cacheKey
+			br.AnswerSource = source
 			br.Judge = nil
 			resetLongMemEvalAnswerError(br)
 			if answerErr != nil {
@@ -214,6 +222,7 @@ func rerankLongMemEvalResult(
 			br.FailureStage = classifyFailure(inst, br)
 			completed++
 			rerankMetadata["completed_backends"] = completed
+			updateLongMemEvalAnswerCacheMetadata(result.Metadata, answerCache)
 			result.Summary = buildLongMemEvalSummary(result.Cases)
 			if err := writeLongMemEvalResults(outPath, result); err != nil {
 				return fmt.Errorf("checkpoint reranked results: %w", err)
@@ -229,6 +238,7 @@ func rerankLongMemEvalResult(
 			}
 		}
 	}
+	updateLongMemEvalAnswerCacheMetadata(result.Metadata, answerCache)
 	result.Summary = buildLongMemEvalSummary(result.Cases)
 	if err := writeLongMemEvalResults(outPath, result); err != nil {
 		return err

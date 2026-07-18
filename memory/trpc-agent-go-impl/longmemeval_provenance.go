@@ -10,6 +10,7 @@
 package main
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -34,11 +35,12 @@ const (
 
 	// These versions are part of the experiment contract. Bump the relevant
 	// version whenever replay, prompting, or judging semantics change.
-	lmeProtocolVersion         = "lme-memory-turn-pair-v1"
-	lmeAnswerPromptVersion     = "lme-memory-answer-v5"
-	lmeJudgePromptVersion      = "lme-official-adapted-judge-v2"
-	lmeJudgeProtocolVersion    = "lme-content-addressed-verdict-v1"
-	lmeJudgeCacheFormatVersion = "lme-judge-cache-v1"
+	lmeProtocolVersion          = "lme-memory-turn-pair-v1"
+	lmeAnswerPromptVersion      = "lme-memory-answer-v5"
+	lmeJudgePromptVersion       = "lme-official-adapted-judge-v2"
+	lmeJudgeProtocolVersion     = "lme-content-addressed-verdict-v1"
+	lmeJudgeCacheFormatVersion  = "lme-judge-cache-v1"
+	lmeAnswerCacheFormatVersion = "lme-answer-cache-v1"
 )
 
 var (
@@ -206,6 +208,14 @@ func longMemEvalJSONSHA256(value any) (string, error) {
 	}
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:]), nil
+}
+
+func newLongMemEvalLedgerID() (string, error) {
+	var value [16]byte
+	if _, err := rand.Read(value[:]); err != nil {
+		return "", fmt.Errorf("generate LongMemEval ledger id: %w", err)
+	}
+	return hex.EncodeToString(value[:]), nil
 }
 
 func longMemEvalExperimentDigests(

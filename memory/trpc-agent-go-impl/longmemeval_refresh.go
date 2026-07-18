@@ -159,6 +159,10 @@ func refreshLongMemEvalRetrievalResult(
 	if baseLLM == nil {
 		return errors.New("retrieval refresh model is nil")
 	}
+	answerCache, err := openConfiguredLongMemEvalAnswerCache()
+	if err != nil {
+		return err
+	}
 	if result.Metadata == nil {
 		result.Metadata = make(map[string]any)
 	}
@@ -184,6 +188,7 @@ func refreshLongMemEvalRetrievalResult(
 	result.Metadata["judge_protocol_version"] = lmeJudgeProtocolVersion
 	result.Metadata["judge_generation"] = currentLongMemEvalJudgeGeneration()
 	result.Metadata["answer_scoring"] = "raw model output; no retrieval-assisted answer post-processing"
+	initializeLongMemEvalAnswerCacheMetadata(result.Metadata, answerCache)
 	clearLongMemEvalJudgeRunMetadata(result.Metadata)
 	for _, cr := range result.Cases {
 		if cr != nil {
@@ -257,13 +262,17 @@ func refreshLongMemEvalRetrievalResult(
 				base: baseLLM, tracker: tracker, timeout: *flagLMEModelCallTimeout,
 			}
 			answerStart := time.Now()
-			raw, answerErr := answerFromMemories(ctx, llm, inst, hits)
+			raw, cacheKey, source, answerErr := resolveLongMemEvalAnswer(
+				ctx, llm, modelName, modelVariant, inst, hits, answerCache, "",
+			)
 			br.AnswerDuration = time.Since(answerStart).Milliseconds()
 			br.AnswerModelCalls = tracker.SnapshotCalls()
 			usage := tracker.Snapshot()
 			replaceLongMemEvalAnswerUsage(br, usage)
 			br.RawAnswer = raw
 			br.Answer = strings.TrimSpace(raw)
+			br.AnswerCacheKey = cacheKey
+			br.AnswerSource = source
 			if answerErr != nil {
 				br.AnswerError = answerErr.Error()
 			}
@@ -279,6 +288,7 @@ func refreshLongMemEvalRetrievalResult(
 		completed++
 		refresh["completed_cases"] = completed
 		refresh["embedding_usage"] = embeddingUsage
+		updateLongMemEvalAnswerCacheMetadata(result.Metadata, answerCache)
 		result.Summary = buildLongMemEvalSummary(result.Cases)
 		if err := writeLongMemEvalResults(outPath, result); err != nil {
 			return fmt.Errorf("checkpoint retrieval refresh results: %w", err)
@@ -293,6 +303,7 @@ func refreshLongMemEvalRetrievalResult(
 		}
 	}
 	refresh["embedding_usage"] = embeddingUsage
+	updateLongMemEvalAnswerCacheMetadata(result.Metadata, answerCache)
 	result.Summary = buildLongMemEvalSummary(result.Cases)
 	printLongMemEvalSummary(result)
 	log.Printf("LongMemEval retrieval-refreshed results written to %s", outPath)

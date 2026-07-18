@@ -1444,7 +1444,7 @@ func TestReanswerLongMemEvalResult(t *testing.T) {
 	}
 	outPath := filepath.Join(t.TempDir(), "reanswered_results.json")
 	if err := reanswerLongMemEvalResult(
-		context.Background(), result, llm, "answer-model", "glm", outPath,
+		context.Background(), result, llm, "answer-model", "glm", nil, outPath,
 	); err != nil {
 		t.Fatalf("re-answer result: %v", err)
 	}
@@ -1496,7 +1496,9 @@ func TestReanswerLongMemEvalResult(t *testing.T) {
 	if got.Summary == nil || got.Summary.BackendSummaries["mem0"].ExactMatches != 1 {
 		t.Fatalf("unexpected re-answer summary: %+v", got.Summary)
 	}
-	if err := reanswerLongMemEvalResult(context.Background(), nil, llm, "", "", outPath); err == nil {
+	if err := reanswerLongMemEvalResult(
+		context.Background(), nil, llm, "", "", nil, outPath,
+	); err == nil {
 		t.Fatal("nil result should fail")
 	}
 }
@@ -3264,6 +3266,66 @@ func TestValidateLongMemEvalComparisonRequiresSharedJudgeLedger(t *testing.T) {
 	err := validateLongMemEvalComparison(baseline, candidate)
 	if err == nil || !strings.Contains(err.Error(), "requires a shared judge cache") {
 		t.Fatalf("unshared judge cache error = %v", err)
+	}
+}
+
+func TestValidateLongMemEvalComparisonRequiresSharedAnswerLedger(t *testing.T) {
+	t.Parallel()
+
+	newResult := func(implementation string) *runResult {
+		metadata := testLongMemEvalComparisonMetadata(implementation)
+		metadata["answer_cache_format_version"] = lmeAnswerCacheFormatVersion
+		metadata["answer_cache_shared"] = true
+		metadata["answer_cache_ledger_id"] = "shared-answer-ledger"
+		return &runResult{Metadata: metadata}
+	}
+	for _, test := range []struct {
+		name      string
+		mutate    func(map[string]any)
+		wantError string
+	}{
+		{
+			name: "different ledger",
+			mutate: func(metadata map[string]any) {
+				metadata["answer_cache_ledger_id"] = "different-ledger"
+			},
+			wantError: "answer_cache_ledger_id",
+		},
+		{
+			name: "missing cache provenance",
+			mutate: func(metadata map[string]any) {
+				delete(metadata, "answer_cache_format_version")
+				delete(metadata, "answer_cache_shared")
+				delete(metadata, "answer_cache_ledger_id")
+			},
+			wantError: "answer_cache_format_version",
+		},
+		{
+			name: "ephemeral cache",
+			mutate: func(metadata map[string]any) {
+				metadata["answer_cache_shared"] = false
+			},
+			wantError: "answer_cache_shared",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			baseline := newResult("upstream-main")
+			candidate := newResult("candidate-2196")
+			test.mutate(candidate.Metadata)
+			err := validateLongMemEvalComparison(baseline, candidate)
+			if err == nil || !strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf("shared answer ledger error = %v, want %q", err, test.wantError)
+			}
+		})
+	}
+
+	baseline := newResult("upstream-main")
+	candidate := newResult("candidate-2196")
+	baseline.Metadata["answer_cache_shared"] = false
+	candidate.Metadata["answer_cache_shared"] = false
+	err := validateLongMemEvalComparison(baseline, candidate)
+	if err == nil || !strings.Contains(err.Error(), "requires a shared answer cache") {
+		t.Fatalf("unshared answer cache error = %v", err)
 	}
 }
 

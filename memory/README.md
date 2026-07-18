@@ -283,6 +283,7 @@ LME_AGENT_PROFILE=upstream \
   -pgvector-update-policy reconcile \
   -pgvector-assistant-result-extraction=false \
   -lme-answer=true \
+  -lme-answer-cache ../results/lme-answer-cache.json \
   -mem0-llm-temperature 0 \
   -vector-topk 30 \
   -table-suffix _lme_upstream \
@@ -301,6 +302,7 @@ LME_AGENT_PROFILE=upstream \
   -pgvector-update-policy history-preserving \
   -pgvector-assistant-result-extraction=true \
   -lme-answer=true \
+  -lme-answer-cache ../results/lme-answer-cache.json \
   -vector-topk 30 \
   -table-suffix _lme_candidate \
   -output ../results/lme-candidate
@@ -318,6 +320,7 @@ LME_AGENT_PROFILE=upstream \
 ./run-longmemeval.sh \
   -dataset-format longmemeval \
   -lme-reanswer-results ../results/lme-upstream/results.json \
+  -lme-answer-cache ../results/lme-answer-cache.json \
   -output ../results/lme-upstream
 ./run-longmemeval.sh \
   -dataset-format longmemeval \
@@ -370,6 +373,16 @@ go run . \
   -lme-compare-results ../results/lme-upstream/judged_results.json,../results/lme-candidate/judged_results.json \
   -output ../results/lme-candidate
 ```
+
+`-lme-answer-cache` supplies a shared, content-addressed answer ledger. Its key
+covers the exact ordered memories and metadata shown to the answer model, the
+question prompt, model, variant, generation settings, and protocol versions;
+storage IDs and similarity scores that the model cannot see do not affect the
+key. Cache hits record their source and key and contribute zero answer-model
+calls or tokens. Re-answering a result may seed the ledger from an existing
+successful answer only when the recorded model, variant, prompt version, and
+generation settings all match. A strict comparison rejects runs that record
+different answer ledgers or do not both use a persistent shared ledger.
 
 The judge command checkpoints `judged_results.json` after each case. An odd
 `-lme-judge-runs` value greater than one records every independent vote and
@@ -478,6 +491,7 @@ LongMemEval-specific options:
 | `-lme-ingest-wait`       | 250ms   | Extra delay after completed pair ingestion   |
 | `-lme-model-call-timeout` | 5m      | Model timeout and mem0 OSS request cap       |
 | `-lme-answer`            | true    | Generate answers from retrieved memories     |
+| `-lme-answer-cache`      |         | Shared content-addressed answer cache         |
 | `-lme-blind-progress`    | false   | Hide answers and quality from progress logs  |
 | `-lme-implementation`    | (env)   | Reproducible implementation label            |
 | `-lme-reanswer-results`   |         | Re-answer using saved ranked retrieval hits  |

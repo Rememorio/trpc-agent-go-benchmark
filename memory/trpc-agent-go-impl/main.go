@@ -237,6 +237,11 @@ var (
 		"",
 		"Shared content-addressed LongMemEval judge cache file",
 	)
+	flagLMEAnswerCache = flag.String(
+		"lme-answer-cache",
+		"",
+		"Shared content-addressed LongMemEval answer cache file",
+	)
 	flagLoCoMoReuseMemories = flag.Bool(
 		"locomo-reuse-memories",
 		false,

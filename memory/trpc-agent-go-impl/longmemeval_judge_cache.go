@@ -11,7 +11,6 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -77,7 +76,7 @@ func openLongMemEvalJudgeCache(path string) (*longMemEvalJudgeCache, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			ledgerID, err := newLongMemEvalJudgeLedgerID()
+			ledgerID, err := newLongMemEvalLedgerID()
 			if err != nil {
 				return nil, err
 			}
@@ -317,14 +316,6 @@ func cloneLongMemEvalJudgeResult(judge *lmeJudgeResult) (*lmeJudgeResult, error)
 		return nil, fmt.Errorf("clone LongMemEval judge cache result: %w", err)
 	}
 	return &result, nil
-}
-
-func newLongMemEvalJudgeLedgerID() (string, error) {
-	var value [16]byte
-	if _, err := rand.Read(value[:]); err != nil {
-		return "", fmt.Errorf("generate LongMemEval judge ledger id: %w", err)
-	}
-	return hex.EncodeToString(value[:]), nil
 }
 
 func clearLongMemEvalJudgeRunMetadata(metadata map[string]any) {
