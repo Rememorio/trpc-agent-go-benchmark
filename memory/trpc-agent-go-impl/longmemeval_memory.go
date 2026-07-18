@@ -1213,6 +1213,10 @@ func runCaseBackend(
 			trace.ProviderUsageReported = providerUsage.Reported
 			trace.ProviderUsageError = providerUsage.Error
 			addLongMemEvalBackendUsage(br, usage, embeddingUsage, providerUsage)
+			inheritUpdateProvenance(
+				br.FinalMemories, memories,
+				provenance, answerProvenance,
+			)
 			newOrChanged := diffSnapshots(br.FinalMemories, memories)
 			if len(newOrChanged) > 0 {
 				recordProvenance(provenance, answerProvenance, newOrChanged, sortedSet(pendingSources), pendingHasAnswer)
@@ -3119,6 +3123,68 @@ func recordProvenance(
 		if hasAnswer {
 			answerProvenance[key] = true
 		}
+	}
+}
+
+func inheritUpdateProvenance(
+	before []memorySnapshot,
+	after []memorySnapshot,
+	provenance map[string]map[string]bool,
+	answerProvenance map[string]bool,
+) {
+	if len(before) == 0 || len(after) == 0 {
+		return
+	}
+	beforeByCreatedAt := snapshotsByCreatedAt(before)
+	afterByCreatedAt := snapshotsByCreatedAt(after)
+	for createdAt, previous := range beforeByCreatedAt {
+		current := afterByCreatedAt[createdAt]
+		if len(previous) != 1 || len(current) != 1 {
+			continue
+		}
+		inheritMemoryProvenance(
+			memoryIdentity(previous[0]), memoryIdentity(current[0]),
+			provenance, answerProvenance,
+		)
+	}
+}
+
+func snapshotsByCreatedAt(
+	memories []memorySnapshot,
+) map[int64][]memorySnapshot {
+	result := make(map[int64][]memorySnapshot, len(memories))
+	for _, mem := range memories {
+		if mem.CreatedAt.IsZero() {
+			continue
+		}
+		key := mem.CreatedAt.UnixNano()
+		result[key] = append(result[key], mem)
+	}
+	return result
+}
+
+func inheritMemoryProvenance(
+	previousKey string,
+	currentKey string,
+	provenance map[string]map[string]bool,
+	answerProvenance map[string]bool,
+) {
+	if previousKey == "" || currentKey == "" || previousKey == currentKey {
+		return
+	}
+	previousSources := provenance[previousKey]
+	if len(previousSources) > 0 {
+		currentSources := provenance[currentKey]
+		if currentSources == nil {
+			currentSources = make(map[string]bool, len(previousSources))
+			provenance[currentKey] = currentSources
+		}
+		for source := range previousSources {
+			currentSources[source] = true
+		}
+	}
+	if answerProvenance[previousKey] {
+		answerProvenance[currentKey] = true
 	}
 }
 

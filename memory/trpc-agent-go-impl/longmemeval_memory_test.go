@@ -2458,6 +2458,56 @@ func TestDiffSnapshotsIncludesMetadataOnlyChanges(t *testing.T) {
 	}
 }
 
+func TestInheritUpdateProvenance(t *testing.T) {
+	t.Parallel()
+
+	createdAt := time.Date(2026, 7, 17, 20, 17, 38, 0, time.UTC)
+	before := []memorySnapshot{{
+		ID: "old-id", Memory: "old", CreatedAt: createdAt,
+	}}
+	after := []memorySnapshot{{
+		ID: "new-id", Memory: "new", CreatedAt: createdAt,
+	}}
+	provenance := map[string]map[string]bool{
+		"old-id": {"answer-session": true},
+	}
+	answerProvenance := map[string]bool{"old-id": true}
+	inheritUpdateProvenance(before, after, provenance, answerProvenance)
+
+	annotated := annotateSnapshots(after, provenance, answerProvenance)
+	if len(annotated) != 1 ||
+		!annotated[0].SourceHasAnswer ||
+		len(annotated[0].SourceSessions) != 1 ||
+		annotated[0].SourceSessions[0] != "answer-session" {
+		t.Fatalf("stable snapshot provenance was not inherited: %+v", annotated)
+	}
+}
+
+func TestInheritUpdateProvenanceRequiresUniqueTarget(t *testing.T) {
+	t.Parallel()
+
+	createdAt := time.Date(2026, 7, 17, 20, 17, 38, 0, time.UTC)
+	before := []memorySnapshot{{
+		ID: "old-id", Memory: "old", CreatedAt: createdAt,
+	}}
+	after := []memorySnapshot{
+		{ID: "new-1", Memory: "same", CreatedAt: createdAt},
+		{ID: "new-2", Memory: "same", CreatedAt: createdAt},
+	}
+	provenance := map[string]map[string]bool{
+		"old-id": {"source": true},
+	}
+	answerProvenance := map[string]bool{"old-id": true}
+	inheritUpdateProvenance(before, after, provenance, answerProvenance)
+
+	for _, mem := range after {
+		key := memoryIdentity(mem)
+		if len(provenance[key]) != 0 || answerProvenance[key] {
+			t.Fatalf("ambiguous target inherited provenance: %s", key)
+		}
+	}
+}
+
 func TestNewLongMemEvalAnswerRequestDisablesThinking(t *testing.T) {
 	req := newLongMemEvalAnswerRequest("answer this")
 	if len(req.Messages) != 1 || req.Messages[0].Content != "answer this" {
