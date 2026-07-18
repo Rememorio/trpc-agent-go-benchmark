@@ -1305,7 +1305,9 @@ func TestBuildLongMemEvalAnswerPromptNonPreference(t *testing.T) {
 	}
 	if !strings.Contains(normalizedPrompt, `A memory beginning "Assistant result:"`) ||
 		!strings.Contains(normalizedPrompt, "it is not a fact confirmed by the user") ||
-		!strings.Contains(normalizedPrompt, "what the assistant answered, recommended") {
+		!strings.Contains(normalizedPrompt, "question explicitly asks what the assistant") ||
+		!strings.Contains(normalizedPrompt, "arithmetic, comparison, or planning") ||
+		!strings.Contains(normalizedPrompt, "Never use an unconfirmed assistant estimate") {
 		t.Fatalf("missing assistant-result provenance guidance: %s", prompt)
 	}
 }

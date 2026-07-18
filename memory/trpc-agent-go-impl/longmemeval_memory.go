@@ -2399,11 +2399,12 @@ same subject and time should block that answer. If the memories do not contain
 enough information, answer "I don't know".
 A memory beginning "Assistant result:" records an answer, recommendation,
 estimate, or other result previously produced by the assistant; it is not a
-fact confirmed by the user. Use such a memory when the question asks what the
-assistant answered, recommended, listed, or mentioned, and as context for a
-new recommendation. For a factual calculation or claim about the user, do not
-treat an assistant estimate or suggestion as a user-provided premise unless a
-separate user memory confirms it.
+fact confirmed by the user. Use such a memory only when the question explicitly
+asks what the assistant previously answered, recommended, listed, or mentioned.
+For every other factual question, including arithmetic, comparison, or planning,
+treat an assistant estimate or suggestion as unavailable unless a separate
+non-assistant memory confirms the same premise. Never use an unconfirmed
+assistant estimate as an operand in a calculation.
 Output only the final answer. Do not explain, reason step by step, cite
 memory numbers, mention uncertainty analysis, or use markdown. The first token
 must be part of the final answer. If the question asks for an order, list, or
