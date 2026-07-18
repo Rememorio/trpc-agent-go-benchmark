@@ -2969,6 +2969,116 @@ func TestCompareLongMemEvalResults(t *testing.T) {
 	}
 }
 
+func TestCompareLongMemEvalResultsSupportsSingleBaselineArm(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name          string
+		backend       string
+		wantFile      string
+		unwantedFile  string
+		wantSection   string
+		absentSection string
+	}{
+		{
+			name:          "pgvector",
+			backend:       "pgvector",
+			wantFile:      "comparison.tsv",
+			unwantedFile:  "mem0_comparison.tsv",
+			wantSection:   "Upstream Pgvector vs Candidate",
+			absentSection: "Mem0 vs Candidate Pgvector",
+		},
+		{
+			name:          "mem0",
+			backend:       "mem0",
+			wantFile:      "mem0_comparison.tsv",
+			unwantedFile:  "comparison.tsv",
+			wantSection:   "Mem0 vs Candidate Pgvector",
+			absentSection: "Upstream Pgvector vs Candidate",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			baseDir := t.TempDir()
+			candidateDir := t.TempDir()
+			outputDir := t.TempDir()
+			basePath := filepath.Join(baseDir, "results.json")
+			candidatePath := filepath.Join(candidateDir, "results.json")
+			baseMetadata := testLongMemEvalComparisonMetadata("baseline-" + test.backend)
+			if test.backend == "pgvector" {
+				delete(baseMetadata, "mem0_implementation")
+			}
+			base := &runResult{
+				Metadata: baseMetadata,
+				Cases: []*caseResult{{
+					QuestionID:   "q1",
+					QuestionType: "single-session-assistant",
+					Question:     "Which option was recommended?",
+					Answer:       "Option B",
+					BackendResults: map[string]*backendResult{
+						test.backend: {
+							Backend:      test.backend,
+							FailureStage: "answer_miss",
+							Answer:       "I don't know.",
+						},
+					},
+				}},
+			}
+			candidate := &runResult{
+				Metadata: testLongMemEvalComparisonMetadata("candidate-2196"),
+				Cases: []*caseResult{{
+					QuestionID:   "q1",
+					QuestionType: "single-session-assistant",
+					Question:     "Which option was recommended?",
+					Answer:       "Option B",
+					BackendResults: map[string]*backendResult{
+						"pgvector": {
+							Backend:      "pgvector",
+							FailureStage: "ok",
+							ExactMatch:   true,
+							Answer:       "Option B",
+							F1:           1,
+							BLEU:         1,
+						},
+					},
+				}},
+			}
+			saveLongMemEvalResults(baseDir, base)
+			saveLongMemEvalResults(candidateDir, candidate)
+			if err := os.WriteFile(
+				filepath.Join(outputDir, test.unwantedFile),
+				[]byte("stale"),
+				0644,
+			); err != nil {
+				t.Fatalf("write stale %s: %v", test.unwantedFile, err)
+			}
+
+			if err := compareLongMemEvalResults(basePath, candidatePath, outputDir); err != nil {
+				t.Fatalf("compare single baseline arm: %v", err)
+			}
+			if _, err := os.Stat(filepath.Join(outputDir, test.wantFile)); err != nil {
+				t.Fatalf("stat %s: %v", test.wantFile, err)
+			}
+			if _, err := os.Stat(filepath.Join(outputDir, test.unwantedFile)); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("stat %s error = %v, want not exist", test.unwantedFile, err)
+			}
+			report, err := os.ReadFile(filepath.Join(outputDir, "comparison.md"))
+			if err != nil {
+				t.Fatalf("read comparison.md: %v", err)
+			}
+			text := string(report)
+			if !strings.Contains(text, "Two-Arm Summary") ||
+				!strings.Contains(text, test.wantSection) {
+				t.Fatalf("comparison.md missing single-arm sections: %s", text)
+			}
+			if strings.Contains(text, test.absentSection) {
+				t.Fatalf("comparison.md contains absent section %q: %s", test.absentSection, text)
+			}
+		})
+	}
+}
+
 func testLongMemEvalComparisonMetadata(implementation string) map[string]any {
 	return map[string]any{
 		"implementation":             implementation,
@@ -3182,14 +3292,105 @@ func TestValidateLongMemEvalComparisonRequiresMem0Implementation(t *testing.T) {
 
 	baseline := &runResult{
 		Metadata: testLongMemEvalComparisonMetadata("upstream-main"),
+		Cases: []*caseResult{{
+			QuestionID: "q1",
+			BackendResults: map[string]*backendResult{
+				"mem0": {Backend: "mem0"},
+			},
+		}},
 	}
 	delete(baseline.Metadata, "mem0_implementation")
 	candidate := &runResult{
 		Metadata: testLongMemEvalComparisonMetadata("candidate-2196"),
+		Cases: []*caseResult{{
+			QuestionID: "q1",
+			BackendResults: map[string]*backendResult{
+				"pgvector": {Backend: "pgvector"},
+			},
+		}},
 	}
 	err := validateLongMemEvalComparison(baseline, candidate)
 	if err == nil || !strings.Contains(err.Error(), "Mem0 implementation") {
 		t.Fatalf("missing Mem0 implementation error = %v", err)
+	}
+}
+
+func TestValidateLongMemEvalComparisonRejectsInvalidBaselineArms(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name      string
+		baseline  []*caseResult
+		candidate []*caseResult
+		wantError string
+	}{
+		{
+			name:      "no cases",
+			wantError: "contains no LongMemEval cases",
+		},
+		{
+			name: "no supported arm",
+			baseline: []*caseResult{{
+				QuestionID:     "q1",
+				BackendResults: map[string]*backendResult{},
+			}},
+			candidate: []*caseResult{{
+				QuestionID: "q1",
+				BackendResults: map[string]*backendResult{
+					"pgvector": {Backend: "pgvector"},
+				},
+			}},
+			wantError: "must contain a pgvector or mem0 arm",
+		},
+		{
+			name: "inconsistent arm set",
+			baseline: []*caseResult{
+				{
+					QuestionID: "q1",
+					BackendResults: map[string]*backendResult{
+						"pgvector": {Backend: "pgvector"},
+					},
+				},
+				{
+					QuestionID: "q2",
+					BackendResults: map[string]*backendResult{
+						"mem0": {Backend: "mem0"},
+					},
+				},
+			},
+			candidate: []*caseResult{
+				{
+					QuestionID: "q1",
+					BackendResults: map[string]*backendResult{
+						"pgvector": {Backend: "pgvector"},
+					},
+				},
+				{
+					QuestionID: "q2",
+					BackendResults: map[string]*backendResult{
+						"pgvector": {Backend: "pgvector"},
+					},
+				},
+			},
+			wantError: "inconsistent backend arm set",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			baseline := &runResult{
+				Metadata: testLongMemEvalComparisonMetadata("baseline"),
+				Cases:    test.baseline,
+			}
+			candidate := &runResult{
+				Metadata: testLongMemEvalComparisonMetadata("candidate"),
+				Cases:    test.candidate,
+			}
+			err := validateLongMemEvalComparison(baseline, candidate)
+			if err == nil || !strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf("baseline arm validation error = %v, want %q", err, test.wantError)
+			}
+		})
 	}
 }
 

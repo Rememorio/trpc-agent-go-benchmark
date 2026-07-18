@@ -136,30 +136,28 @@ func compareLongMemEvalResults(baselinePath, candidatePath, outputDir string) er
 	if err := os.MkdirAll(outputDir, 0755); err != nil {
 		return fmt.Errorf("create compare output dir: %w", err)
 	}
-	rows := compareLongMemEvalRows(
-		filterLongMemEvalAnalysisRows(longMemEvalAnalysisRows(baseline), "pgvector"),
-		filterLongMemEvalAnalysisRows(longMemEvalAnalysisRows(candidate), "pgvector"),
+	baselineRows := longMemEvalAnalysisRows(baseline)
+	candidateRows := filterLongMemEvalAnalysisRows(
+		longMemEvalAnalysisRows(candidate),
+		"pgvector",
 	)
-	if len(rows) == 0 {
-		return errors.New("no shared pgvector cases to compare")
-	}
-	if err := os.WriteFile(filepath.Join(outputDir, "comparison.tsv"), []byte(formatLongMemEvalComparisonTSV(rows)), 0644); err != nil {
-		return fmt.Errorf("write comparison.tsv: %w", err)
+	rows := compareLongMemEvalRows(
+		filterLongMemEvalAnalysisRows(baselineRows, "pgvector"),
+		candidateRows,
+	)
+	if err := writeLongMemEvalComparisonTSV(outputDir, "comparison.tsv", rows); err != nil {
+		return err
 	}
 	mem0Rows := compareLongMemEvalCrossBackendRows(
-		filterLongMemEvalAnalysisRows(longMemEvalAnalysisRows(baseline), "mem0"),
-		filterLongMemEvalAnalysisRows(longMemEvalAnalysisRows(candidate), "pgvector"),
+		filterLongMemEvalAnalysisRows(baselineRows, "mem0"),
+		candidateRows,
 		"candidate-pgvector-vs-mem0",
 	)
-	if len(mem0Rows) == 0 {
-		return errors.New("no shared candidate pgvector and Mem0 cases to compare")
+	if err := writeLongMemEvalComparisonTSV(outputDir, "mem0_comparison.tsv", mem0Rows); err != nil {
+		return err
 	}
-	if err := os.WriteFile(
-		filepath.Join(outputDir, "mem0_comparison.tsv"),
-		[]byte(formatLongMemEvalComparisonTSV(mem0Rows)),
-		0644,
-	); err != nil {
-		return fmt.Errorf("write mem0_comparison.tsv: %w", err)
+	if len(rows) == 0 && len(mem0Rows) == 0 {
+		return errors.New("no shared LongMemEval baseline and candidate cases to compare")
 	}
 	report := formatLongMemEvalComparisonMarkdown(
 		baselinePath,
@@ -173,6 +171,20 @@ func compareLongMemEvalResults(baselinePath, candidatePath, outputDir string) er
 		return fmt.Errorf("write comparison.md: %w", err)
 	}
 	fmt.Printf("LongMemEval comparison written to %s\n", outputDir)
+	return nil
+}
+
+func writeLongMemEvalComparisonTSV(outputDir, name string, rows []lmeCompareRow) error {
+	path := filepath.Join(outputDir, name)
+	if len(rows) == 0 {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("remove stale %s: %w", name, err)
+		}
+		return nil
+	}
+	if err := os.WriteFile(path, []byte(formatLongMemEvalComparisonTSV(rows)), 0644); err != nil {
+		return fmt.Errorf("write %s: %w", name, err)
+	}
 	return nil
 }
 
@@ -191,9 +203,11 @@ func validateLongMemEvalComparison(baseline, candidate *runResult) error {
 	if baselineImplementation == candidateImplementation {
 		return fmt.Errorf("baseline and candidate use the same implementation label %q", baselineImplementation)
 	}
-	mem0Implementation, ok := lmeMetadataString(baseline.Metadata, "mem0_implementation")
-	if !ok || mem0Implementation == "" || mem0Implementation == "unspecified" {
-		return errors.New("baseline is missing a specific Mem0 implementation label")
+	if longMemEvalResultHasBackend(baseline, "mem0") {
+		mem0Implementation, ok := lmeMetadataString(baseline.Metadata, "mem0_implementation")
+		if !ok || mem0Implementation == "" || mem0Implementation == "unspecified" {
+			return errors.New("baseline is missing a specific Mem0 implementation label")
+		}
 	}
 
 	required := []string{
@@ -446,6 +460,9 @@ func lmeMetadataString(metadata map[string]any, key string) (string, bool) {
 }
 
 func validateLongMemEvalComparisonArms(baseline, candidate *runResult) error {
+	if len(baseline.Cases) == 0 {
+		return errors.New("baseline contains no LongMemEval cases")
+	}
 	candidateCases := make(map[string]*caseResult, len(candidate.Cases))
 	for _, cr := range candidate.Cases {
 		if cr != nil {
@@ -459,13 +476,25 @@ func validateLongMemEvalComparisonArms(baseline, candidate *runResult) error {
 			len(candidate.Cases),
 		)
 	}
-	for _, baseCase := range baseline.Cases {
+	var baselineHasPGVector, baselineHasMem0 bool
+	for i, baseCase := range baseline.Cases {
 		if baseCase == nil {
 			return errors.New("baseline contains a nil LongMemEval case")
 		}
-		if baseCase.BackendResults["pgvector"] == nil || baseCase.BackendResults["mem0"] == nil {
+		hasPGVector := baseCase.BackendResults["pgvector"] != nil
+		hasMem0 := baseCase.BackendResults["mem0"] != nil
+		if !hasPGVector && !hasMem0 {
 			return fmt.Errorf(
-				"baseline case %q must contain both pgvector and mem0 arms",
+				"baseline case %q must contain a pgvector or mem0 arm",
+				baseCase.QuestionID,
+			)
+		}
+		if i == 0 {
+			baselineHasPGVector = hasPGVector
+			baselineHasMem0 = hasMem0
+		} else if hasPGVector != baselineHasPGVector || hasMem0 != baselineHasMem0 {
+			return fmt.Errorf(
+				"baseline case %q has an inconsistent backend arm set",
 				baseCase.QuestionID,
 			)
 		}
@@ -480,6 +509,18 @@ func validateLongMemEvalComparisonArms(baseline, candidate *runResult) error {
 		}
 	}
 	return nil
+}
+
+func longMemEvalResultHasBackend(result *runResult, backend string) bool {
+	if result == nil {
+		return false
+	}
+	for _, cr := range result.Cases {
+		if cr != nil && cr.BackendResults[backend] != nil {
+			return true
+		}
+	}
+	return false
 }
 
 func filterLongMemEvalAnalysisRows(rows []lmeAnalysisRow, backend string) []lmeAnalysisRow {
@@ -927,22 +968,29 @@ func formatLongMemEvalComparisonMarkdown(
 	fmt.Fprintf(&b, "- Baseline implementation: `%s`\n", longMemEvalResultImplementation(baseline))
 	fmt.Fprintf(&b, "- Candidate implementation: `%s`\n", longMemEvalResultImplementation(candidate))
 	b.WriteString("- Correctness uses the semantic judge when available and falls back to exact match; no model calls are made.\n")
-	b.WriteString("- Pgvector and Mem0 deltas use only cases present in both runs. Mem0 is frozen from the baseline run and is not rerun.\n")
+	b.WriteString("- Deltas use only cases present in both runs.\n")
+	if len(mem0Rows) > 0 {
+		b.WriteString("- Mem0 is frozen from the baseline run and is not rerun.\n")
+	}
 	b.WriteString("- Identical normalized questions, references, and answers are treated as unchanged; conflicting judge verdicts are counted as ignored judge drift.\n\n")
 
 	writeLongMemEvalComparisonArms(&b, baseline, candidate)
 
-	writeLongMemEvalDeltaSummary(&b, "Upstream Pgvector vs Candidate", rows)
-	b.WriteString("\n## Top Pgvector Improvements\n\n")
-	writeCompareRowsTable(&b, topCompareRows(rows, true, 20))
-	b.WriteString("\n## Top Pgvector Regressions\n\n")
-	writeCompareRowsTable(&b, topCompareRows(rows, false, 20))
+	if len(rows) > 0 {
+		writeLongMemEvalDeltaSummary(&b, "Upstream Pgvector vs Candidate", rows)
+		b.WriteString("\n## Top Pgvector Improvements\n\n")
+		writeCompareRowsTable(&b, topCompareRows(rows, true, 20))
+		b.WriteString("\n## Top Pgvector Regressions\n\n")
+		writeCompareRowsTable(&b, topCompareRows(rows, false, 20))
+	}
 
-	writeLongMemEvalDeltaSummary(&b, "Mem0 vs Candidate Pgvector", mem0Rows)
-	b.WriteString("\n## Candidate Wins over Mem0\n\n")
-	writeCompareRowsTable(&b, topCompareRows(mem0Rows, true, 20))
-	b.WriteString("\n## Candidate Losses to Mem0\n\n")
-	writeCompareRowsTable(&b, topCompareRows(mem0Rows, false, 20))
+	if len(mem0Rows) > 0 {
+		writeLongMemEvalDeltaSummary(&b, "Mem0 vs Candidate Pgvector", mem0Rows)
+		b.WriteString("\n## Candidate Wins over Mem0\n\n")
+		writeCompareRowsTable(&b, topCompareRows(mem0Rows, true, 20))
+		b.WriteString("\n## Candidate Losses to Mem0\n\n")
+		writeCompareRowsTable(&b, topCompareRows(mem0Rows, false, 20))
+	}
 	return b.String()
 }
 
@@ -979,16 +1027,36 @@ func longMemEvalResultImplementation(result *runResult) string {
 }
 
 func writeLongMemEvalComparisonArms(b *strings.Builder, baseline, candidate *runResult) {
-	b.WriteString("## Three-Arm Summary\n\n")
+	hasPGVector := longMemEvalResultHasBackend(baseline, "pgvector")
+	hasMem0 := longMemEvalResultHasBackend(baseline, "mem0")
+	if hasPGVector && hasMem0 {
+		b.WriteString("## Three-Arm Summary\n\n")
+	} else {
+		b.WriteString("## Two-Arm Summary\n\n")
+	}
 	b.WriteString("| Arm | Implementation | Backend | Cases | Correct | EM | Avg F1 | Memories | LLM Calls | LLM Tokens | Cached | Embedding Calls | Embedding Tokens | Ingest (s) |\n")
 	b.WriteString("|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n")
-	writeLongMemEvalComparisonArm(
-		b,
-		"upstream baseline",
-		longMemEvalResultImplementation(baseline),
-		"pgvector",
-		baseline,
-	)
+	if hasPGVector {
+		arm := "baseline"
+		if hasMem0 {
+			arm = "upstream baseline"
+		}
+		writeLongMemEvalComparisonArm(
+			b,
+			arm,
+			longMemEvalResultImplementation(baseline),
+			"pgvector",
+			baseline,
+		)
+	} else if hasMem0 {
+		writeLongMemEvalComparisonArm(
+			b,
+			"baseline",
+			longMemEvalReferenceImplementation(baseline),
+			"mem0",
+			baseline,
+		)
+	}
 	writeLongMemEvalComparisonArm(
 		b,
 		"candidate",
@@ -996,13 +1064,15 @@ func writeLongMemEvalComparisonArms(b *strings.Builder, baseline, candidate *run
 		"pgvector",
 		candidate,
 	)
-	writeLongMemEvalComparisonArm(
-		b,
-		"reference",
-		longMemEvalReferenceImplementation(baseline),
-		"mem0",
-		baseline,
-	)
+	if hasPGVector && hasMem0 {
+		writeLongMemEvalComparisonArm(
+			b,
+			"reference",
+			longMemEvalReferenceImplementation(baseline),
+			"mem0",
+			baseline,
+		)
+	}
 	b.WriteByte('\n')
 }
 
