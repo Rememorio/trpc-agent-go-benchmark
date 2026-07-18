@@ -1707,6 +1707,16 @@ func TestExtractionTraceEvidenceDistinguishesPersistence(t *testing.T) {
 	if got := classifyFailure(inst, br); got != "extraction_turn_miss" {
 		t.Fatalf("failure stage = %q, want extraction_turn_miss", got)
 	}
+
+	br.Backend = "mem0"
+	br.IngestTraces[0].Extraction = nil
+	br.Evidence = computeEvidenceMetrics(inst, br, 30)
+	if br.Evidence.HasExtractionTrace {
+		t.Fatalf("Mem0 evidence claimed unavailable extraction trace: %+v", br.Evidence)
+	}
+	if got := classifyFailure(inst, br); got != "extraction_turn_miss" {
+		t.Fatalf("conservative Mem0 stage = %q, want extraction_turn_miss", got)
+	}
 }
 
 func TestNormalizedFailureStageMigratesLegacyStages(t *testing.T) {
