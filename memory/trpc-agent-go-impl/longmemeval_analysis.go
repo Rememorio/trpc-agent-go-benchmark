@@ -817,6 +817,20 @@ func evidenceStatus(ev *evidenceMetrics) string {
 	if !ev.HasEvidenceLabels {
 		return "unlabeled"
 	}
+	if ev.HasExtractionTrace && ev.HasAnswerTurnLabels &&
+		!ev.ExtractionTraceTurnRecallAny {
+		return "extraction_turn_miss"
+	}
+	if ev.HasExtractionTrace && !ev.ExtractionTraceRecallAny {
+		return "extraction_session_miss"
+	}
+	if ev.HasExtractionTrace && ev.HasAnswerTurnLabels &&
+		!ev.ExtractTurnRecallAny {
+		return "persistence_turn_miss"
+	}
+	if ev.HasExtractionTrace && !ev.ExtractRecallAny {
+		return "persistence_session_miss"
+	}
 	if ev.HasAnswerTurnLabels && !ev.ExtractTurnRecallAny {
 		return "extraction_turn_miss"
 	}

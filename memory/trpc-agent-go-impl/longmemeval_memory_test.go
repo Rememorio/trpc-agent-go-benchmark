@@ -1572,12 +1572,37 @@ func TestClassifyFailurePreservesEvidenceGranularity(t *testing.T) {
 		{
 			name: "truncated extraction evidence",
 			evidence: evidenceMetrics{
-				HasEvidenceLabels:   true,
-				HasAnswerTurnLabels: true,
+				HasEvidenceLabels:            true,
+				HasExtractionTrace:           true,
+				ExtractionTraceRecallAny:     true,
+				HasAnswerTurnLabels:          true,
+				ExtractionTraceTurnRecallAny: true,
 			},
 			truncated: true,
 			want:      "extraction_snapshot_incomplete",
-			status:    "extraction_turn_miss",
+			status:    "persistence_turn_miss",
+		},
+		{
+			name: "answer turn persistence miss",
+			evidence: evidenceMetrics{
+				HasEvidenceLabels:            true,
+				HasExtractionTrace:           true,
+				ExtractionTraceRecallAny:     true,
+				HasAnswerTurnLabels:          true,
+				ExtractionTraceTurnRecallAny: true,
+			},
+			want:   "persistence_turn_miss",
+			status: "persistence_turn_miss",
+		},
+		{
+			name: "answer session persistence miss",
+			evidence: evidenceMetrics{
+				HasEvidenceLabels:        true,
+				HasExtractionTrace:       true,
+				ExtractionTraceRecallAny: true,
+			},
+			want:   "persistence_session_miss",
+			status: "persistence_session_miss",
 		},
 		{
 			name: "answer turn retrieval miss",
@@ -1643,6 +1668,44 @@ func TestClassifyFailurePreservesEvidenceGranularity(t *testing.T) {
 				t.Fatalf("evidenceStatus() = %q, want %q", got, test.status)
 			}
 		})
+	}
+}
+
+func TestExtractionTraceEvidenceDistinguishesPersistence(t *testing.T) {
+	t.Parallel()
+
+	inst := &lmeInstance{
+		AnswerSessionIDs: []string{"answer-session"},
+		HaystackSessions: [][]lmeTurn{{{HasAnswer: true}}},
+	}
+	br := &backendResult{
+		Backend: "pgvector",
+		IngestTraces: []ingestTrace{{
+			SessionID: "answer-session",
+			HasAnswer: true,
+			Extraction: &extractionTrace{Operations: []extractionOperation{{
+				Type: extractor.OperationAdd, Memory: "answer evidence",
+			}}},
+		}},
+	}
+
+	evidence := computeEvidenceMetrics(inst, br, 30)
+	if !evidence.HasExtractionTrace || !evidence.ExtractionTraceRecallAny ||
+		!evidence.ExtractionTraceTurnRecallAny ||
+		!slices.Equal(evidence.ExtractionTraceSourceSessions, []string{"answer-session"}) {
+		t.Fatalf("extraction trace evidence = %+v", evidence)
+	}
+	br.Evidence = evidence
+	if got := classifyFailure(inst, br); got != "persistence_turn_miss" {
+		t.Fatalf("failure stage = %q, want persistence_turn_miss", got)
+	}
+
+	br.IngestTraces[0].Extraction.Operations = []extractionOperation{{
+		Type: extractor.OperationDelete, MemoryID: "unrelated",
+	}}
+	br.Evidence = computeEvidenceMetrics(inst, br, 30)
+	if got := classifyFailure(inst, br); got != "extraction_turn_miss" {
+		t.Fatalf("failure stage = %q, want extraction_turn_miss", got)
 	}
 }
 

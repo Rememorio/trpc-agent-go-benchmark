@@ -349,18 +349,22 @@ type backendSummary struct {
 }
 
 type evidenceMetrics struct {
-	HasEvidenceLabels       bool     `json:"has_evidence_labels"`
-	IsAbstention            bool     `json:"is_abstention"`
-	TopK                    int      `json:"top_k"`
-	AnswerSessionIDs        []string `json:"answer_session_ids,omitempty"`
-	ExtractedSourceSessions []string `json:"extracted_source_sessions,omitempty"`
-	RetrievedSourceSessions []string `json:"retrieved_source_sessions,omitempty"`
-	ExtractRecallAny        bool     `json:"extract_recall_any"`
-	RetrievalRecallAny      bool     `json:"retrieval_recall_any"`
-	RetrievalRecallAll      bool     `json:"retrieval_recall_all"`
-	HasAnswerTurnLabels     bool     `json:"has_answer_turn_labels"`
-	ExtractTurnRecallAny    bool     `json:"extract_turn_recall_any"`
-	RetrievalTurnRecallAny  bool     `json:"retrieval_turn_recall_any"`
+	HasEvidenceLabels             bool     `json:"has_evidence_labels"`
+	IsAbstention                  bool     `json:"is_abstention"`
+	TopK                          int      `json:"top_k"`
+	AnswerSessionIDs              []string `json:"answer_session_ids,omitempty"`
+	ExtractionTraceSourceSessions []string `json:"extraction_trace_source_sessions,omitempty"`
+	ExtractedSourceSessions       []string `json:"extracted_source_sessions,omitempty"`
+	RetrievedSourceSessions       []string `json:"retrieved_source_sessions,omitempty"`
+	HasExtractionTrace            bool     `json:"has_extraction_trace"`
+	ExtractionTraceRecallAny      bool     `json:"extraction_trace_recall_any"`
+	ExtractRecallAny              bool     `json:"extract_recall_any"`
+	RetrievalRecallAny            bool     `json:"retrieval_recall_any"`
+	RetrievalRecallAll            bool     `json:"retrieval_recall_all"`
+	HasAnswerTurnLabels           bool     `json:"has_answer_turn_labels"`
+	ExtractionTraceTurnRecallAny  bool     `json:"extraction_trace_turn_recall_any"`
+	ExtractTurnRecallAny          bool     `json:"extract_turn_recall_any"`
+	RetrievalTurnRecallAny        bool     `json:"retrieval_turn_recall_any"`
 }
 
 type pgvectorBackend struct {
@@ -999,6 +1003,8 @@ func runLongMemEvalMemory(ctx context.Context) error {
 				"memory:last_extract_at completion after each pair",
 			"retrieval_note": "retrieval hits are searched memories, not raw transcript chunks",
 			"evidence_note":  "source_sessions are inferred from the pair after which a memory first appeared or changed.",
+			"extraction_trace_note": "pgvector captures model-emitted add/update operations before reconciliation so extraction and persistence misses can be separated; " +
+				"Mem0 has no equivalent internal operation trace and keeps the conservative persisted-memory classification.",
 			"answer_scoring": "raw model output; no retrieval-assisted answer post-processing",
 			"blind_progress": *flagLMEBlindProgress,
 			"memory_snapshot": "pgvector and hosted mem0 read all memories; self-hosted mem0 OSS " +
@@ -2692,15 +2698,19 @@ func saveCaseLog(outputDir string, cr *caseResult, br *backendResult) {
 	fmt.Fprintf(&b, "Backend: %s\nUserID: %s\nPairs: %d\nSnapshotTruncated: %v\nError: %s\nAnswerError: %s\n\n",
 		br.Backend, br.UserID, br.IngestedPairs, br.SnapshotTruncated, br.Error, br.AnswerError)
 	if br.Evidence != nil {
-		fmt.Fprintf(&b, "Evidence: stage=%s has_labels=%v abstention=%v extract_any=%v retrieval_any=%v retrieval_all=%v turn_extract_any=%v turn_retrieval_any=%v extracted=%s retrieved=%s\n\n",
+		fmt.Fprintf(&b, "Evidence: stage=%s has_labels=%v abstention=%v has_extraction_trace=%v trace_any=%v extract_any=%v retrieval_any=%v retrieval_all=%v turn_trace_any=%v turn_extract_any=%v turn_retrieval_any=%v traced=%s extracted=%s retrieved=%s\n\n",
 			br.FailureStage,
 			br.Evidence.HasEvidenceLabels,
 			br.Evidence.IsAbstention,
+			br.Evidence.HasExtractionTrace,
+			br.Evidence.ExtractionTraceRecallAny,
 			br.Evidence.ExtractRecallAny,
 			br.Evidence.RetrievalRecallAny,
 			br.Evidence.RetrievalRecallAll,
+			br.Evidence.ExtractionTraceTurnRecallAny,
 			br.Evidence.ExtractTurnRecallAny,
 			br.Evidence.RetrievalTurnRecallAny,
+			strings.Join(br.Evidence.ExtractionTraceSourceSessions, ","),
 			strings.Join(br.Evidence.ExtractedSourceSessions, ","),
 			strings.Join(br.Evidence.RetrievedSourceSessions, ","))
 	}
@@ -3280,6 +3290,8 @@ func computeEvidenceMetrics(inst *lmeInstance, br *backendResult, topK int) *evi
 		answerSet[id] = true
 	}
 	ev.HasEvidenceLabels = len(answerSet) > 0 && !ev.IsAbstention
+	ev.HasExtractionTrace, ev.ExtractionTraceSourceSessions,
+		ev.ExtractionTraceTurnRecallAny = extractionTraceEvidence(br, answerSet)
 	ev.ExtractedSourceSessions = matchingSourceSessionsFromSnapshots(br.FinalMemories, answerSet)
 	ev.RetrievedSourceSessions = matchingSourceSessionsFromHits(br.Retrieval, answerSet)
 	ev.ExtractTurnRecallAny = hasAnswerSourceSnapshot(br.FinalMemories)
@@ -3289,10 +3301,51 @@ func computeEvidenceMetrics(inst *lmeInstance, br *backendResult, topK int) *evi
 	}
 	extractedSet := stringSet(ev.ExtractedSourceSessions)
 	retrievedSet := stringSet(ev.RetrievedSourceSessions)
+	ev.ExtractionTraceRecallAny = len(ev.ExtractionTraceSourceSessions) > 0
 	ev.ExtractRecallAny = intersects(extractedSet, answerSet)
 	ev.RetrievalRecallAny = intersects(retrievedSet, answerSet)
 	ev.RetrievalRecallAll = containsAll(retrievedSet, answerSet)
 	return ev
+}
+
+func extractionTraceEvidence(
+	br *backendResult,
+	answerSet map[string]bool,
+) (bool, []string, bool) {
+	if br == nil {
+		return false, nil, false
+	}
+	available := false
+	matchingSessions := make(map[string]bool)
+	turnRecallAny := false
+	for _, trace := range br.IngestTraces {
+		if trace.Extraction != nil {
+			available = true
+		}
+		if trace.Extraction == nil ||
+			!hasMemoryProducingExtractionOperation(trace.Extraction.Operations) {
+			continue
+		}
+		sessionID := strings.TrimSpace(trace.SessionID)
+		if answerSet[sessionID] {
+			matchingSessions[sessionID] = true
+		}
+		if trace.HasAnswer {
+			turnRecallAny = true
+		}
+	}
+	return available, sortedSet(matchingSessions), turnRecallAny
+}
+
+func hasMemoryProducingExtractionOperation(operations []extractionOperation) bool {
+	for _, operation := range operations {
+		if (operation.Type == extractor.OperationAdd ||
+			operation.Type == extractor.OperationUpdate) &&
+			strings.TrimSpace(operation.Memory) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func matchingSourceSessionsFromSnapshots(memories []memorySnapshot, answerSet map[string]bool) []string {
@@ -3359,9 +3412,23 @@ func classifyFailure(inst *lmeInstance, br *backendResult) string {
 	if !br.Evidence.HasEvidenceLabels {
 		return "no_evidence_labels"
 	}
+	if br.Evidence.HasExtractionTrace && br.Evidence.HasAnswerTurnLabels &&
+		!br.Evidence.ExtractionTraceTurnRecallAny {
+		return "extraction_turn_miss"
+	}
+	if br.Evidence.HasExtractionTrace && !br.Evidence.ExtractionTraceRecallAny {
+		return "extraction_session_miss"
+	}
 	if br.SnapshotTruncated && (!br.Evidence.ExtractRecallAny ||
 		(br.Evidence.HasAnswerTurnLabels && !br.Evidence.ExtractTurnRecallAny)) {
 		return "extraction_snapshot_incomplete"
+	}
+	if br.Evidence.HasExtractionTrace && br.Evidence.HasAnswerTurnLabels &&
+		!br.Evidence.ExtractTurnRecallAny {
+		return "persistence_turn_miss"
+	}
+	if br.Evidence.HasExtractionTrace && !br.Evidence.ExtractRecallAny {
+		return "persistence_session_miss"
 	}
 	if br.Evidence.HasAnswerTurnLabels && !br.Evidence.ExtractTurnRecallAny {
 		return "extraction_turn_miss"
