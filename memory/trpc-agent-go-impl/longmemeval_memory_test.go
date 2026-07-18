@@ -1217,6 +1217,10 @@ func TestBuildLongMemEvalAnswerPromptPreferenceGuidance(t *testing.T) {
 	if !strings.Contains(prompt, "do not invent missing personal context") {
 		t.Fatalf("missing unsupported-context guard: %s", prompt)
 	}
+	if !strings.Contains(prompt, "acknowledge it before suggesting complementary") ||
+		!strings.Contains(prompt, "never reintroduce the remembered choice itself") {
+		t.Fatalf("missing established-preference guidance: %s", prompt)
+	}
 	if !strings.Contains(prompt, "[kind=episode; event_time=2023-05-20; participants=Alice; location=Community Center]") {
 		t.Fatalf("missing memory metadata: %s", prompt)
 	}
@@ -1299,6 +1303,11 @@ func TestBuildLongMemEvalAnswerPromptNonPreference(t *testing.T) {
 	if !strings.Contains(normalizedPrompt, "not include markdown") {
 		t.Fatalf("missing markdown/explanation guard: %s", prompt)
 	}
+	if !strings.Contains(normalizedPrompt, `A memory beginning "Assistant result:"`) ||
+		!strings.Contains(normalizedPrompt, "it is not a fact confirmed by the user") ||
+		!strings.Contains(normalizedPrompt, "what the assistant answered, recommended") {
+		t.Fatalf("missing assistant-result provenance guidance: %s", prompt)
+	}
 }
 
 func TestBuildLongMemEvalAnswerPromptKnowledgeUpdateTimeline(t *testing.T) {
@@ -1332,6 +1341,11 @@ func TestBuildLongMemEvalAnswerPromptKnowledgeUpdateTimeline(t *testing.T) {
 		!strings.Contains(normalizedPrompt,
 			"temporal rule overrides the general ranked-evidence rule") {
 		t.Fatalf("missing event-time precedence guidance: %s", prompt)
+	}
+	if !strings.Contains(normalizedPrompt, "later event_time must override") ||
+		!strings.Contains(normalizedPrompt, "undated conflicting state") ||
+		!strings.Contains(normalizedPrompt, `"moved back"`) {
+		t.Fatalf("missing strict latest-state guidance: %s", prompt)
 	}
 }
 

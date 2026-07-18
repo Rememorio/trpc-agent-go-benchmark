@@ -2397,6 +2397,13 @@ requested value, do not abstain merely because lower-ranked memories discuss
 related entities or events. Only explicit contradictory evidence about the
 same subject and time should block that answer. If the memories do not contain
 enough information, answer "I don't know".
+A memory beginning "Assistant result:" records an answer, recommendation,
+estimate, or other result previously produced by the assistant; it is not a
+fact confirmed by the user. Use such a memory when the question asks what the
+assistant answered, recommended, listed, or mentioned, and as context for a
+new recommendation. For a factual calculation or claim about the user, do not
+treat an assistant estimate or suggestion as a user-provided premise unless a
+separate user memory confirms it.
 Output only the final answer. Do not explain, reason step by step, cite
 memory numbers, mention uncertainty analysis, or use markdown. The first token
 must be part of the final answer. If the question asks for an order, list, or
@@ -2454,9 +2461,12 @@ with the newest supported value. When memories describe different states of
 the same subject, compare their event_time metadata before retrieval rank:
 select the greatest event_time for a latest-state question and the appropriate
 earlier event_time for a previous-state question. This temporal rule overrides
-the general ranked-evidence rule for the same subject at different times. Use
-timeline wording when event_time is absent, but output only the requested value
-itself.`
+the general ranked-evidence rule for the same subject at different times. For a
+latest-state question, an explicit state with a later event_time must override
+an earlier dated state or an undated conflicting state even when that other
+memory is ranked first. Wording such as "moved back", "changed to", or
+"updated to" marks the resulting new state. Use timeline wording when
+event_time is absent, but output only the requested value itself.`
 	}
 	if strings.Contains(inst.QuestionType, "preference") {
 		return `
@@ -2471,7 +2481,10 @@ availability, prices, or fresh product listings.
 Write a concise, natural response addressed to the user. When the question asks
 for advice or a recommendation, give actionable advice that explicitly builds
 on the remembered details instead of generic suggestions. Mention only concrete
-details supported by memory; do not invent missing personal context.`
+details supported by memory; do not invent missing personal context. Treat an
+established preference, ingredient, product, or prior choice as something the
+user already knows or uses: acknowledge it before suggesting complementary
+ideas, and never reintroduce the remembered choice itself as a new suggestion.`
 	}
 	return ""
 }
