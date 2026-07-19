@@ -109,7 +109,7 @@ type EvalMetadata struct {
 	RoleMapping           string                    `json:"role_mapping,omitempty"`
 	TokenUsageScope       string                    `json:"token_usage_scope,omitempty"`
 	EmbeddingUsageScope   string                    `json:"embedding_usage_scope,omitempty"`
-	ReuseMemories         bool                      `json:"reuse_memories,omitempty"`
+	ReuseMemories         bool                      `json:"reuse_memories"`
 	AutoExtractionTimeout string                    `json:"auto_extraction_timeout,omitempty"`
 	TableSuffix           string                    `json:"table_suffix,omitempty"`
 	PGVectorExtraction    *pgvectorExtractionConfig `json:"pgvector_extraction,omitempty"`
