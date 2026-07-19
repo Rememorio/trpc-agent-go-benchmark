@@ -2274,6 +2274,7 @@ After your analysis, write the mandatory final line "VERDICT: yes" or "VERDICT: 
 	case "single-session-user", "single-session-assistant", "multi-session":
 		return fmt.Sprintf(`Task: Decide whether the model response is correct.
 Return yes if the response contains the correct answer, is equivalent to the correct answer, or contains all intermediate steps needed to get it. Return no if it only contains a subset of the required answer.
+Treat a response that contains every part of the correct answer plus additional details as correct unless those details contradict the correct answer. Do not assume an extra detail is false merely because it is absent from the reference answer.
 
 Question: %s
 
@@ -2285,6 +2286,7 @@ After your analysis, write the mandatory final line "VERDICT: yes" or "VERDICT: 
 	case "temporal-reasoning":
 		return fmt.Sprintf(`Task: Decide whether the model response is correct.
 Return yes if the response contains or is equivalent to the correct answer, or contains all intermediate steps needed to get it. Return no if it only contains a subset of the required answer. For day/week/month count questions, do not penalize off-by-one errors.
+Treat a response that contains every part of the correct answer plus additional details as correct unless those details contradict the correct answer. Do not assume an extra detail is false merely because it is absent from the reference answer.
 
 Question: %s
 
@@ -2296,6 +2298,7 @@ After your analysis, write the mandatory final line "VERDICT: yes" or "VERDICT: 
 	case "knowledge-update":
 		return fmt.Sprintf(`Task: Decide whether the model response is correct.
 Return yes if the response contains the updated correct answer, even if it also mentions previous information. Return no otherwise.
+Treat a response that contains every part of the correct answer plus additional details as correct unless those details contradict the correct answer. Do not assume an extra detail is false merely because it is absent from the reference answer.
 
 Question: %s
 

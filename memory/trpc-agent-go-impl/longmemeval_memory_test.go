@@ -1860,6 +1860,21 @@ func TestBuildLongMemEvalJudgePromptUsesOfficialTaskRules(t *testing.T) {
 	if !strings.Contains(prompt, "off-by-one") {
 		t.Fatalf("temporal prompt should allow off-by-one day counts: %s", prompt)
 	}
+
+	superset := &caseResult{
+		QuestionID:   "superset-1",
+		QuestionType: "single-session-user",
+		Question:     "What birthday gift did I buy?",
+		Answer:       "A yellow dress",
+	}
+	prompt = buildLongMemEvalJudgePrompt(
+		superset,
+		"A yellow dress and matching earrings.",
+	)
+	if !strings.Contains(prompt, "plus additional details as correct") ||
+		!strings.Contains(prompt, "absent from the reference answer") {
+		t.Fatalf("fact prompt should allow non-contradictory supersets: %s", prompt)
+	}
 }
 
 func TestParseLongMemEvalJudge(t *testing.T) {
