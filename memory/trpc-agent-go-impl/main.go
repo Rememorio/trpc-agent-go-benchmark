@@ -122,6 +122,11 @@ var (
 		"",
 		"Comma-separated LongMemEval question_id filter",
 	)
+	flagLMEExcludeQuestionIDs = flag.String(
+		"lme-exclude-question-ids",
+		"",
+		"Comma-separated LongMemEval question_ids excluded before sampling",
+	)
 	flagLMEQuestionTypes = flag.String(
 		"lme-question-types",
 		"",

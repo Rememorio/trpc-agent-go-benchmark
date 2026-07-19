@@ -98,6 +98,8 @@ type lmeSelectionManifest struct {
 	SamplePerType   int                `json:"sample_per_type"`
 	AbstentionCount int                `json:"sample_abstention_count"`
 	SampleSeed      int64              `json:"sample_seed"`
+	ExcludedCount   int                `json:"excluded_question_id_count"`
+	ExcludedSHA256  string             `json:"excluded_question_ids_sha256"`
 	Cases           []lmeSelectionCase `json:"cases"`
 }
 
@@ -2596,6 +2598,10 @@ func filterCases(instances []*lmeInstance) []*lmeInstance {
 	for _, id := range parseCommaList(*flagLMEQuestionIDs) {
 		idSet[id] = true
 	}
+	excludedIDSet := make(map[string]bool)
+	for _, id := range longMemEvalExcludedQuestionIDs() {
+		excludedIDSet[id] = true
+	}
 	typeSet := make(map[string]bool)
 	for _, t := range parseCommaList(*flagLMEQuestionTypes) {
 		typeSet[t] = true
@@ -2608,6 +2614,9 @@ func filterCases(instances []*lmeInstance) []*lmeInstance {
 		if len(idSet) > 0 && !idSet[inst.QuestionID] {
 			continue
 		}
+		if excludedIDSet[inst.QuestionID] {
+			continue
+		}
 		if len(typeSet) > 0 && !typeSet[inst.QuestionType] {
 			continue
 		}
@@ -2618,6 +2627,23 @@ func filterCases(instances []*lmeInstance) []*lmeInstance {
 		out = out[:*flagMaxTasks]
 	}
 	return out
+}
+
+func longMemEvalExcludedQuestionIDs() []string {
+	ids := parseCommaList(*flagLMEExcludeQuestionIDs)
+	if len(ids) == 0 {
+		return nil
+	}
+	unique := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		unique[id] = struct{}{}
+	}
+	result := make([]string, 0, len(unique))
+	for id := range unique {
+		result = append(result, id)
+	}
+	sort.Strings(result)
+	return result
 }
 
 func sampleCases(instances []*lmeInstance, perType, abstentionCount int, seed int64) []*lmeInstance {
@@ -2706,6 +2732,11 @@ func writeLongMemEvalSelection(
 	selectionDigest string,
 	protocolDigest string,
 ) error {
+	excludedIDs := longMemEvalExcludedQuestionIDs()
+	excludedDigest, err := longMemEvalJSONSHA256(excludedIDs)
+	if err != nil {
+		return fmt.Errorf("hash excluded LongMemEval question IDs: %w", err)
+	}
 	cases := make([]lmeSelectionCase, 0, len(instances))
 	for _, inst := range instances {
 		if inst == nil {
@@ -2726,6 +2757,8 @@ func writeLongMemEvalSelection(
 		SamplePerType:   *flagLMEPerType,
 		AbstentionCount: *flagLMEAbstentionCount,
 		SampleSeed:      *flagLMESampleSeed,
+		ExcludedCount:   len(excludedIDs),
+		ExcludedSHA256:  excludedDigest,
 		Cases:           cases,
 	}
 	encoder := json.NewEncoder(w)

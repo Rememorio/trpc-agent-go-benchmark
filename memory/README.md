@@ -260,12 +260,14 @@ go run . \
 
 # Inspect and pre-register a stratified selection without initializing any
 # model, embedding, database, or Mem0 provider. The manifest contains only
-# question IDs, types, sampling parameters, and provenance digests.
+# question IDs, types, sampling parameters, and provenance digests. A frozen
+# exclusion list can keep previously observed questions out of a holdout.
 go run . \
   -dataset-format longmemeval \
   -dataset ../../summary/data/longmemeval-cleaned/longmemeval_oracle.json \
   -lme-per-type 2 \
   -lme-abstention-count 4 \
+  -lme-exclude-question-ids <previously-observed-question-ids> \
   -lme-sample-seed 48 \
   -lme-selection-only
 
@@ -493,6 +495,7 @@ LongMemEval-specific options:
 | `-dataset-format`        | locomo  | Use `longmemeval` for LongMemEval JSON       |
 | `-lme-question-id`       |         | Run one LongMemEval question                 |
 | `-lme-question-ids`      |         | Comma-separated `question_id` filter         |
+| `-lme-exclude-question-ids` |      | Exclude IDs before filtering and sampling    |
 | `-lme-question-types`    |         | Comma-separated `question_type` filter       |
 | `-lme-per-type`          | 0       | Stratified sample count per question type    |
 | `-lme-abstention-count`  | 0       | Additional abstention questions to sample    |

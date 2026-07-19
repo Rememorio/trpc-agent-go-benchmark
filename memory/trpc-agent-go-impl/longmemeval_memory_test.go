@@ -215,14 +215,17 @@ func TestWriteLongMemEvalSelectionOmitsQuestionContent(t *testing.T) {
 	originalPerType := *flagLMEPerType
 	originalAbstentionCount := *flagLMEAbstentionCount
 	originalSeed := *flagLMESampleSeed
+	originalExcludedIDs := *flagLMEExcludeQuestionIDs
 	t.Cleanup(func() {
 		*flagLMEPerType = originalPerType
 		*flagLMEAbstentionCount = originalAbstentionCount
 		*flagLMESampleSeed = originalSeed
+		*flagLMEExcludeQuestionIDs = originalExcludedIDs
 	})
 	*flagLMEPerType = 2
 	*flagLMEAbstentionCount = 1
 	*flagLMESampleSeed = 271
+	*flagLMEExcludeQuestionIDs = "question-z, question-a, question-z"
 
 	instances := []*lmeInstance{
 		{
@@ -257,8 +260,16 @@ func TestWriteLongMemEvalSelectionOmitsQuestionContent(t *testing.T) {
 		t.Fatalf("decode selection: %v", err)
 	}
 	if got.SampleSeed != 271 || got.SamplePerType != 2 ||
-		got.AbstentionCount != 1 || len(got.Cases) != 2 {
+		got.AbstentionCount != 1 || got.ExcludedCount != 2 ||
+		len(got.Cases) != 2 {
 		t.Fatalf("unexpected manifest: %+v", got)
+	}
+	wantExcludedDigest, err := longMemEvalJSONSHA256([]string{"question-a", "question-z"})
+	if err != nil {
+		t.Fatalf("hash expected exclusions: %v", err)
+	}
+	if got.ExcludedSHA256 != wantExcludedDigest {
+		t.Fatalf("excluded digest = %q, want %q", got.ExcludedSHA256, wantExcludedDigest)
 	}
 	if got.Build.GoVersion == "" {
 		t.Fatalf("selection omitted build provenance: %+v", got.Build)
@@ -1137,6 +1148,7 @@ func TestLongMemEvalRuntimeError(t *testing.T) {
 func TestFilterCasesByQuestionIDs(t *testing.T) {
 	oldID := *flagLMEQuestionID
 	oldIDs := *flagLMEQuestionIDs
+	oldExcludedIDs := *flagLMEExcludeQuestionIDs
 	oldTypes := *flagLMEQuestionTypes
 	oldPerType := *flagLMEPerType
 	oldAbstention := *flagLMEAbstentionCount
@@ -1144,6 +1156,7 @@ func TestFilterCasesByQuestionIDs(t *testing.T) {
 	defer func() {
 		*flagLMEQuestionID = oldID
 		*flagLMEQuestionIDs = oldIDs
+		*flagLMEExcludeQuestionIDs = oldExcludedIDs
 		*flagLMEQuestionTypes = oldTypes
 		*flagLMEPerType = oldPerType
 		*flagLMEAbstentionCount = oldAbstention
@@ -1152,6 +1165,7 @@ func TestFilterCasesByQuestionIDs(t *testing.T) {
 
 	*flagLMEQuestionID = "q1"
 	*flagLMEQuestionIDs = "q3, q2"
+	*flagLMEExcludeQuestionIDs = "skip, q2, q2"
 	*flagLMEQuestionTypes = ""
 	*flagLMEPerType = 0
 	*flagLMEAbstentionCount = 0
@@ -1165,7 +1179,7 @@ func TestFilterCasesByQuestionIDs(t *testing.T) {
 		nil,
 	}
 	got := filterCases(instances)
-	want := []string{"q1", "q2", "q3"}
+	want := []string{"q1", "q3"}
 	if len(got) != len(want) {
 		t.Fatalf("unexpected case count: got %d want %d", len(got), len(want))
 	}
