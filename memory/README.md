@@ -469,8 +469,10 @@ budget before an answer is emitted. Empty, truncated, multiline, or overlong
 answers receive one recovery call constrained to a `submit_answer` tool with a
 512-token budget. Recovery input deduplicates repeated search hits and removes
 storage-only fields while preserving memory text and semantic metadata.
-Terminal empty responses are not retried, and their call, finish reason,
-prompt-cache, reasoning-token, and total-token usage remain in the QA trace.
+If that one call still fails validation, the evaluator records the failure and
+uses the standard unavailable answer as a deterministic fallback. Terminal
+empty responses are not retried, and their call, finish reason, prompt-cache,
+reasoning-token, and total-token usage remain in the QA trace.
 `-locomo-reuse-memories` skips only the auto
 extraction phase and requires an explicit `-table-suffix`; it fails when the
 selected table has no memories for the sample. The QA searches and answers are

@@ -389,8 +389,8 @@ func TestRecoverMemoryQAAnswerRejectsMalformedRecovery(t *testing.T) {
 		!strings.Contains(trace.Error, "too-many-words") {
 		t.Fatalf("trace = %+v", trace)
 	}
-	if got.text != res.text {
-		t.Fatalf("answer replaced with malformed recovery: %q", got.text)
+	if got.text != fallbackAnswer || !trace.FallbackApplied {
+		t.Fatalf("fallback was not applied: answer=%q trace=%+v", got.text, trace)
 	}
 	if got.usage.LLMCalls != 4 || got.usage.TotalTokens != 23 {
 		t.Fatalf("usage = %+v", got.usage)
@@ -447,7 +447,8 @@ func TestRecoverMemoryQAAnswerRecordsTerminalEmptyResponse(t *testing.T) {
 		t.Fatalf("model calls = %d, want 1", m.calls)
 	}
 	if trace == nil || trace.Succeeded || trace.FinishReason != "length" ||
-		trace.Error != "recovery returned an empty answer" {
+		trace.Error != "recovery returned an empty answer" ||
+		!trace.FallbackApplied {
 		t.Fatalf("trace = %+v", trace)
 	}
 	if got.usage.LLMCalls != 4 || got.usage.TotalTokens != 23 {
@@ -475,7 +476,8 @@ func TestRecoverMemoryQAAnswerRequiresEvidence(t *testing.T) {
 		"no memory_search evidence available for recovery" {
 		t.Fatalf("trace = %+v", trace)
 	}
-	if got.text != "" || len(got.steps) != len(res.steps) {
+	if got.text != fallbackAnswer || !trace.FallbackApplied ||
+		len(got.steps) != len(res.steps) {
 		t.Fatalf("got = %+v", got)
 	}
 }

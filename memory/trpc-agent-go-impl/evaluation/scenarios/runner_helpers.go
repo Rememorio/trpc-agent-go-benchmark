@@ -266,7 +266,7 @@ const (
 	fallbackAnswer = "The information is not available."
 
 	// MemoryQAPromptVersion identifies the shared memory-search QA protocol.
-	MemoryQAPromptVersion = "locomo-memory-qa-v10"
+	MemoryQAPromptVersion = "locomo-memory-qa-v11"
 
 	// MemoryQASearchStrategy identifies how multiple retrieval queries run.
 	MemoryQASearchStrategy = "sequential-adaptive"
@@ -579,6 +579,8 @@ func recoverMemoryQAAnswer(
 	evidence := memoryQARetrievalEvidence(res.steps)
 	if strings.TrimSpace(evidence) == "" {
 		trace.Error = "no memory_search evidence available for recovery"
+		trace.FallbackApplied = true
+		res.text = fallbackAnswer
 		return res, trace
 	}
 	prompt := fmt.Sprintf(
@@ -660,8 +662,10 @@ Retrieved memory_search results:
 	trace.Succeeded = parseErr == nil
 	if parseErr != nil {
 		trace.Error = parseErr.Error()
+		trace.FallbackApplied = true
 		step.Error = trace.Error
 		res.steps = append(res.steps, step)
+		res.text = fallbackAnswer
 		return res, trace
 	}
 	res.steps = append(res.steps, step)
