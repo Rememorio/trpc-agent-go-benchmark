@@ -86,11 +86,11 @@ func (e *AutoEvaluator) Evaluate(
 
 	if e.config.ReuseMemories {
 		if err := e.requireExistingMemories(ctx, userKey); err != nil {
-			return nil, err
+			return e.failedExtractionResult(startTime, sample), err
 		}
 	} else {
 		if err := e.seedMemories(ctx, userKey, sample); err != nil {
-			return nil, err
+			return e.failedExtractionResult(startTime, sample), err
 		}
 	}
 	var extractionUsage TokenUsage
@@ -283,7 +283,9 @@ func (e *AutoEvaluator) seedMemories(
 	if err := waitForAutoExtraction(
 		ctx,
 		seedSessions,
-		autoExtractionWaitTimeout(len(seedSessions)),
+		autoExtractionWaitTimeout(
+			len(seedSessions), e.config.AutoExtractionTimeout,
+		),
 	); err != nil {
 		return fmt.Errorf("wait for auto extraction: %w", err)
 	}
@@ -376,11 +378,41 @@ func qaResultFromError(qa dataset.QAItem, err error) *QAResult {
 
 const autoMemoryLastErrorStateKey = "memory:last_extract_error"
 
-func autoExtractionWaitTimeout(sessionCount int) time.Duration {
+func autoExtractionWaitTimeout(
+	sessionCount int,
+	configured time.Duration,
+) time.Duration {
+	if configured > 0 {
+		return configured
+	}
 	return min(
-		max(time.Duration(sessionCount)*30*time.Second, 5*time.Minute),
+		max(time.Duration(sessionCount)*time.Minute, 5*time.Minute),
 		60*time.Minute,
 	)
+}
+
+func (e *AutoEvaluator) failedExtractionResult(
+	startedAt time.Time,
+	sample *dataset.LoCoMoSample,
+) *SampleResult {
+	result := &SampleResult{
+		SampleID:    sample.SampleID,
+		QAResults:   []*QAResult{},
+		ByCategory:  map[string]metrics.CategoryMetrics{},
+		TotalTimeMs: time.Since(startedAt).Milliseconds(),
+	}
+	if e.config.ExtractionTracker != nil {
+		usage, calls := e.config.ExtractionTracker.SnapshotWithCalls()
+		result.ExtractionTokenUsage = tokenUsagePointer(usage)
+		result.TokenUsage = tokenUsagePointer(usage)
+		result.ExtractionCalls = calls
+	}
+	if e.config.SnapshotEmbeddingUsage != nil {
+		usage := e.config.SnapshotEmbeddingUsage()
+		result.ExtractionEmbeddingUsage = embeddingUsagePointer(usage)
+		result.EmbeddingUsage = embeddingUsagePointer(usage)
+	}
+	return result
 }
 
 func waitForAutoExtraction(
@@ -392,7 +424,7 @@ func waitForAutoExtraction(
 		return nil
 	}
 	if timeout <= 0 {
-		timeout = autoExtractionWaitTimeout(len(sessions))
+		timeout = autoExtractionWaitTimeout(len(sessions), 0)
 	}
 
 	timer := time.NewTimer(timeout)

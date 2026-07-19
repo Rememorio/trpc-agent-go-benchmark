@@ -98,6 +98,11 @@ var (
 		"Number of memory_search calls per QA "+
 			"(1=single search, auto/agentic only)",
 	)
+	flagAutoExtractionTimeout = flag.Duration(
+		"auto-extraction-timeout",
+		0,
+		"Total wait timeout for LoCoMo auto extraction (0=derive from session count)",
+	)
 	flagLLMJudge = flag.Bool("llm-judge", false, "Enable LLM-as-Judge evaluation")
 	flagVerbose  = flag.Bool("verbose", false, "Verbose output")
 
@@ -336,6 +341,12 @@ func validateFlags() {
 			"Invalid qa-search-passes: %d (range: 1-%d)",
 			*flagQASearchPasses,
 			maxQASearchPasses,
+		)
+	}
+	if *flagAutoExtractionTimeout < 0 {
+		log.Fatalf(
+			"Invalid auto-extraction-timeout: %s",
+			*flagAutoExtractionTimeout,
 		)
 	}
 

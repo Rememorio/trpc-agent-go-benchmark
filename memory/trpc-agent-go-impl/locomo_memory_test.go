@@ -10,6 +10,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +20,22 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go-benchmark/memory/trpc-agent-go-impl/evaluation/metrics"
 	"trpc.group/trpc-go/trpc-agent-go-benchmark/memory/trpc-agent-go-impl/evaluation/scenarios"
 )
+
+type failingLoCoMoEvaluator struct {
+	result *scenarios.SampleResult
+	err    error
+}
+
+func (e failingLoCoMoEvaluator) Name() string {
+	return "failing"
+}
+
+func (e failingLoCoMoEvaluator) Evaluate(
+	context.Context,
+	*dataset.LoCoMoSample,
+) (*scenarios.SampleResult, error) {
+	return e.result, e.err
+}
 
 func TestFilterLoCoMoQuestions(t *testing.T) {
 	samples := []*dataset.LoCoMoSample{
@@ -101,6 +119,94 @@ func TestBuildEvaluationResultRecordsMemoryQAPromptVersion(t *testing.T) {
 				scenario, got, scenarios.MemoryQARecoveryMaxTokens,
 			)
 		}
+	}
+}
+
+func TestBuildEvaluationResultRecordsAutoExtractionTimeout(t *testing.T) {
+	configured := buildEvaluationResult(
+		scenarios.Config{
+			Scenario:              scenarios.ScenarioAuto,
+			AutoExtractionTimeout: 20 * time.Minute,
+		},
+		"pgvector",
+		time.Now(),
+		nil,
+		metrics.NewCategoryAggregator(),
+		0,
+		scenarios.TokenUsage{},
+	)
+	if got := configured.Metadata.AutoExtractionTimeout; got != "20m0s" {
+		t.Fatalf("configured extraction timeout = %q, want 20m0s", got)
+	}
+
+	derived := buildEvaluationResult(
+		scenarios.Config{Scenario: scenarios.ScenarioAuto},
+		"pgvector",
+		time.Now(),
+		nil,
+		metrics.NewCategoryAggregator(),
+		0,
+		scenarios.TokenUsage{},
+	)
+	if got := derived.Metadata.AutoExtractionTimeout; got != "derived-from-session-count" {
+		t.Fatalf("derived extraction timeout = %q", got)
+	}
+}
+
+func TestRunEvaluationRecordsFailedSampleAndCost(t *testing.T) {
+	extractionUsage := scenarios.TokenUsage{
+		PromptTokens: 100,
+		TotalTokens:  120,
+		LLMCalls:     2,
+	}
+	extractionEmbeddingUsage := scenarios.EmbeddingUsage{
+		PromptTokens: 30,
+		TotalTokens:  30,
+		Calls:        3,
+	}
+	failureResult := &scenarios.SampleResult{
+		SampleID:                 "sample-1",
+		TotalTimeMs:              1234,
+		TokenUsage:               &extractionUsage,
+		ExtractionTokenUsage:     &extractionUsage,
+		EmbeddingUsage:           &extractionEmbeddingUsage,
+		ExtractionEmbeddingUsage: &extractionEmbeddingUsage,
+		ExtractionCalls: []scenarios.ExtractionCallTrace{{
+			Step: 1,
+		}},
+	}
+
+	result, err := runEvaluation(
+		context.Background(),
+		[]*dataset.LoCoMoSample{{SampleID: "sample-1"}},
+		failingLoCoMoEvaluator{
+			result: failureResult,
+			err:    errors.New("extraction timed out"),
+		},
+		scenarios.Config{Scenario: scenarios.ScenarioAuto},
+		"pgvector",
+		t.TempDir(),
+	)
+	if err == nil || !strings.Contains(err.Error(), "sample-1") {
+		t.Fatalf("run error = %v", err)
+	}
+	if result.Summary.TotalSamples != 0 || result.Summary.FailedSamples != 1 {
+		t.Fatalf("sample counts = successful %d, failed %d",
+			result.Summary.TotalSamples, result.Summary.FailedSamples)
+	}
+	if len(result.Failures) != 1 ||
+		result.Failures[0].Error != "extraction timed out" ||
+		len(result.Failures[0].ExtractionCalls) != 1 {
+		t.Fatalf("failures = %+v", result.Failures)
+	}
+	if result.Summary.TotalTokens != 120 ||
+		result.Summary.ExtractionTokenUsage == nil ||
+		result.Summary.ExtractionTokenUsage.TotalTokens != 120 {
+		t.Fatalf("token summary = %+v", result.Summary)
+	}
+	if result.Summary.ExtractionEmbeddingUsage == nil ||
+		result.Summary.ExtractionEmbeddingUsage.Calls != 3 {
+		t.Fatalf("embedding summary = %+v", result.Summary.EmbeddingUsage)
 	}
 }
 

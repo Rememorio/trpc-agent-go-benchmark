@@ -72,38 +72,55 @@ type EvaluationResult struct {
 	Summary       *EvalSummary                       `json:"summary"`
 	ByCategory    map[string]metrics.CategoryMetrics `json:"by_category"`
 	SampleResults []*scenarios.SampleResult          `json:"sample_results,omitempty"`
+	Failures      []EvaluationFailure                `json:"failures,omitempty"`
+}
+
+// EvaluationFailure preserves failed-sample diagnostics and incurred cost.
+type EvaluationFailure struct {
+	SampleID                 string                          `json:"sample_id"`
+	Error                    string                          `json:"error"`
+	TotalTimeMs              int64                           `json:"total_time_ms"`
+	TokenUsage               *scenarios.TokenUsage           `json:"token_usage,omitempty"`
+	ExtractionTokenUsage     *scenarios.TokenUsage           `json:"extraction_token_usage,omitempty"`
+	QATokenUsage             *scenarios.TokenUsage           `json:"qa_token_usage,omitempty"`
+	EmbeddingUsage           *scenarios.EmbeddingUsage       `json:"embedding_usage,omitempty"`
+	ExtractionEmbeddingUsage *scenarios.EmbeddingUsage       `json:"extraction_embedding_usage,omitempty"`
+	QAEmbeddingUsage         *scenarios.EmbeddingUsage       `json:"qa_embedding_usage,omitempty"`
+	ExtractionCalls          []scenarios.ExtractionCallTrace `json:"extraction_calls,omitempty"`
 }
 
 // EvalMetadata holds evaluation metadata.
 type EvalMetadata struct {
-	Framework           string                    `json:"framework"`
-	Version             string                    `json:"version"`
-	Timestamp           time.Time                 `json:"timestamp"`
-	Model               string                    `json:"model"`
-	EvalModel           string                    `json:"eval_model,omitempty"`
-	Scenario            string                    `json:"scenario"`
-	MemoryBackend       string                    `json:"memory_backend,omitempty"`
-	MaxContext          int                       `json:"max_context"`
-	QAHistoryTurns      int                       `json:"qa_history_turns,omitempty"`
-	QASearchPasses      int                       `json:"qa_search_passes,omitempty"`
-	QAPromptVersion     string                    `json:"qa_prompt_version,omitempty"`
-	QASearchStrategy    string                    `json:"qa_search_strategy,omitempty"`
-	QARecoveryMaxTokens int                       `json:"qa_recovery_max_tokens,omitempty"`
-	VectorTopK          int                       `json:"vector_topk,omitempty"`
-	ReplayProtocol      string                    `json:"replay_protocol,omitempty"`
-	RoleMapping         string                    `json:"role_mapping,omitempty"`
-	TokenUsageScope     string                    `json:"token_usage_scope,omitempty"`
-	EmbeddingUsageScope string                    `json:"embedding_usage_scope,omitempty"`
-	ReuseMemories       bool                      `json:"reuse_memories,omitempty"`
-	TableSuffix         string                    `json:"table_suffix,omitempty"`
-	PGVectorExtraction  *pgvectorExtractionConfig `json:"pgvector_extraction,omitempty"`
-	Build               lmeBuildProvenance        `json:"build"`
-	LLMJudge            bool                      `json:"llm_judge"`
+	Framework             string                    `json:"framework"`
+	Version               string                    `json:"version"`
+	Timestamp             time.Time                 `json:"timestamp"`
+	Model                 string                    `json:"model"`
+	EvalModel             string                    `json:"eval_model,omitempty"`
+	Scenario              string                    `json:"scenario"`
+	MemoryBackend         string                    `json:"memory_backend,omitempty"`
+	MaxContext            int                       `json:"max_context"`
+	QAHistoryTurns        int                       `json:"qa_history_turns,omitempty"`
+	QASearchPasses        int                       `json:"qa_search_passes,omitempty"`
+	QAPromptVersion       string                    `json:"qa_prompt_version,omitempty"`
+	QASearchStrategy      string                    `json:"qa_search_strategy,omitempty"`
+	QARecoveryMaxTokens   int                       `json:"qa_recovery_max_tokens,omitempty"`
+	VectorTopK            int                       `json:"vector_topk,omitempty"`
+	ReplayProtocol        string                    `json:"replay_protocol,omitempty"`
+	RoleMapping           string                    `json:"role_mapping,omitempty"`
+	TokenUsageScope       string                    `json:"token_usage_scope,omitempty"`
+	EmbeddingUsageScope   string                    `json:"embedding_usage_scope,omitempty"`
+	ReuseMemories         bool                      `json:"reuse_memories,omitempty"`
+	AutoExtractionTimeout string                    `json:"auto_extraction_timeout,omitempty"`
+	TableSuffix           string                    `json:"table_suffix,omitempty"`
+	PGVectorExtraction    *pgvectorExtractionConfig `json:"pgvector_extraction,omitempty"`
+	Build                 lmeBuildProvenance        `json:"build"`
+	LLMJudge              bool                      `json:"llm_judge"`
 }
 
 // EvalSummary holds aggregated evaluation summary.
 type EvalSummary struct {
 	TotalSamples    int     `json:"total_samples"`
+	FailedSamples   int     `json:"failed_samples,omitempty"`
 	TotalQuestions  int     `json:"total_questions"`
 	OverallF1       float64 `json:"overall_f1"`
 	OverallBLEU     float64 `json:"overall_bleu"`
@@ -208,6 +225,7 @@ func runLoCoMoMemory(ctx context.Context) error {
 		QAHistoryTurns:        *flagQAHistoryTurns,
 		QASearchPasses:        *flagQASearchPasses,
 		ReuseMemories:         *flagLoCoMoReuseMemories,
+		AutoExtractionTimeout: *flagAutoExtractionTimeout,
 		SessionRecallResults:  *flagVectorTopK,
 		SessionRecallMinScore: *flagSessionRecallMinScore,
 		DebugDumpMemories:     *flagDebugDumpMemories,
@@ -219,11 +237,15 @@ func runLoCoMoMemory(ctx context.Context) error {
 	for _, scenarioType := range scenariosToRun {
 		// Long-context doesn't need memory backends.
 		if scenarioType == scenarios.ScenarioLongContext {
-			runScenario(ctx, samples, llm, evalLLM, scenarioType, "", baseConfig, outputDir)
+			if err := runScenario(
+				ctx, samples, llm, evalLLM, scenarioType, "", baseConfig, outputDir,
+			); err != nil {
+				return err
+			}
 			continue
 		}
 		if scenarioType == scenarios.ScenarioSessionRecall {
-			runScenario(
+			if err := runScenario(
 				ctx,
 				samples,
 				llm,
@@ -232,13 +254,19 @@ func runLoCoMoMemory(ctx context.Context) error {
 				"session_pgvector",
 				baseConfig,
 				outputDir,
-			)
+			); err != nil {
+				return err
+			}
 			continue
 		}
 
 		// Run each backend for memory-based scenarios.
 		for _, backend := range backends {
-			runScenario(ctx, samples, llm, evalLLM, scenarioType, backend, baseConfig, outputDir)
+			if err := runScenario(
+				ctx, samples, llm, evalLLM, scenarioType, backend, baseConfig, outputDir,
+			); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -277,6 +305,10 @@ func logScenarioConfig(
 	}
 	if *flagLoCoMoReuseMemories {
 		log.Printf("Reuse Memories: enabled (QA only)")
+	}
+	if *flagAutoExtractionTimeout > 0 &&
+		containsScenario(scenariosToRun, scenarios.ScenarioAuto) {
+		log.Printf("Auto Extraction Timeout: %s", *flagAutoExtractionTimeout)
 	}
 	if *flagQASearchPasses > 1 {
 		log.Printf("QA Search Passes: %d", *flagQASearchPasses)
@@ -427,7 +459,7 @@ func runScenario(
 	backend string,
 	baseConfig scenarios.Config,
 	outputDir string,
-) {
+) error {
 	config := baseConfig
 	config.Scenario = scenarioType
 
@@ -438,8 +470,9 @@ func runScenario(
 	memCfg := buildMemoryConfig(scenarioType, backend)
 	memOpts, configErr := buildMemoryServiceOptions(memCfg, llm)
 	if configErr != nil {
-		log.Printf("Failed to configure %s memory service: %v", backend, configErr)
-		return
+		return fmt.Errorf(
+			"configure %s memory service: %w", backend, configErr,
+		)
 	}
 	if memOpts.enableExtractor {
 		extractionTracker := scenarios.NewTokenTracker()
@@ -468,8 +501,7 @@ func runScenario(
 	case scenarios.ScenarioSessionRecall:
 		sessionSvc, err = createSessionRecallService(config)
 		if err != nil {
-			log.Printf("Failed to create session recall service: %v", err)
-			return
+			return fmt.Errorf("create session recall service: %w", err)
 		}
 		evaluator = scenarios.NewSessionRecallEvaluator(
 			llm, evalLLM, sessionSvc, config,
@@ -477,15 +509,13 @@ func runScenario(
 	case scenarios.ScenarioAgentic:
 		memSvc, err = createMemoryService(memCfg, memOpts)
 		if err != nil {
-			log.Printf("Failed to create %s memory service: %v", backend, err)
-			return
+			return fmt.Errorf("create %s memory service: %w", backend, err)
 		}
 		evaluator = scenarios.NewAgenticEvaluator(llm, evalLLM, memSvc, config)
 	case scenarios.ScenarioAuto:
 		memSvc, err = createMemoryService(memCfg, memOpts)
 		if err != nil {
-			log.Printf("Failed to create %s memory service: %v", backend, err)
-			return
+			return fmt.Errorf("create %s memory service: %w", backend, err)
 		}
 		evaluator = scenarios.NewAutoEvaluator(llm, evalLLM, memSvc, config)
 	}
@@ -493,26 +523,30 @@ func runScenario(
 	// Determine output directory.
 	scenarioDir := buildScenarioDir(outputDir, scenarioType, backend)
 	if err := os.MkdirAll(scenarioDir, 0755); err != nil {
-		log.Printf("Failed to create scenario directory: %v", err)
-		return
+		return fmt.Errorf("create scenario directory: %w", err)
+	}
+	if memSvc != nil {
+		defer memSvc.Close()
+	}
+	if sessionSvc != nil {
+		defer sessionSvc.Close()
 	}
 
 	log.Printf("")
 	log.Printf("=== Running: %s (backend=%s) ===", evaluator.Name(), backend)
 
-	result := runEvaluation(
+	result, evaluationErr := runEvaluation(
 		ctx, samples, evaluator, config, backend, scenarioDir,
 	)
 	saveResults(scenarioDir, result)
 	printSummary(result)
-
-	// Cleanup memory service.
-	if memSvc != nil {
-		memSvc.Close()
+	if evaluationErr != nil {
+		return fmt.Errorf(
+			"evaluate %s (backend=%s): %w",
+			evaluator.Name(), backend, evaluationErr,
+		)
 	}
-	if sessionSvc != nil {
-		sessionSvc.Close()
-	}
+	return nil
 }
 
 func buildScenarioDir(outputDir string, scenario scenarios.ScenarioType, backend string) string {
@@ -782,10 +816,11 @@ func runEvaluation(
 	config scenarios.Config,
 	backend string,
 	scenarioDir string,
-) *EvaluationResult {
+) (*EvaluationResult, error) {
 	startTime := time.Now()
 	catAgg := metrics.NewCategoryAggregator()
 	sampleResults := make([]*scenarios.SampleResult, 0, len(samples))
+	failures := make([]EvaluationFailure, 0)
 	var totalQuestions int
 	var totalUsage scenarios.TokenUsage
 
@@ -797,6 +832,19 @@ func runEvaluation(
 		result, err := evaluator.Evaluate(ctx, sample)
 		if err != nil {
 			log.Printf("  Error: %v", err)
+			failure := evaluationFailure(
+				sample.SampleID, time.Since(sampleStart), result, err,
+			)
+			failures = append(failures, failure)
+			if failure.TokenUsage != nil {
+				totalUsage.Add(*failure.TokenUsage)
+			}
+			partial := buildEvaluationResult(
+				config, backend, startTime,
+				sampleResults, catAgg, totalQuestions, totalUsage,
+			)
+			attachEvaluationFailures(partial, failures)
+			saveResults(scenarioDir, partial)
 			continue
 		}
 
@@ -848,13 +896,106 @@ func runEvaluation(
 			config, backend, startTime,
 			sampleResults, catAgg, totalQuestions, totalUsage,
 		)
+		attachEvaluationFailures(partial, failures)
 		saveResults(scenarioDir, partial)
 	}
 
-	return buildEvaluationResult(
+	result := buildEvaluationResult(
 		config, backend, startTime,
 		sampleResults, catAgg, totalQuestions, totalUsage,
 	)
+	attachEvaluationFailures(result, failures)
+	if len(failures) > 0 {
+		return result, fmt.Errorf(
+			"%d sample(s) failed; first failure %s: %s",
+			len(failures), failures[0].SampleID, failures[0].Error,
+		)
+	}
+	return result, nil
+}
+
+func evaluationFailure(
+	sampleID string,
+	duration time.Duration,
+	result *scenarios.SampleResult,
+	err error,
+) EvaluationFailure {
+	failure := EvaluationFailure{
+		SampleID:    sampleID,
+		Error:       err.Error(),
+		TotalTimeMs: duration.Milliseconds(),
+	}
+	if result == nil {
+		return failure
+	}
+	failure.TotalTimeMs = result.TotalTimeMs
+	failure.TokenUsage = result.TokenUsage
+	failure.ExtractionTokenUsage = result.ExtractionTokenUsage
+	failure.QATokenUsage = result.QATokenUsage
+	failure.EmbeddingUsage = result.EmbeddingUsage
+	failure.ExtractionEmbeddingUsage = result.ExtractionEmbeddingUsage
+	failure.QAEmbeddingUsage = result.QAEmbeddingUsage
+	failure.ExtractionCalls = result.ExtractionCalls
+	return failure
+}
+
+func attachEvaluationFailures(
+	result *EvaluationResult,
+	failures []EvaluationFailure,
+) {
+	if result == nil || len(failures) == 0 {
+		return
+	}
+	result.Failures = append([]EvaluationFailure(nil), failures...)
+	result.Summary.FailedSamples = len(failures)
+
+	extractionTokens := valueOrZero(result.Summary.ExtractionTokenUsage)
+	qaTokens := valueOrZero(result.Summary.QATokenUsage)
+	embeddings := embeddingValueOrZero(result.Summary.EmbeddingUsage)
+	extractionEmbeddings := embeddingValueOrZero(
+		result.Summary.ExtractionEmbeddingUsage,
+	)
+	qaEmbeddings := embeddingValueOrZero(result.Summary.QAEmbeddingUsage)
+	for _, failure := range failures {
+		if failure.ExtractionTokenUsage != nil {
+			extractionTokens.Add(*failure.ExtractionTokenUsage)
+		}
+		if failure.QATokenUsage != nil {
+			qaTokens.Add(*failure.QATokenUsage)
+		}
+		if failure.EmbeddingUsage != nil {
+			embeddings.Add(*failure.EmbeddingUsage)
+		}
+		if failure.ExtractionEmbeddingUsage != nil {
+			extractionEmbeddings.Add(*failure.ExtractionEmbeddingUsage)
+		}
+		if failure.QAEmbeddingUsage != nil {
+			qaEmbeddings.Add(*failure.QAEmbeddingUsage)
+		}
+	}
+	result.Summary.ExtractionTokenUsage = locomoTokenUsagePointer(extractionTokens)
+	result.Summary.QATokenUsage = locomoTokenUsagePointer(qaTokens)
+	result.Summary.EmbeddingUsage = locomoEmbeddingUsagePointer(embeddings)
+	result.Summary.ExtractionEmbeddingUsage = locomoEmbeddingUsagePointer(
+		extractionEmbeddings,
+	)
+	result.Summary.QAEmbeddingUsage = locomoEmbeddingUsagePointer(qaEmbeddings)
+}
+
+func valueOrZero(value *scenarios.TokenUsage) scenarios.TokenUsage {
+	if value == nil {
+		return scenarios.TokenUsage{}
+	}
+	return *value
+}
+
+func embeddingValueOrZero(
+	value *scenarios.EmbeddingUsage,
+) scenarios.EmbeddingUsage {
+	if value == nil {
+		return scenarios.EmbeddingUsage{}
+	}
+	return *value
 }
 
 // logSampleCategoryBreakdown prints a one-line per-category
@@ -928,6 +1069,12 @@ func buildEvaluationResult(
 		metadata.RoleMapping = locomoRoleMapping
 		metadata.TokenUsageScope = "extractor and QA LLM calls; " +
 			"optional LLM judge excluded"
+		if config.AutoExtractionTimeout > 0 {
+			metadata.AutoExtractionTimeout =
+				config.AutoExtractionTimeout.String()
+		} else {
+			metadata.AutoExtractionTimeout = "derived-from-session-count"
+		}
 	}
 	if config.Scenario == scenarios.ScenarioAuto && backend == "pgvector" {
 		metadata.VectorTopK = *flagVectorTopK
@@ -1110,6 +1257,9 @@ func printSummary(result *EvaluationResult) {
 	}
 	fmt.Printf("Samples: %d | Questions: %d\n",
 		result.Summary.TotalSamples, result.Summary.TotalQuestions)
+	if result.Summary.FailedSamples > 0 {
+		fmt.Printf("Failed Samples: %d\n", result.Summary.FailedSamples)
+	}
 
 	fmt.Println("\n--- Overall Metrics ---")
 	fmt.Printf("F1 Score:   %.4f (%.1f)\n", result.Summary.OverallF1, result.Summary.OverallF1*100)

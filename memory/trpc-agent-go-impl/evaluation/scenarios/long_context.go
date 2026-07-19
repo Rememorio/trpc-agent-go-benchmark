@@ -57,6 +57,10 @@ type Config struct {
 	// ReuseMemories skips auto extraction and answers against memories already
 	// stored for the sample. It only applies to the auto scenario.
 	ReuseMemories bool
+	// AutoExtractionTimeout overrides the total wait for all asynchronous
+	// extraction jobs in one LoCoMo sample. Zero derives a bounded timeout from
+	// the number of sessions.
+	AutoExtractionTimeout time.Duration
 
 	// SessionRecallResults controls how many recalled
 	// session events are preloaded during QA.
