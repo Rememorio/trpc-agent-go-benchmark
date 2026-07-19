@@ -1370,15 +1370,9 @@ func newBackend(
 		)
 	case "mem0":
 		host := getMem0Host()
-		timeout := 90 * time.Second
 		usage := &lmeProviderUsageTracker{}
-		httpClient := &http.Client{
-			Timeout: timeout,
-			Transport: &lmeMem0UsageTransport{
-				base:    http.DefaultTransport,
-				tracker: usage,
-			},
-		}
+		httpClient := newLongMemEvalMem0HTTPClient(usage)
+		timeout := httpClient.Timeout
 		opts := []memorymem0.ServiceOpt{
 			memorymem0.WithHost(host),
 			memorymem0.WithHTTPClient(httpClient),
@@ -1409,6 +1403,18 @@ func newBackend(
 		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported backend %q", name)
+	}
+}
+
+func newLongMemEvalMem0HTTPClient(
+	usage *lmeProviderUsageTracker,
+) *http.Client {
+	return &http.Client{
+		Timeout: longMemEvalMem0OSSRequestTimeout(),
+		Transport: &lmeMem0UsageTransport{
+			base:    http.DefaultTransport,
+			tracker: usage,
+		},
 	}
 }
 

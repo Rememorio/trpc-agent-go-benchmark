@@ -849,6 +849,25 @@ func TestLongMemEvalMem0OSSRequestTimeout(t *testing.T) {
 	}
 }
 
+func TestNewLongMemEvalMem0HTTPClientUsesRequestTimeout(t *testing.T) {
+	oldTimeout := *flagLMEModelCallTimeout
+	defer func() { *flagLMEModelCallTimeout = oldTimeout }()
+
+	*flagLMEModelCallTimeout = 5 * time.Minute
+	usage := &lmeProviderUsageTracker{}
+	client := newLongMemEvalMem0HTTPClient(usage)
+	if got, want := client.Timeout, 6*time.Minute; got != want {
+		t.Fatalf("HTTP client timeout = %v, want %v", got, want)
+	}
+	transport, ok := client.Transport.(*lmeMem0UsageTransport)
+	if !ok {
+		t.Fatalf("HTTP transport = %T, want *lmeMem0UsageTransport", client.Transport)
+	}
+	if transport.tracker != usage {
+		t.Fatal("HTTP transport does not use the run usage tracker")
+	}
+}
+
 func TestMem0UsageTransportRecordsHeader(t *testing.T) {
 	t.Parallel()
 
