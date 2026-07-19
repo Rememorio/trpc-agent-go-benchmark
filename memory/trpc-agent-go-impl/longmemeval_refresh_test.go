@@ -46,6 +46,31 @@ func TestValidateLongMemEvalRetrievalRefresh(t *testing.T) {
 	}
 }
 
+func TestLongMemEvalRetrievalRefreshImplementation(t *testing.T) {
+	restoreStringFlag(t, flagLMEImplementation, "refreshed-retrieval")
+	result := &runResult{Metadata: map[string]any{
+		"implementation": "source-ingestion-and-retrieval",
+	}}
+
+	got, err := longMemEvalRetrievalRefreshImplementation(result)
+	if err != nil {
+		t.Fatalf("resolve retrieval refresh implementation: %v", err)
+	}
+	if got != "refreshed-retrieval" {
+		t.Fatalf("implementation = %q, want refreshed-retrieval", got)
+	}
+
+	*flagLMEImplementation = "source-ingestion-and-retrieval"
+	if _, err := longMemEvalRetrievalRefreshImplementation(result); err == nil {
+		t.Fatal("accepted the source implementation as the refresh implementation")
+	}
+
+	*flagLMEImplementation = ""
+	if _, err := longMemEvalRetrievalRefreshImplementation(result); err == nil {
+		t.Fatal("accepted an unspecified refresh implementation")
+	}
+}
+
 func TestRefreshLongMemEvalRetrievalResult(t *testing.T) {
 	restoreStringFlag(t, flagTableSuffix, "_refresh_test")
 	restoreIntFlag(t, flagVectorTopK, 30)
@@ -66,7 +91,7 @@ func TestRefreshLongMemEvalRetrievalResult(t *testing.T) {
 		}},
 	}}}
 	result := &runResult{
-		Metadata: map[string]any{},
+		Metadata: map[string]any{"implementation": "source-implementation"},
 		Cases: []*caseResult{{
 			QuestionID:   "q1",
 			QuestionType: "single-session-user",
@@ -94,7 +119,8 @@ func TestRefreshLongMemEvalRetrievalResult(t *testing.T) {
 	outPath := t.TempDir() + "/refreshed.json"
 	if err := refreshLongMemEvalRetrievalResult(
 		context.Background(), result, backend, llm,
-		"answer-model", "variant", "source-digest", outPath,
+		"answer-model", "variant", "refreshed-implementation",
+		"source-digest", outPath,
 	); err != nil {
 		t.Fatalf("refresh retrieval result: %v", err)
 	}
@@ -127,6 +153,11 @@ func TestRefreshLongMemEvalRetrievalResult(t *testing.T) {
 	refresh, ok := result.Metadata["retrieval_refresh"].(map[string]any)
 	if !ok || refresh["source_sha256"] != "source-digest" {
 		t.Fatalf("retrieval refresh metadata = %#v", result.Metadata["retrieval_refresh"])
+	}
+	if result.Metadata["implementation"] != "refreshed-implementation" ||
+		refresh["source_implementation"] != "source-implementation" ||
+		refresh["implementation"] != "refreshed-implementation" {
+		t.Fatalf("retrieval implementation metadata = %#v", result.Metadata)
 	}
 	if _, err := loadLongMemEvalResults(outPath); err != nil {
 		t.Fatalf("load retrieval refresh checkpoint: %v", err)

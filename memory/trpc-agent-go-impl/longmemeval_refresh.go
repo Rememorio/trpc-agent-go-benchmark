@@ -43,6 +43,10 @@ func refreshLongMemEvalRetrievalResults(
 	if err := validateLongMemEvalRetrievalRefresh(result); err != nil {
 		return err
 	}
+	implementation, err := longMemEvalRetrievalRefreshImplementation(result)
+	if err != nil {
+		return err
+	}
 	modelName := getModelName()
 	modelVariant := getModelVariant()
 	baseLLM, err := newLongMemEvalModel(modelName, modelVariant)
@@ -66,9 +70,32 @@ func refreshLongMemEvalRetrievalResults(
 		baseLLM,
 		modelName,
 		modelVariant,
+		implementation,
 		sourceDigest,
 		filepath.Join(outputDir, lmeRetrievalRefreshOutput),
 	)
+}
+
+func longMemEvalRetrievalRefreshImplementation(result *runResult) (string, error) {
+	source, ok := lmeMetadataString(result.Metadata, "implementation")
+	if !ok || source == "" || source == "unspecified" {
+		return "", errors.New(
+			"retrieval refresh source is missing a specific implementation label",
+		)
+	}
+	target := longMemEvalImplementation()
+	if target == "unspecified" {
+		return "", errors.New(
+			"retrieval refresh requires -lme-implementation or LME_IMPLEMENTATION",
+		)
+	}
+	if target == source {
+		return "", fmt.Errorf(
+			"retrieval refresh implementation %q matches the source; use a distinct label",
+			target,
+		)
+	}
+	return target, nil
 }
 
 func validateLongMemEvalRetrievalRefresh(result *runResult) error {
@@ -147,6 +174,7 @@ func refreshLongMemEvalRetrievalResult(
 	baseLLM model.Model,
 	modelName string,
 	modelVariant string,
+	implementation string,
 	sourceDigest string,
 	outPath string,
 ) error {
@@ -166,22 +194,28 @@ func refreshLongMemEvalRetrievalResult(
 	if result.Metadata == nil {
 		result.Metadata = make(map[string]any)
 	}
+	sourceImplementation, _ := lmeMetadataString(
+		result.Metadata, "implementation",
+	)
 	refresh := map[string]any{
-		"backend":              backend.Name(),
-		"source_sha256":        sourceDigest,
-		"build":                currentLongMemEvalBuildProvenance(),
-		"model":                modelName,
-		"model_variant":        modelVariant,
-		"embedding_model":      getEmbedModelName(),
-		"table_suffix":         *flagTableSuffix,
-		"top_k":                *flagVectorTopK,
-		"completed_cases":      0,
-		"embedding_usage":      lmeEmbeddingUsage{},
-		"refreshed_at":         time.Now().UTC().Format(time.RFC3339),
-		"memory_verification":  "canonical persisted memories match source final_memories",
-		"preserved_cost_scope": "ingestion and original query embedding; answer usage is replaced",
+		"backend":               backend.Name(),
+		"source_implementation": sourceImplementation,
+		"implementation":        implementation,
+		"source_sha256":         sourceDigest,
+		"build":                 currentLongMemEvalBuildProvenance(),
+		"model":                 modelName,
+		"model_variant":         modelVariant,
+		"embedding_model":       getEmbedModelName(),
+		"table_suffix":          *flagTableSuffix,
+		"top_k":                 *flagVectorTopK,
+		"completed_cases":       0,
+		"embedding_usage":       lmeEmbeddingUsage{},
+		"refreshed_at":          time.Now().UTC().Format(time.RFC3339),
+		"memory_verification":   "canonical persisted memories match source final_memories",
+		"preserved_cost_scope":  "ingestion and original query embedding; answer usage is replaced",
 	}
 	result.Metadata["retrieval_refresh"] = refresh
+	result.Metadata["implementation"] = implementation
 	result.Metadata["answer_generation"] = currentLongMemEvalAnswerGeneration()
 	result.Metadata["answer_prompt_version"] = lmeAnswerPromptVersion
 	result.Metadata["judge_prompt_version"] = lmeJudgePromptVersion
