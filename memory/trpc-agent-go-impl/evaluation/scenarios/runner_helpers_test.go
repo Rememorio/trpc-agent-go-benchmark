@@ -343,7 +343,7 @@ func TestMemoryQARecoveryTriggerFormatViolation(t *testing.T) {
 		},
 		{
 			name: "too many words",
-			answer: strings.Repeat("word ", memoryQAMaxAnswerWords) +
+			answer: strings.Repeat("word ", memoryQAMaxPrimaryAnswerWords) +
 				"overflow",
 			trigger: "answer-format:too-many-words",
 		},
@@ -351,7 +351,7 @@ func TestMemoryQARecoveryTriggerFormatViolation(t *testing.T) {
 			name: "reference length answer",
 			answer: "her own journey and the support she received, and how " +
 				"counseling improved her life",
-			trigger: "",
+			trigger: "answer-format:too-many-words",
 		},
 		{
 			name:    "complete short answer",
@@ -372,11 +372,15 @@ func TestMemoryQARecoveryTriggerFormatViolation(t *testing.T) {
 func TestRecoverMemoryQAAnswerRejectsMalformedRecovery(t *testing.T) {
 	m := &recoveryModel{
 		toolArgs: `{"answer":"` +
-			strings.TrimSpace(strings.Repeat("word ", memoryQAMaxAnswerWords)) +
+			strings.TrimSpace(strings.Repeat(
+				"word ", memoryQAMaxRecoveryAnswerWords,
+			)) +
 			` overflow"}`,
 	}
 	res := collectResult{
-		text:  strings.Repeat("word ", memoryQAMaxAnswerWords) + "overflow",
+		text: strings.Repeat(
+			"word ", memoryQAMaxPrimaryAnswerWords,
+		) + "overflow",
 		usage: TokenUsage{LLMCalls: 3},
 		steps: []StepTrace{{
 			Step:  1,
@@ -428,6 +432,15 @@ func TestParseMemoryQARecoveryAnswerRejectsInvalidJSON(t *testing.T) {
 func TestParseMemoryQARecoveryAnswerTrimsAnswer(t *testing.T) {
 	got, err := parseMemoryQARecoveryAnswer(`{"answer":"  Sweden  "}`)
 	if err != nil || got != "Sweden" {
+		t.Fatalf("answer = %q, error = %v", got, err)
+	}
+}
+
+func TestParseMemoryQARecoveryAnswerAllowsReferenceLength(t *testing.T) {
+	const answer = "her own journey and the support she received, and how " +
+		"counseling improved her life"
+	got, err := parseMemoryQARecoveryAnswer(`{"answer":"` + answer + `"}`)
+	if err != nil || got != answer {
 		t.Fatalf("answer = %q, error = %v", got, err)
 	}
 }

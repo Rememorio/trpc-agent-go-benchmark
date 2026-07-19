@@ -266,7 +266,7 @@ const (
 	fallbackAnswer = "The information is not available."
 
 	// MemoryQAPromptVersion identifies the shared memory-search QA protocol.
-	MemoryQAPromptVersion = "locomo-memory-qa-v12"
+	MemoryQAPromptVersion = "locomo-memory-qa-v13"
 
 	// MemoryQASearchStrategy identifies how multiple retrieval queries run.
 	MemoryQASearchStrategy = "sequential-adaptive"
@@ -274,10 +274,11 @@ const (
 	// MemoryQARecoveryMaxTokens caps the forced-tool answer recovery call.
 	MemoryQARecoveryMaxTokens = 512
 
-	// The longest LoCoMo reference answer is 57 words. Leave headroom for
-	// equivalent wording while still rejecting runaway answer generations.
-	memoryQAMaxAnswerWords       = 64
-	memoryQASubmitAnswerToolName = "submit_answer"
+	memoryQAMaxPrimaryAnswerWords = 12
+	// The longest LoCoMo reference answer is 57 words. Recovery leaves
+	// headroom for equivalent wording while still rejecting runaway output.
+	memoryQAMaxRecoveryAnswerWords = 64
+	memoryQASubmitAnswerToolName   = "submit_answer"
 )
 
 type memoryQASubmitAnswerTool struct{}
@@ -337,13 +338,13 @@ const qaAnswerPolicy = `EVIDENCE POLICY:
 FINAL ANSWER FORMAT (MANDATORY):
 - The score compares your text with a short reference answer. Output only the shortest complete answer span, never evidence, explanation, context, Markdown, or a full sentence. Complete means it names the requested entity and includes every directly requested part supported by the memories.
 - For yes/no, output exactly "Yes" or "No". For who/what/where/which, output only the requested name or noun phrase. For when, output only a natural-language date. For how many, output only the number. For why/how, output a short clause.
-- Use exact words from the supporting memories. Keep the answer as short as possible, with an upper bound of 64 words, and do not restate the question's subject.
+- Use exact words from the supporting memories. Keep the answer to 1-12 words and do not restate the question's subject.
 - Examples: "Sweden", "Transgender woman", "Horseback riding", "19 October 2023", "3", "Yes".
 - Never output an empty answer. If the exact factual relation is unsupported, output exactly "` + fallbackAnswer + `".`
 
 const qaQuestionAnswerConstraint = `
 
-After the required memory searches, output only the shortest complete final answer span (at most 64 words). Use explicit entity names instead of vague references, and include every directly requested part supported by the memories. Do not include evidence, explanation, context, or Markdown. For yes/no, output only Yes or No.`
+After the required memory searches, output only the shortest complete final answer span (1-12 words). Use explicit entity names instead of vague references, and include every directly requested part supported by the memories. Do not include evidence, explanation, context, or Markdown. For yes/no, output only Yes or No.`
 
 func memoryQAUserMessage(question string) model.Message {
 	return model.NewUserMessage(question + qaQuestionAnswerConstraint)
@@ -716,7 +717,9 @@ func parseMemoryQARecoveryAnswer(raw string) (string, error) {
 	if answer == "" {
 		return "", fmt.Errorf("recovery returned an empty answer")
 	}
-	if violation := memoryQAAnswerFormatViolation(answer); violation != "" {
+	if violation := memoryQAAnswerFormatViolation(
+		answer, memoryQAMaxRecoveryAnswerWords,
+	); violation != "" {
 		return "", fmt.Errorf(
 			"recovery returned a malformed answer: %s", violation,
 		)
@@ -729,7 +732,9 @@ func memoryQARecoveryTrigger(res collectResult) string {
 	answer := strings.TrimSpace(res.text)
 	if answer == "" {
 		reasons = append(reasons, "empty-answer")
-	} else if violation := memoryQAAnswerFormatViolation(answer); violation != "" {
+	} else if violation := memoryQAAnswerFormatViolation(
+		answer, memoryQAMaxPrimaryAnswerWords,
+	); violation != "" {
 		reasons = append(reasons, "answer-format:"+violation)
 	}
 	if len(res.steps) > 0 {
@@ -744,11 +749,11 @@ func memoryQARecoveryTrigger(res collectResult) string {
 	return strings.Join(reasons, ",")
 }
 
-func memoryQAAnswerFormatViolation(answer string) string {
+func memoryQAAnswerFormatViolation(answer string, maxWords int) string {
 	if strings.ContainsAny(answer, "\r\n") {
 		return "multiline"
 	}
-	if len(strings.Fields(answer)) > memoryQAMaxAnswerWords {
+	if len(strings.Fields(answer)) > maxWords {
 		return "too-many-words"
 	}
 	return ""
