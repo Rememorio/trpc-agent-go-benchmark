@@ -123,10 +123,11 @@ type QAResult struct {
 
 // AnswerRecoveryTrace records a direct retry after generation or format failure.
 type AnswerRecoveryTrace struct {
-	Trigger      string `json:"trigger"`
-	Succeeded    bool   `json:"succeeded"`
-	Error        string `json:"error,omitempty"`
-	FinishReason string `json:"finish_reason,omitempty"`
+	Trigger         string `json:"trigger"`
+	Succeeded       bool   `json:"succeeded"`
+	FallbackApplied bool   `json:"fallback_applied,omitempty"`
+	Error           string `json:"error,omitempty"`
+	FinishReason    string `json:"finish_reason,omitempty"`
 }
 
 // SessionRecallTrace records the query-time session recall
@@ -393,6 +394,7 @@ type runModelResult struct {
 	text         string
 	usage        TokenUsage
 	finishReason string
+	toolCalls    []model.ToolCall
 }
 
 // runModelWithRateLimitRetry calls model.GenerateContent with
@@ -429,6 +431,7 @@ func runModelWithRateLimitRetry(
 		var lastContent string
 		var lastUsage *model.Usage
 		var lastFinishReason string
+		var lastToolCalls []model.ToolCall
 		var responseErr error
 		var sawChoice bool
 		for resp := range respCh {
@@ -453,6 +456,11 @@ func runModelWithRateLimitRetry(
 				c := choice.Message.Content
 				if c != "" {
 					lastContent = c
+				}
+				if len(choice.Message.ToolCalls) > 0 {
+					lastToolCalls = append(
+						[]model.ToolCall(nil), choice.Message.ToolCalls...,
+					)
 				}
 				if choice.FinishReason != nil {
 					lastFinishReason = *choice.FinishReason
@@ -484,6 +492,7 @@ func runModelWithRateLimitRetry(
 		if lastContent != "" || sawChoice || lastUsage != nil {
 			result.text = strings.TrimSpace(lastContent)
 			result.finishReason = lastFinishReason
+			result.toolCalls = lastToolCalls
 			return result, nil
 		}
 		// Empty response (possibly rate limit or model overload).

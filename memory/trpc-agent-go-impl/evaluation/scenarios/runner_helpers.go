@@ -266,16 +266,39 @@ const (
 	fallbackAnswer = "The information is not available."
 
 	// MemoryQAPromptVersion identifies the shared memory-search QA protocol.
-	MemoryQAPromptVersion = "locomo-memory-qa-v7"
+	MemoryQAPromptVersion = "locomo-memory-qa-v11"
 
 	// MemoryQASearchStrategy identifies how multiple retrieval queries run.
 	MemoryQASearchStrategy = "sequential-adaptive"
 
-	// MemoryQARecoveryMaxTokens caps the no-tool answer recovery call.
-	MemoryQARecoveryMaxTokens = 1024
+	// MemoryQARecoveryMaxTokens caps the forced-tool answer recovery call.
+	MemoryQARecoveryMaxTokens = 512
 
-	memoryQAMaxAnswerWords = 12
+	memoryQAMaxAnswerWords       = 12
+	memoryQASubmitAnswerToolName = "submit_answer"
 )
+
+type memoryQASubmitAnswerTool struct{}
+
+func (memoryQASubmitAnswerTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{
+		Name: memoryQASubmitAnswerToolName,
+		Description: "Submit the final concise answer grounded only in " +
+			"the retrieved memories.",
+		InputSchema: &tool.Schema{
+			Type:                 "object",
+			AdditionalProperties: false,
+			Properties: map[string]*tool.Schema{
+				"answer": {
+					Type: "string",
+					Description: "The shortest complete final answer " +
+						"span in 1-12 words.",
+				},
+			},
+			Required: []string{"answer"},
+		},
+	}
+}
 
 const qaInstructionHeader = `You are a memory retrieval assistant. Search memories, then output one concise answer.
 
@@ -556,13 +579,15 @@ func recoverMemoryQAAnswer(
 	evidence := memoryQARetrievalEvidence(res.steps)
 	if strings.TrimSpace(evidence) == "" {
 		trace.Error = "no memory_search evidence available for recovery"
+		trace.FallbackApplied = true
+		res.text = fallbackAnswer
 		return res, trace
 	}
 	prompt := fmt.Sprintf(
-		`The previous answer generation failed. Answer the question using only the retrieved memory_search results below.
+		`The previous answer generation failed. Answer the question using only the retrieved memory_search results below. Call submit_answer exactly once and do not output text.
 
 Follow these rules:
-- Output only the shortest complete final answer span (1-12 words).
+- Put only the shortest complete final answer span (1-12 words) in the answer argument.
 - Use explicit entity names instead of vague references, and include every directly requested part supported by the memories.
 - Do not include evidence, explanation, context, or Markdown.
 - For yes/no, output only Yes or No.
@@ -591,6 +616,17 @@ Retrieved memory_search results:
 				ReasoningEffort: &reasoningEffort,
 				ThinkingEnabled: &thinkingEnabled,
 			},
+			Tools: map[string]tool.Tool{
+				memoryQASubmitAnswerToolName: memoryQASubmitAnswerTool{},
+			},
+			ExtraFields: map[string]any{
+				"tool_choice": map[string]any{
+					"type": "function",
+					"function": map[string]string{
+						"name": memoryQASubmitAnswerToolName,
+					},
+				},
+			},
 		},
 	)
 	trace.FinishReason = recovery.finishReason
@@ -607,6 +643,12 @@ Retrieved memory_search results:
 		ReasoningTokens:     recovery.usage.ReasoningTokens,
 		FinishReason:        recovery.finishReason,
 	}
+	for _, tc := range recovery.toolCalls {
+		step.ToolCalls = append(step.ToolCalls, ToolCallTrace{
+			Name: tc.Function.Name,
+			Args: string(tc.Function.Arguments),
+		})
+	}
 	res.usage.Add(recovery.usage)
 	if err != nil {
 		trace.Error = err.Error()
@@ -614,23 +656,70 @@ Retrieved memory_search results:
 		res.steps = append(res.steps, step)
 		return res, trace
 	}
-	recoveredText := strings.TrimSpace(recovery.text)
-	trace.Succeeded = recoveredText != "" &&
-		memoryQAAnswerFormatViolation(recoveredText) == ""
-	if !trace.Succeeded {
-		if recoveredText == "" {
-			trace.Error = "recovery returned an empty answer"
-		} else {
-			trace.Error = "recovery returned a malformed answer: " +
-				memoryQAAnswerFormatViolation(recoveredText)
-		}
+	recoveredText, parseErr := parseMemoryQARecoveryToolCall(
+		recovery.toolCalls, recovery.text,
+	)
+	trace.Succeeded = parseErr == nil
+	if parseErr != nil {
+		trace.Error = parseErr.Error()
+		trace.FallbackApplied = true
 		step.Error = trace.Error
 		res.steps = append(res.steps, step)
+		res.text = fallbackAnswer
 		return res, trace
 	}
 	res.steps = append(res.steps, step)
 	res.text = recoveredText
 	return res, trace
+}
+
+func parseMemoryQARecoveryToolCall(
+	calls []model.ToolCall,
+	responseText string,
+) (string, error) {
+	if len(calls) == 0 {
+		if strings.TrimSpace(responseText) == "" {
+			return "", fmt.Errorf("recovery returned an empty answer")
+		}
+		return "", fmt.Errorf(
+			"recovery did not call %s", memoryQASubmitAnswerToolName,
+		)
+	}
+	if len(calls) != 1 {
+		return "", fmt.Errorf(
+			"recovery returned %d tool calls, want 1", len(calls),
+		)
+	}
+	call := calls[0]
+	if call.Function.Name != memoryQASubmitAnswerToolName {
+		return "", fmt.Errorf(
+			"recovery called %s, want %s",
+			call.Function.Name, memoryQASubmitAnswerToolName,
+		)
+	}
+	return parseMemoryQARecoveryAnswer(string(call.Function.Arguments))
+}
+
+func parseMemoryQARecoveryAnswer(raw string) (string, error) {
+	if strings.TrimSpace(raw) == "" {
+		return "", fmt.Errorf("recovery returned an empty answer")
+	}
+	var payload struct {
+		Answer string `json:"answer"`
+	}
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return "", fmt.Errorf("recovery returned invalid JSON: %w", err)
+	}
+	answer := strings.TrimSpace(payload.Answer)
+	if answer == "" {
+		return "", fmt.Errorf("recovery returned an empty answer")
+	}
+	if violation := memoryQAAnswerFormatViolation(answer); violation != "" {
+		return "", fmt.Errorf(
+			"recovery returned a malformed answer: %s", violation,
+		)
+	}
+	return answer, nil
 }
 
 func memoryQARecoveryTrigger(res collectResult) string {
@@ -665,20 +754,73 @@ func memoryQAAnswerFormatViolation(answer string) string {
 
 func memoryQARetrievalEvidence(steps []StepTrace) string {
 	var evidence strings.Builder
+	seen := make(map[string]struct{})
+	resultNumber := 0
 	for _, step := range steps {
 		for _, call := range step.ToolCalls {
 			if call.Name != "memory_search" || call.Result == "" {
 				continue
 			}
-			fmt.Fprintf(
-				&evidence,
-				"Query: %s\nResult: %s\n\n",
-				call.Args,
-				call.Result,
-			)
+			var searchResult memorySearchResult
+			if err := json.Unmarshal(
+				[]byte(call.Result), &searchResult,
+			); err != nil {
+				fmt.Fprintf(&evidence, "Search result: %s\n\n", call.Result)
+				continue
+			}
+			for _, result := range searchResult.Results {
+				key := result.ID
+				if key == "" {
+					key = result.Memory
+				}
+				if _, ok := seen[key]; ok {
+					continue
+				}
+				seen[key] = struct{}{}
+				resultNumber++
+				fmt.Fprintf(
+					&evidence, "%d. Memory: %s\n",
+					resultNumber, result.Memory,
+				)
+				if len(result.Topics) > 0 {
+					fmt.Fprintf(
+						&evidence, "   Topics: %s\n",
+						strings.Join(result.Topics, ", "),
+					)
+				}
+				if result.Kind != "" {
+					fmt.Fprintf(&evidence, "   Kind: %s\n", result.Kind)
+				}
+				if result.EventTime != "" {
+					fmt.Fprintf(
+						&evidence, "   Event time: %s\n", result.EventTime,
+					)
+				}
+				if len(result.Participants) > 0 {
+					fmt.Fprintf(
+						&evidence, "   Participants: %s\n",
+						strings.Join(result.Participants, ", "),
+					)
+				}
+				if result.Location != "" {
+					fmt.Fprintf(
+						&evidence, "   Location: %s\n", result.Location,
+					)
+				}
+				if result.Metadata != nil {
+					metadata, err := json.Marshal(result.Metadata)
+					if err == nil && string(metadata) != "{}" &&
+						string(metadata) != "null" {
+						fmt.Fprintf(
+							&evidence, "   Metadata: %s\n", metadata,
+						)
+					}
+				}
+				evidence.WriteString("\n")
+			}
 		}
 	}
-	return evidence.String()
+	return strings.TrimSpace(evidence.String())
 }
 
 // memorySearchResult matches the JSON structure returned by
@@ -686,10 +828,15 @@ func memoryQARetrievalEvidence(steps []StepTrace) string {
 type memorySearchResult struct {
 	Query   string `json:"query"`
 	Results []struct {
-		ID       string `json:"id"`
-		Memory   string `json:"memory"`
-		Score    any    `json:"score"`
-		Metadata any    `json:"metadata,omitempty"`
+		ID           string   `json:"id"`
+		Memory       string   `json:"memory"`
+		Topics       []string `json:"topics,omitempty"`
+		Kind         string   `json:"kind,omitempty"`
+		EventTime    string   `json:"event_time,omitempty"`
+		Participants []string `json:"participants,omitempty"`
+		Location     string   `json:"location,omitempty"`
+		Score        any      `json:"score"`
+		Metadata     any      `json:"metadata,omitempty"`
 	} `json:"results"`
 }
 

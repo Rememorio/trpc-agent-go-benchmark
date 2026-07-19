@@ -379,7 +379,9 @@ func TestBuildEvaluationResultCountsProtocolViolations(t *testing.T) {
 					{},
 					{ProtocolError: "missing search"},
 					{AnswerRecovery: &scenarios.AnswerRecoveryTrace{Succeeded: true}},
-					{AnswerRecovery: &scenarios.AnswerRecoveryTrace{}},
+					{AnswerRecovery: &scenarios.AnswerRecoveryTrace{
+						FallbackApplied: true,
+					}},
 				},
 			},
 		},
@@ -395,5 +397,8 @@ func TestBuildEvaluationResultCountsProtocolViolations(t *testing.T) {
 	}
 	if got := result.Summary.AnswerRecoverySuccesses; got != 1 {
 		t.Fatalf("answer recovery successes = %d, want 1", got)
+	}
+	if got := result.Summary.AnswerRecoveryFallbacks; got != 1 {
+		t.Fatalf("answer recovery fallbacks = %d, want 1", got)
 	}
 }

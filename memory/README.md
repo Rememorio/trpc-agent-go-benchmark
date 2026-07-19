@@ -466,7 +466,11 @@ LoCoMo memory QA explicitly disables model thinking, uses low reasoning effort,
 and reserves 512 output tokens for tool calls and the final short answer. This
 prevents reasoning or provider tool-call syntax from exhausting a small output
 budget before an answer is emitted. Empty, truncated, multiline, or overlong
-answers receive one tool-free recovery call with a 1024-token budget. Terminal
+answers receive one recovery call constrained to a `submit_answer` tool with a
+512-token budget. Recovery input deduplicates repeated search hits and removes
+storage-only fields while preserving memory text and semantic metadata.
+If that one call still fails validation, the evaluator records the failure and
+uses the standard unavailable answer as a deterministic fallback. Terminal
 empty responses are not retried, and their call, finish reason, prompt-cache,
 reasoning-token, and total-token usage remain in the QA trace.
 `-locomo-reuse-memories` skips only the auto

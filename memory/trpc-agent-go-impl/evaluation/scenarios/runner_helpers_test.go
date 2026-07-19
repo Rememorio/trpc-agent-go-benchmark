@@ -24,6 +24,7 @@ import (
 type recoveryModel struct {
 	request      *model.Request
 	text         string
+	toolArgs     string
 	empty        bool
 	finishReason string
 	calls        int
@@ -36,8 +37,19 @@ func (m *recoveryModel) GenerateContent(
 	m.request = request
 	m.calls++
 	responseText := m.text
-	if responseText == "" && !m.empty {
-		responseText = "recovered answer"
+	message := model.NewAssistantMessage(responseText)
+	if !m.empty {
+		toolArgs := m.toolArgs
+		if toolArgs == "" {
+			toolArgs = `{"answer":"recovered answer"}`
+		}
+		message.ToolCalls = []model.ToolCall{{
+			ID: "submit-answer-id",
+			Function: model.FunctionDefinitionParam{
+				Name:      memoryQASubmitAnswerToolName,
+				Arguments: []byte(toolArgs),
+			},
+		}}
 	}
 	finishReason := m.finishReason
 	if finishReason == "" {
@@ -46,7 +58,7 @@ func (m *recoveryModel) GenerateContent(
 	ch := make(chan *model.Response, 1)
 	ch <- &model.Response{
 		Choices: []model.Choice{{
-			Message:      model.NewAssistantMessage(responseText),
+			Message:      message,
 			FinishReason: &finishReason,
 		}},
 		Usage: &model.Usage{
@@ -254,13 +266,54 @@ func TestRecoverMemoryQAAnswer(t *testing.T) {
 			MemoryQARecoveryMaxTokens,
 		)
 	}
+	answerTool, ok := m.request.Tools[memoryQASubmitAnswerToolName]
+	if !ok || answerTool.Declaration().Name != memoryQASubmitAnswerToolName {
+		t.Fatalf("tools = %+v", m.request.Tools)
+	}
+	toolChoice, ok := m.request.ExtraFields["tool_choice"].(map[string]any)
+	if !ok || toolChoice["type"] != "function" {
+		t.Fatalf("tool choice = %+v", m.request.ExtraFields["tool_choice"])
+	}
+	function, ok := toolChoice["function"].(map[string]string)
+	if !ok || function["name"] != memoryQASubmitAnswerToolName {
+		t.Fatalf("tool choice function = %+v", toolChoice["function"])
+	}
 	prompt := m.request.Messages[0].Content
 	for _, want := range []string{
-		"What happened?", `{"query":"first"}`, "evidence",
+		"What happened?", "Memory: evidence", "submit_answer",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("recovery prompt missing %q: %q", want, prompt)
 		}
+	}
+}
+
+func TestMemoryQARetrievalEvidenceCompactsAndDeduplicates(t *testing.T) {
+	result := `{"query":"q","results":[` +
+		`{"id":"same","memory":"evidence","topics":["topic"],` +
+		`"kind":"fact","event_time":"2023-01-02T00:00:00Z",` +
+		`"participants":["Caroline"],"location":"center",` +
+		`"created":"ignored","score":0.9}]}`
+	steps := []StepTrace{
+		{ToolCalls: []ToolCallTrace{{Name: "memory_search", Result: result}}},
+		{ToolCalls: []ToolCallTrace{{Name: "memory_search", Result: result}}},
+	}
+	got := memoryQARetrievalEvidence(steps)
+	for _, want := range []string{
+		"1. Memory: evidence",
+		"Topics: topic",
+		"Kind: fact",
+		"Event time: 2023-01-02T00:00:00Z",
+		"Participants: Caroline",
+		"Location: center",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("evidence missing %q: %q", want, got)
+		}
+	}
+	if strings.Count(got, "Memory: evidence") != 1 ||
+		strings.Contains(got, "created") || strings.Contains(got, "score") {
+		t.Fatalf("evidence was not compacted and deduplicated: %q", got)
 	}
 }
 
@@ -312,8 +365,8 @@ func TestMemoryQARecoveryTriggerFormatViolation(t *testing.T) {
 
 func TestRecoverMemoryQAAnswerRejectsMalformedRecovery(t *testing.T) {
 	m := &recoveryModel{
-		text: "one two three four five six seven eight nine ten " +
-			"eleven twelve thirteen",
+		toolArgs: `{"answer":"one two three four five six seven eight nine ten ` +
+			`eleven twelve thirteen"}`,
 	}
 	res := collectResult{
 		text: "This answer is already much too long because it contains " +
@@ -336,8 +389,8 @@ func TestRecoverMemoryQAAnswerRejectsMalformedRecovery(t *testing.T) {
 		!strings.Contains(trace.Error, "too-many-words") {
 		t.Fatalf("trace = %+v", trace)
 	}
-	if got.text != res.text {
-		t.Fatalf("answer replaced with malformed recovery: %q", got.text)
+	if got.text != fallbackAnswer || !trace.FallbackApplied {
+		t.Fatalf("fallback was not applied: answer=%q trace=%+v", got.text, trace)
 	}
 	if got.usage.LLMCalls != 4 || got.usage.TotalTokens != 23 {
 		t.Fatalf("usage = %+v", got.usage)
@@ -347,6 +400,29 @@ func TestRecoverMemoryQAAnswerRejectsMalformedRecovery(t *testing.T) {
 	}
 	if got.steps[1].Error == "" {
 		t.Fatalf("recovery failure missing from step: %+v", got.steps[1])
+	}
+}
+
+func TestParseMemoryQARecoveryToolCallRequiresSubmitAnswer(t *testing.T) {
+	_, err := parseMemoryQARecoveryToolCall(
+		nil, "free-form response",
+	)
+	if err == nil || !strings.Contains(err.Error(), "did not call") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestParseMemoryQARecoveryAnswerRejectsInvalidJSON(t *testing.T) {
+	_, err := parseMemoryQARecoveryAnswer("not JSON")
+	if err == nil || !strings.Contains(err.Error(), "invalid JSON") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestParseMemoryQARecoveryAnswerTrimsAnswer(t *testing.T) {
+	got, err := parseMemoryQARecoveryAnswer(`{"answer":"  Sweden  "}`)
+	if err != nil || got != "Sweden" {
+		t.Fatalf("answer = %q, error = %v", got, err)
 	}
 }
 
@@ -371,7 +447,8 @@ func TestRecoverMemoryQAAnswerRecordsTerminalEmptyResponse(t *testing.T) {
 		t.Fatalf("model calls = %d, want 1", m.calls)
 	}
 	if trace == nil || trace.Succeeded || trace.FinishReason != "length" ||
-		trace.Error != "recovery returned an empty answer" {
+		trace.Error != "recovery returned an empty answer" ||
+		!trace.FallbackApplied {
 		t.Fatalf("trace = %+v", trace)
 	}
 	if got.usage.LLMCalls != 4 || got.usage.TotalTokens != 23 {
@@ -399,7 +476,8 @@ func TestRecoverMemoryQAAnswerRequiresEvidence(t *testing.T) {
 		"no memory_search evidence available for recovery" {
 		t.Fatalf("trace = %+v", trace)
 	}
-	if got.text != "" || len(got.steps) != len(res.steps) {
+	if got.text != fallbackAnswer || !trace.FallbackApplied ||
+		len(got.steps) != len(res.steps) {
 		t.Fatalf("got = %+v", got)
 	}
 }
