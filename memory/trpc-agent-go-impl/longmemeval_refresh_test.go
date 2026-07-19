@@ -159,6 +159,12 @@ func TestRefreshLongMemEvalRetrievalResult(t *testing.T) {
 		refresh["implementation"] != "refreshed-implementation" {
 		t.Fatalf("retrieval implementation metadata = %#v", result.Metadata)
 	}
+	if result.Metadata["reanswer_model"] != "answer-model" ||
+		result.Metadata["reanswer_model_variant"] != "variant" ||
+		result.Metadata["reanswer_build"] == nil ||
+		result.Metadata["reanswered_at"] != refresh["refreshed_at"] {
+		t.Fatalf("retrieval re-answer metadata = %#v", result.Metadata)
+	}
 	if _, err := loadLongMemEvalResults(outPath); err != nil {
 		t.Fatalf("load retrieval refresh checkpoint: %v", err)
 	}

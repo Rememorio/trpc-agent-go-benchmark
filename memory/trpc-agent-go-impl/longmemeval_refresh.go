@@ -197,12 +197,14 @@ func refreshLongMemEvalRetrievalResult(
 	sourceImplementation, _ := lmeMetadataString(
 		result.Metadata, "implementation",
 	)
+	refreshBuild := currentLongMemEvalBuildProvenance()
+	refreshedAt := time.Now().UTC().Format(time.RFC3339)
 	refresh := map[string]any{
 		"backend":               backend.Name(),
 		"source_implementation": sourceImplementation,
 		"implementation":        implementation,
 		"source_sha256":         sourceDigest,
-		"build":                 currentLongMemEvalBuildProvenance(),
+		"build":                 refreshBuild,
 		"model":                 modelName,
 		"model_variant":         modelVariant,
 		"embedding_model":       getEmbedModelName(),
@@ -210,12 +212,17 @@ func refreshLongMemEvalRetrievalResult(
 		"top_k":                 *flagVectorTopK,
 		"completed_cases":       0,
 		"embedding_usage":       lmeEmbeddingUsage{},
-		"refreshed_at":          time.Now().UTC().Format(time.RFC3339),
+		"refreshed_at":          refreshedAt,
 		"memory_verification":   "canonical persisted memories match source final_memories",
 		"preserved_cost_scope":  "ingestion and original query embedding; answer usage is replaced",
 	}
 	result.Metadata["retrieval_refresh"] = refresh
 	result.Metadata["implementation"] = implementation
+	result.Metadata["reanswer_model"] = modelName
+	result.Metadata["reanswer_model_variant"] = modelVariant
+	result.Metadata["reanswer_build"] = refreshBuild
+	result.Metadata["reanswered_at"] = refreshedAt
+	result.Metadata["reanswer_note"] = "Answers regenerated from refreshed PGVector retrieval hits using the recorded answer protocol."
 	result.Metadata["answer_generation"] = currentLongMemEvalAnswerGeneration()
 	result.Metadata["answer_prompt_version"] = lmeAnswerPromptVersion
 	result.Metadata["judge_prompt_version"] = lmeJudgePromptVersion
