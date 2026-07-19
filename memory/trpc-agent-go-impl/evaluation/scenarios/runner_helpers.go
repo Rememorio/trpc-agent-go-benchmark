@@ -266,13 +266,13 @@ const (
 	fallbackAnswer = "The information is not available."
 
 	// MemoryQAPromptVersion identifies the shared memory-search QA protocol.
-	MemoryQAPromptVersion = "locomo-memory-qa-v9"
+	MemoryQAPromptVersion = "locomo-memory-qa-v10"
 
 	// MemoryQASearchStrategy identifies how multiple retrieval queries run.
 	MemoryQASearchStrategy = "sequential-adaptive"
 
 	// MemoryQARecoveryMaxTokens caps the forced-tool answer recovery call.
-	MemoryQARecoveryMaxTokens = 256
+	MemoryQARecoveryMaxTokens = 512
 
 	memoryQAMaxAnswerWords       = 12
 	memoryQASubmitAnswerToolName = "submit_answer"
@@ -750,20 +750,73 @@ func memoryQAAnswerFormatViolation(answer string) string {
 
 func memoryQARetrievalEvidence(steps []StepTrace) string {
 	var evidence strings.Builder
+	seen := make(map[string]struct{})
+	resultNumber := 0
 	for _, step := range steps {
 		for _, call := range step.ToolCalls {
 			if call.Name != "memory_search" || call.Result == "" {
 				continue
 			}
-			fmt.Fprintf(
-				&evidence,
-				"Query: %s\nResult: %s\n\n",
-				call.Args,
-				call.Result,
-			)
+			var searchResult memorySearchResult
+			if err := json.Unmarshal(
+				[]byte(call.Result), &searchResult,
+			); err != nil {
+				fmt.Fprintf(&evidence, "Search result: %s\n\n", call.Result)
+				continue
+			}
+			for _, result := range searchResult.Results {
+				key := result.ID
+				if key == "" {
+					key = result.Memory
+				}
+				if _, ok := seen[key]; ok {
+					continue
+				}
+				seen[key] = struct{}{}
+				resultNumber++
+				fmt.Fprintf(
+					&evidence, "%d. Memory: %s\n",
+					resultNumber, result.Memory,
+				)
+				if len(result.Topics) > 0 {
+					fmt.Fprintf(
+						&evidence, "   Topics: %s\n",
+						strings.Join(result.Topics, ", "),
+					)
+				}
+				if result.Kind != "" {
+					fmt.Fprintf(&evidence, "   Kind: %s\n", result.Kind)
+				}
+				if result.EventTime != "" {
+					fmt.Fprintf(
+						&evidence, "   Event time: %s\n", result.EventTime,
+					)
+				}
+				if len(result.Participants) > 0 {
+					fmt.Fprintf(
+						&evidence, "   Participants: %s\n",
+						strings.Join(result.Participants, ", "),
+					)
+				}
+				if result.Location != "" {
+					fmt.Fprintf(
+						&evidence, "   Location: %s\n", result.Location,
+					)
+				}
+				if result.Metadata != nil {
+					metadata, err := json.Marshal(result.Metadata)
+					if err == nil && string(metadata) != "{}" &&
+						string(metadata) != "null" {
+						fmt.Fprintf(
+							&evidence, "   Metadata: %s\n", metadata,
+						)
+					}
+				}
+				evidence.WriteString("\n")
+			}
 		}
 	}
-	return evidence.String()
+	return strings.TrimSpace(evidence.String())
 }
 
 // memorySearchResult matches the JSON structure returned by
@@ -771,10 +824,15 @@ func memoryQARetrievalEvidence(steps []StepTrace) string {
 type memorySearchResult struct {
 	Query   string `json:"query"`
 	Results []struct {
-		ID       string `json:"id"`
-		Memory   string `json:"memory"`
-		Score    any    `json:"score"`
-		Metadata any    `json:"metadata,omitempty"`
+		ID           string   `json:"id"`
+		Memory       string   `json:"memory"`
+		Topics       []string `json:"topics,omitempty"`
+		Kind         string   `json:"kind,omitempty"`
+		EventTime    string   `json:"event_time,omitempty"`
+		Participants []string `json:"participants,omitempty"`
+		Location     string   `json:"location,omitempty"`
+		Score        any      `json:"score"`
+		Metadata     any      `json:"metadata,omitempty"`
 	} `json:"results"`
 }
 

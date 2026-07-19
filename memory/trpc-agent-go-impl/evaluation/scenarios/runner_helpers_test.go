@@ -280,11 +280,40 @@ func TestRecoverMemoryQAAnswer(t *testing.T) {
 	}
 	prompt := m.request.Messages[0].Content
 	for _, want := range []string{
-		"What happened?", `{"query":"first"}`, "evidence", "submit_answer",
+		"What happened?", "Memory: evidence", "submit_answer",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("recovery prompt missing %q: %q", want, prompt)
 		}
+	}
+}
+
+func TestMemoryQARetrievalEvidenceCompactsAndDeduplicates(t *testing.T) {
+	result := `{"query":"q","results":[` +
+		`{"id":"same","memory":"evidence","topics":["topic"],` +
+		`"kind":"fact","event_time":"2023-01-02T00:00:00Z",` +
+		`"participants":["Caroline"],"location":"center",` +
+		`"created":"ignored","score":0.9}]}`
+	steps := []StepTrace{
+		{ToolCalls: []ToolCallTrace{{Name: "memory_search", Result: result}}},
+		{ToolCalls: []ToolCallTrace{{Name: "memory_search", Result: result}}},
+	}
+	got := memoryQARetrievalEvidence(steps)
+	for _, want := range []string{
+		"1. Memory: evidence",
+		"Topics: topic",
+		"Kind: fact",
+		"Event time: 2023-01-02T00:00:00Z",
+		"Participants: Caroline",
+		"Location: center",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("evidence missing %q: %q", want, got)
+		}
+	}
+	if strings.Count(got, "Memory: evidence") != 1 ||
+		strings.Contains(got, "created") || strings.Contains(got, "score") {
+		t.Fatalf("evidence was not compacted and deduplicated: %q", got)
 	}
 }
 

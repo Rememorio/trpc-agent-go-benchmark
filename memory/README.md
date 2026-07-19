@@ -467,9 +467,10 @@ and reserves 512 output tokens for tool calls and the final short answer. This
 prevents reasoning or provider tool-call syntax from exhausting a small output
 budget before an answer is emitted. Empty, truncated, multiline, or overlong
 answers receive one recovery call constrained to a `submit_answer` tool with a
-256-token budget. Terminal empty responses are not retried, and their call,
-finish reason, prompt-cache, reasoning-token, and total-token usage remain in
-the QA trace.
+512-token budget. Recovery input deduplicates repeated search hits and removes
+storage-only fields while preserving memory text and semantic metadata.
+Terminal empty responses are not retried, and their call, finish reason,
+prompt-cache, reasoning-token, and total-token usage remain in the QA trace.
 `-locomo-reuse-memories` skips only the auto
 extraction phase and requires an explicit `-table-suffix`; it fails when the
 selected table has no memories for the sample. The QA searches and answers are
