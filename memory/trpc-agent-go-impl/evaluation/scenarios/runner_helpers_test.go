@@ -343,9 +343,15 @@ func TestMemoryQARecoveryTriggerFormatViolation(t *testing.T) {
 		},
 		{
 			name: "too many words",
-			answer: "one two three four five six seven eight nine ten " +
-				"eleven twelve thirteen",
+			answer: strings.Repeat("word ", memoryQAMaxAnswerWords) +
+				"overflow",
 			trigger: "answer-format:too-many-words",
+		},
+		{
+			name: "reference length answer",
+			answer: "her own journey and the support she received, and how " +
+				"counseling improved her life",
+			trigger: "",
 		},
 		{
 			name:    "complete short answer",
@@ -365,12 +371,12 @@ func TestMemoryQARecoveryTriggerFormatViolation(t *testing.T) {
 
 func TestRecoverMemoryQAAnswerRejectsMalformedRecovery(t *testing.T) {
 	m := &recoveryModel{
-		toolArgs: `{"answer":"one two three four five six seven eight nine ten ` +
-			`eleven twelve thirteen"}`,
+		toolArgs: `{"answer":"` +
+			strings.TrimSpace(strings.Repeat("word ", memoryQAMaxAnswerWords)) +
+			` overflow"}`,
 	}
 	res := collectResult{
-		text: "This answer is already much too long because it contains " +
-			"more than twelve separate words for no useful reason",
+		text:  strings.Repeat("word ", memoryQAMaxAnswerWords) + "overflow",
 		usage: TokenUsage{LLMCalls: 3},
 		steps: []StepTrace{{
 			Step:  1,

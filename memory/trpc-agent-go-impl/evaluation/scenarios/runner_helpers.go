@@ -266,7 +266,7 @@ const (
 	fallbackAnswer = "The information is not available."
 
 	// MemoryQAPromptVersion identifies the shared memory-search QA protocol.
-	MemoryQAPromptVersion = "locomo-memory-qa-v11"
+	MemoryQAPromptVersion = "locomo-memory-qa-v12"
 
 	// MemoryQASearchStrategy identifies how multiple retrieval queries run.
 	MemoryQASearchStrategy = "sequential-adaptive"
@@ -274,7 +274,9 @@ const (
 	// MemoryQARecoveryMaxTokens caps the forced-tool answer recovery call.
 	MemoryQARecoveryMaxTokens = 512
 
-	memoryQAMaxAnswerWords       = 12
+	// The longest LoCoMo reference answer is 57 words. Leave headroom for
+	// equivalent wording while still rejecting runaway answer generations.
+	memoryQAMaxAnswerWords       = 64
 	memoryQASubmitAnswerToolName = "submit_answer"
 )
 
@@ -292,7 +294,7 @@ func (memoryQASubmitAnswerTool) Declaration() *tool.Declaration {
 				"answer": {
 					Type: "string",
 					Description: "The shortest complete final answer " +
-						"span in 1-12 words.",
+						"span in at most 64 words.",
 				},
 			},
 			Required: []string{"answer"},
@@ -335,13 +337,13 @@ const qaAnswerPolicy = `EVIDENCE POLICY:
 FINAL ANSWER FORMAT (MANDATORY):
 - The score compares your text with a short reference answer. Output only the shortest complete answer span, never evidence, explanation, context, Markdown, or a full sentence. Complete means it names the requested entity and includes every directly requested part supported by the memories.
 - For yes/no, output exactly "Yes" or "No". For who/what/where/which, output only the requested name or noun phrase. For when, output only a natural-language date. For how many, output only the number. For why/how, output a short clause.
-- Use exact words from the supporting memories. Keep the answer to 1-12 words and do not restate the question's subject.
+- Use exact words from the supporting memories. Keep the answer as short as possible, with an upper bound of 64 words, and do not restate the question's subject.
 - Examples: "Sweden", "Transgender woman", "Horseback riding", "19 October 2023", "3", "Yes".
 - Never output an empty answer. If the exact factual relation is unsupported, output exactly "` + fallbackAnswer + `".`
 
 const qaQuestionAnswerConstraint = `
 
-After the required memory searches, output only the shortest complete final answer span (1-12 words). Use explicit entity names instead of vague references, and include every directly requested part supported by the memories. Do not include evidence, explanation, context, or Markdown. For yes/no, output only Yes or No.`
+After the required memory searches, output only the shortest complete final answer span (at most 64 words). Use explicit entity names instead of vague references, and include every directly requested part supported by the memories. Do not include evidence, explanation, context, or Markdown. For yes/no, output only Yes or No.`
 
 func memoryQAUserMessage(question string) model.Message {
 	return model.NewUserMessage(question + qaQuestionAnswerConstraint)
@@ -587,7 +589,7 @@ func recoverMemoryQAAnswer(
 		`The previous answer generation failed. Answer the question using only the retrieved memory_search results below. Call submit_answer exactly once and do not output text.
 
 Follow these rules:
-- Put only the shortest complete final answer span (1-12 words) in the answer argument.
+- Put only the shortest complete final answer span (at most 64 words) in the answer argument.
 - Use explicit entity names instead of vague references, and include every directly requested part supported by the memories.
 - Do not include evidence, explanation, context, or Markdown.
 - For yes/no, output only Yes or No.
