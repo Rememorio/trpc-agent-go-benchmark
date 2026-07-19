@@ -266,7 +266,7 @@ const (
 	fallbackAnswer = "The information is not available."
 
 	// MemoryQAPromptVersion identifies the shared memory-search QA protocol.
-	MemoryQAPromptVersion = "locomo-memory-qa-v4"
+	MemoryQAPromptVersion = "locomo-memory-qa-v5"
 
 	// MemoryQASearchStrategy identifies how multiple retrieval queries run.
 	MemoryQASearchStrategy = "sequential-adaptive"
@@ -303,10 +303,12 @@ const qaAnswerPolicy = `EVIDENCE POLICY:
 4. Respect negative evidence and status qualifiers such as not, never, considering, planning, and completed.
 5. For an explicitly hypothetical, comparative, or inferential question, make a concise inference only from evidence about the exact subject. Do not assume an unsupported premise from the question.
 6. Temporal and multi-hop answers may combine multiple memories, but every required link must be supported.
-7. If the exact factual relation is unsupported after all searches, output exactly "` + fallbackAnswer + `". Prefer this fallback to a guess based only on a related topic.
+7. Prefer the most specific supported answer. If retrieved memories provide an explicit person, place, organization, or item, never replace it with a pronoun or vague category label. Combine an exact relation with an unambiguous identity from another retrieved memory when needed.
+8. Return every supported part that directly answers a compound reason, description, or requested list. Do not omit a required part just to make the answer shorter, and do not add unrelated facts from the same topic.
+9. If the exact factual relation is unsupported after all searches, output exactly "` + fallbackAnswer + `". Prefer this fallback to a guess based only on a related topic.
 
 FINAL ANSWER FORMAT (MANDATORY):
-- The score compares your text with a short reference answer. Output only the shortest answer span, never evidence, explanation, context, Markdown, or a full sentence.
+- The score compares your text with a short reference answer. Output only the shortest complete answer span, never evidence, explanation, context, Markdown, or a full sentence. Complete means it names the requested entity and includes every directly requested part supported by the memories.
 - For yes/no, output exactly "Yes" or "No". For who/what/where/which, output only the requested name or noun phrase. For when, output only a natural-language date. For how many, output only the number. For why/how, output a short clause.
 - Use exact words from the supporting memories. Keep the answer to 1-12 words and do not restate the question's subject.
 - Examples: "Sweden", "Transgender woman", "Horseback riding", "19 October 2023", "3", "Yes".
@@ -314,7 +316,7 @@ FINAL ANSWER FORMAT (MANDATORY):
 
 const qaQuestionAnswerConstraint = `
 
-After the required memory searches, output only the shortest final answer span (1-12 words). Do not include evidence, explanation, context, or Markdown. For yes/no, output only Yes or No.`
+After the required memory searches, output only the shortest complete final answer span (1-12 words). Use explicit entity names instead of vague references, and include every directly requested part supported by the memories. Do not include evidence, explanation, context, or Markdown. For yes/no, output only Yes or No.`
 
 func memoryQAUserMessage(question string) model.Message {
 	return model.NewUserMessage(question + qaQuestionAnswerConstraint)
@@ -550,7 +552,8 @@ func recoverMemoryQAAnswer(
 		`The previous answer generation failed. Answer the question using only the retrieved memory_search results below.
 
 Follow these rules:
-- Output only the shortest final answer span (1-12 words).
+- Output only the shortest complete final answer span (1-12 words).
+- Use explicit entity names instead of vague references, and include every directly requested part supported by the memories.
 - Do not include evidence, explanation, context, or Markdown.
 - For yes/no, output only Yes or No.
 - If the exact factual relation is unsupported, output exactly "%s".
