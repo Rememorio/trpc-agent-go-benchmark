@@ -11,6 +11,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -150,6 +151,25 @@ func TestBuildEvaluationResultRecordsAutoExtractionTimeout(t *testing.T) {
 	)
 	if got := derived.Metadata.AutoExtractionTimeout; got != "derived-from-session-count" {
 		t.Fatalf("derived extraction timeout = %q", got)
+	}
+}
+
+func TestEvalMetadataRecordsDisabledMemoryReuse(t *testing.T) {
+	result := buildEvaluationResult(
+		scenarios.Config{Scenario: scenarios.ScenarioAuto},
+		"pgvector",
+		time.Now(),
+		nil,
+		metrics.NewCategoryAggregator(),
+		0,
+		scenarios.TokenUsage{},
+	)
+	data, err := json.Marshal(result.Metadata)
+	if err != nil {
+		t.Fatalf("marshal metadata: %v", err)
+	}
+	if !strings.Contains(string(data), `"reuse_memories":false`) {
+		t.Fatalf("metadata does not record disabled reuse: %s", data)
 	}
 }
 
