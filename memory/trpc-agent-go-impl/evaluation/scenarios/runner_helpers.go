@@ -266,13 +266,13 @@ const (
 	fallbackAnswer = "The information is not available."
 
 	// MemoryQAPromptVersion identifies the shared memory-search QA protocol.
-	MemoryQAPromptVersion = "locomo-memory-qa-v6"
+	MemoryQAPromptVersion = "locomo-memory-qa-v7"
 
 	// MemoryQASearchStrategy identifies how multiple retrieval queries run.
 	MemoryQASearchStrategy = "sequential-adaptive"
 
 	// MemoryQARecoveryMaxTokens caps the no-tool answer recovery call.
-	MemoryQARecoveryMaxTokens = 128
+	MemoryQARecoveryMaxTokens = 1024
 
 	memoryQAMaxAnswerWords = 12
 )
@@ -366,6 +366,7 @@ type ToolCallTrace struct {
 type StepTrace struct {
 	Step                int             `json:"step"`
 	Phase               string          `json:"phase,omitempty"`
+	LLMCalls            int             `json:"llm_calls,omitempty"`
 	PromptTokens        int             `json:"prompt_tokens"`
 	CompletionTokens    int             `json:"completion_tokens"`
 	TotalTokens         int             `json:"total_tokens"`
@@ -374,6 +375,7 @@ type StepTrace struct {
 	CacheReadTokens     int             `json:"cache_read_tokens,omitempty"`
 	ReasoningTokens     int             `json:"reasoning_tokens,omitempty"`
 	FinishReason        string          `json:"finish_reason,omitempty"`
+	Error               string          `json:"error,omitempty"`
 	ToolCalls           []ToolCallTrace `json:"tool_calls,omitempty"`
 }
 
@@ -399,13 +401,17 @@ func collectFinalTextAndUsage(
 				"runner event error: %s", ev.Error.Message,
 			)
 		}
+		recordedAssistantCall := false
 		if ev.Response != nil {
 			if len(ev.Response.Choices) > 0 {
 				choice := ev.Response.Choices[0]
 				msg := choice.Message
 				if msg.Role == model.RoleAssistant {
 					step++
-					st := StepTrace{Step: step, Phase: "answer"}
+					st := StepTrace{
+						Step: step, Phase: "answer", LLMCalls: 1,
+					}
+					recordedAssistantCall = true
 					if ev.Response.Usage != nil {
 						st.PromptTokens =
 							ev.Response.Usage.PromptTokens
@@ -472,6 +478,8 @@ func collectFinalTextAndUsage(
 			}
 			if ev.Response.Usage != nil {
 				res.usage.Add(tokenUsageFromModelUsage(ev.Response.Usage))
+			} else if recordedAssistantCall {
+				res.usage.LLMCalls++
 			}
 		}
 		if ev.IsRunnerCompletion() {
@@ -585,30 +593,27 @@ Retrieved memory_search results:
 			},
 		},
 	)
-	if err != nil {
-		trace.Error = err.Error()
-		return res, trace
-	}
 	trace.FinishReason = recovery.finishReason
 	step := StepTrace{
-		Step:         len(res.steps) + 1,
-		Phase:        "answer-recovery",
-		FinishReason: recovery.finishReason,
+		Step:                len(res.steps) + 1,
+		Phase:               "answer-recovery",
+		LLMCalls:            recovery.usage.LLMCalls,
+		PromptTokens:        recovery.usage.PromptTokens,
+		CompletionTokens:    recovery.usage.CompletionTokens,
+		TotalTokens:         recovery.usage.TotalTokens,
+		CachedTokens:        recovery.usage.CachedTokens,
+		CacheCreationTokens: recovery.usage.CacheCreationTokens,
+		CacheReadTokens:     recovery.usage.CacheReadTokens,
+		ReasoningTokens:     recovery.usage.ReasoningTokens,
+		FinishReason:        recovery.finishReason,
 	}
-	if recovery.usage != nil {
-		step.PromptTokens = recovery.usage.PromptTokens
-		step.CompletionTokens = recovery.usage.CompletionTokens
-		step.TotalTokens = recovery.usage.TotalTokens
-		step.CachedTokens = recovery.usage.PromptTokensDetails.CachedTokens
-		step.CacheCreationTokens =
-			recovery.usage.PromptTokensDetails.CacheCreationTokens
-		step.CacheReadTokens = recovery.usage.PromptTokensDetails.CacheReadTokens
-		step.ReasoningTokens =
-			recovery.usage.CompletionTokensDetails.ReasoningTokens
-		res.usage.Add(tokenUsageFromModelUsage(recovery.usage))
+	res.usage.Add(recovery.usage)
+	if err != nil {
+		trace.Error = err.Error()
+		step.Error = err.Error()
+		res.steps = append(res.steps, step)
+		return res, trace
 	}
-	res.steps = append(res.steps, step)
-
 	recoveredText := strings.TrimSpace(recovery.text)
 	trace.Succeeded = recoveredText != "" &&
 		memoryQAAnswerFormatViolation(recoveredText) == ""
@@ -619,8 +624,11 @@ Retrieved memory_search results:
 			trace.Error = "recovery returned a malformed answer: " +
 				memoryQAAnswerFormatViolation(recoveredText)
 		}
+		step.Error = trace.Error
+		res.steps = append(res.steps, step)
 		return res, trace
 	}
+	res.steps = append(res.steps, step)
 	res.text = recoveredText
 	return res, trace
 }
