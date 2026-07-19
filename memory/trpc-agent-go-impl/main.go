@@ -227,11 +227,6 @@ var (
 		12,
 		"Maximum directly relevant memories selected by the saved-result reranker",
 	)
-	flagLMERerankRuns = flag.Int(
-		"lme-rerank-runs",
-		1,
-		"Number of independent saved-result rankings fused with reciprocal rank fusion",
-	)
 	flagLMEJudgeResults = flag.String(
 		"lme-judge-results",
 		"",

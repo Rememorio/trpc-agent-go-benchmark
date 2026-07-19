@@ -78,12 +78,6 @@ func rerankLongMemEvalResult(
 			*flagLMERerankTopN,
 		)
 	}
-	if *flagLMERerankRuns <= 0 {
-		return fmt.Errorf(
-			"lme-rerank-runs must be positive, got %d",
-			*flagLMERerankRuns,
-		)
-	}
 	answerCache, err := openConfiguredLongMemEvalAnswerCache()
 	if err != nil {
 		return err
@@ -106,7 +100,6 @@ func rerankLongMemEvalResult(
 		"prompt_version":       lmeRerankPromptVersion,
 		"generation":           rerankGeneration,
 		"top_n":                *flagLMERerankTopN,
-		"runs":                 *flagLMERerankRuns,
 		"backend_scope":        "all saved backend retrieval hits",
 		"completed_backends":   0,
 		"reranked_at":          rerankedAt,
@@ -119,7 +112,6 @@ func rerankLongMemEvalResult(
 	result.Metadata["rerank_prompt_version"] = lmeRerankPromptVersion
 	result.Metadata["rerank_generation"] = rerankGeneration
 	result.Metadata["rerank_top_n"] = *flagLMERerankTopN
-	result.Metadata["rerank_runs"] = *flagLMERerankRuns
 	result.Metadata["reanswer_model"] = modelName
 	result.Metadata["reanswer_model_variant"] = modelVariant
 	result.Metadata["reanswer_build"] = rerankBuild
@@ -186,7 +178,6 @@ func rerankLongMemEvalResult(
 			rerankStart := time.Now()
 			reranked, raw, rerankErr := rerankLongMemEvalHits(
 				ctx, rerankLLM, inst, sourceHits, *flagLMERerankTopN,
-				*flagLMERerankRuns,
 			)
 			br.RerankDuration = time.Since(rerankStart).Milliseconds()
 			br.RerankModelCalls = rerankTracker.SnapshotCalls()

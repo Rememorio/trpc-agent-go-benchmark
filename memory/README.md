@@ -353,18 +353,16 @@ MEM0_HOST=http://localhost:8888 ./run-longmemeval.sh \
   -vector-topk 30 \
   -output ../results/lme-upstream
 
-# Optionally add model-based relevance selection over every backend's saved
-# top-k. Running this on a combined PGVector/Mem0 result applies the same model,
-# prompt, Top-N, and run count to both arms. Multiple independent rankings are
-# fused with reciprocal rank fusion. Pre-rerank hits, selected hits, model calls,
-# errors, latency, and token usage are retained for diagnosis. Treat this as an
-# ablation: compare reranked arms only when their recorded rerank protocol
+# Optionally add one model-based relevance-selection pass over every backend's
+# saved top-k. Running this on a combined PGVector/Mem0 result applies the same
+# model, prompt, and Top-N to both arms. Pre-rerank hits, selected hits, model
+# calls, errors, latency, and token usage are retained for diagnosis. Treat this
+# as an ablation: compare reranked arms only when their recorded rerank protocol
 # matches, and do not mix them with the frozen non-reranked baseline.
 ./run-longmemeval.sh \
   -dataset-format longmemeval \
   -lme-rerank-results ../results/lme-upstream/results.json \
   -lme-rerank-topn 12 \
-  -lme-rerank-runs 3 \
   -output ../results/lme-upstream
 
 # Analyze judged results without making model calls.
@@ -441,11 +439,9 @@ pgvector table exactly match the source run, then writes
 `retrieval_refreshed_results.json`. It preserves the recorded ingestion and
 original query-embedding cost and replaces answer usage. Saved-result reranking
 applies the same relevance-selection protocol to every backend in the source
-file and writes `reranked_results.json`. One run preserves the model order;
-multiple runs use reciprocal rank fusion to reduce model-order variance, with
-every call included in cost and provenance. A malformed or failed rerank call
-falls back to that backend's original hits while retaining the failure trace.
-It preserves ingestion and embedding usage and replaces prior answer and rerank
+file and writes `reranked_results.json`; a malformed or failed rerank call falls
+back to that backend's original hits while retaining the failure trace. It
+preserves ingestion and embedding usage and replaces prior answer and rerank
 usage.
 
 Token counters cover model and embedding calls made by this process, including
@@ -521,7 +517,6 @@ LongMemEval-specific options:
 | `-lme-refresh-retrieval-results` | | Refresh persisted pgvector retrieval         |
 | `-lme-rerank-results`     |         | Rerank saved hits for every result backend   |
 | `-lme-rerank-topn`        | 12      | Maximum memories selected by the reranker    |
-| `-lme-rerank-runs`        | 1       | Independent rankings fused with RRF          |
 | `-lme-judge-results`     |         | Add semantic judge results to `results.json` |
 | `-lme-judge-runs`        | 1       | Odd number of independent semantic votes     |
 | `-lme-judge-cache`       |         | Shared content-addressed judge verdict cache  |

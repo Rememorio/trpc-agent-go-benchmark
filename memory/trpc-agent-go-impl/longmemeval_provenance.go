@@ -108,9 +108,6 @@ type lmeRerankGenerationProvenance struct {
 	InitialMaxTokens   int      `json:"initial_max_tokens"`
 	RetryMaxTokens     int      `json:"retry_max_tokens"`
 	MaxAttempts        int      `json:"max_attempts"`
-	Runs               int      `json:"runs"`
-	Aggregation        string   `json:"aggregation"`
-	RRFK               int      `json:"rrf_k,omitempty"`
 	RetryFinishReasons []string `json:"retry_finish_reasons"`
 	Temperature        float64  `json:"temperature"`
 	ReasoningEffort    string   `json:"reasoning_effort"`
@@ -142,19 +139,10 @@ func currentLongMemEvalJudgeGeneration() lmeJudgeGenerationProvenance {
 }
 
 func currentLongMemEvalRerankGeneration() lmeRerankGenerationProvenance {
-	aggregation := "identity"
-	rrfK := 0
-	if *flagLMERerankRuns > 1 {
-		aggregation = "reciprocal-rank-fusion"
-		rrfK = lmeRerankRRFK
-	}
 	return lmeRerankGenerationProvenance{
 		InitialMaxTokens:   lmeRerankInitialTokens,
 		RetryMaxTokens:     lmeRerankRetryTokens,
 		MaxAttempts:        lmeRerankMaxAttempts,
-		Runs:               *flagLMERerankRuns,
-		Aggregation:        aggregation,
-		RRFK:               rrfK,
 		RetryFinishReasons: []string{"length", "max_tokens", "max_output_tokens"},
 		Temperature:        0,
 		ReasoningEffort:    "low",
