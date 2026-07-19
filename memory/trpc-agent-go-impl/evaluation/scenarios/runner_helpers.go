@@ -266,16 +266,39 @@ const (
 	fallbackAnswer = "The information is not available."
 
 	// MemoryQAPromptVersion identifies the shared memory-search QA protocol.
-	MemoryQAPromptVersion = "locomo-memory-qa-v8"
+	MemoryQAPromptVersion = "locomo-memory-qa-v9"
 
 	// MemoryQASearchStrategy identifies how multiple retrieval queries run.
 	MemoryQASearchStrategy = "sequential-adaptive"
 
-	// MemoryQARecoveryMaxTokens caps the no-tool answer recovery call.
+	// MemoryQARecoveryMaxTokens caps the forced-tool answer recovery call.
 	MemoryQARecoveryMaxTokens = 256
 
-	memoryQAMaxAnswerWords = 12
+	memoryQAMaxAnswerWords       = 12
+	memoryQASubmitAnswerToolName = "submit_answer"
 )
+
+type memoryQASubmitAnswerTool struct{}
+
+func (memoryQASubmitAnswerTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{
+		Name: memoryQASubmitAnswerToolName,
+		Description: "Submit the final concise answer grounded only in " +
+			"the retrieved memories.",
+		InputSchema: &tool.Schema{
+			Type:                 "object",
+			AdditionalProperties: false,
+			Properties: map[string]*tool.Schema{
+				"answer": {
+					Type: "string",
+					Description: "The shortest complete final answer " +
+						"span in 1-12 words.",
+				},
+			},
+			Required: []string{"answer"},
+		},
+	}
+}
 
 const qaInstructionHeader = `You are a memory retrieval assistant. Search memories, then output one concise answer.
 
@@ -559,10 +582,10 @@ func recoverMemoryQAAnswer(
 		return res, trace
 	}
 	prompt := fmt.Sprintf(
-		`The previous answer generation failed. Answer the question using only the retrieved memory_search results below. Return exactly one JSON object with an "answer" string.
+		`The previous answer generation failed. Answer the question using only the retrieved memory_search results below. Call submit_answer exactly once and do not output text.
 
 Follow these rules:
-- Put only the shortest complete final answer span (1-12 words) in "answer".
+- Put only the shortest complete final answer span (1-12 words) in the answer argument.
 - Use explicit entity names instead of vague references, and include every directly requested part supported by the memories.
 - Do not include evidence, explanation, context, or Markdown.
 - For yes/no, output only Yes or No.
@@ -591,23 +614,14 @@ Retrieved memory_search results:
 				ReasoningEffort: &reasoningEffort,
 				ThinkingEnabled: &thinkingEnabled,
 			},
-			StructuredOutput: &model.StructuredOutput{
-				Type: model.StructuredOutputJSONSchema,
-				JSONSchema: &model.JSONSchemaConfig{
-					Name:        "memory_qa_short_answer",
-					Description: "A concise answer grounded only in the retrieved memories.",
-					Strict:      true,
-					Schema: map[string]any{
-						"type":                 "object",
-						"additionalProperties": false,
-						"properties": map[string]any{
-							"answer": map[string]any{
-								"type":      "string",
-								"minLength": 1,
-								"maxLength": 160,
-							},
-						},
-						"required": []string{"answer"},
+			Tools: map[string]tool.Tool{
+				memoryQASubmitAnswerToolName: memoryQASubmitAnswerTool{},
+			},
+			ExtraFields: map[string]any{
+				"tool_choice": map[string]any{
+					"type": "function",
+					"function": map[string]string{
+						"name": memoryQASubmitAnswerToolName,
 					},
 				},
 			},
@@ -627,6 +641,12 @@ Retrieved memory_search results:
 		ReasoningTokens:     recovery.usage.ReasoningTokens,
 		FinishReason:        recovery.finishReason,
 	}
+	for _, tc := range recovery.toolCalls {
+		step.ToolCalls = append(step.ToolCalls, ToolCallTrace{
+			Name: tc.Function.Name,
+			Args: string(tc.Function.Arguments),
+		})
+	}
 	res.usage.Add(recovery.usage)
 	if err != nil {
 		trace.Error = err.Error()
@@ -634,7 +654,9 @@ Retrieved memory_search results:
 		res.steps = append(res.steps, step)
 		return res, trace
 	}
-	recoveredText, parseErr := parseMemoryQARecoveryAnswer(recovery.text)
+	recoveredText, parseErr := parseMemoryQARecoveryToolCall(
+		recovery.toolCalls, recovery.text,
+	)
 	trace.Succeeded = parseErr == nil
 	if parseErr != nil {
 		trace.Error = parseErr.Error()
@@ -645,6 +667,33 @@ Retrieved memory_search results:
 	res.steps = append(res.steps, step)
 	res.text = recoveredText
 	return res, trace
+}
+
+func parseMemoryQARecoveryToolCall(
+	calls []model.ToolCall,
+	responseText string,
+) (string, error) {
+	if len(calls) == 0 {
+		if strings.TrimSpace(responseText) == "" {
+			return "", fmt.Errorf("recovery returned an empty answer")
+		}
+		return "", fmt.Errorf(
+			"recovery did not call %s", memoryQASubmitAnswerToolName,
+		)
+	}
+	if len(calls) != 1 {
+		return "", fmt.Errorf(
+			"recovery returned %d tool calls, want 1", len(calls),
+		)
+	}
+	call := calls[0]
+	if call.Function.Name != memoryQASubmitAnswerToolName {
+		return "", fmt.Errorf(
+			"recovery called %s, want %s",
+			call.Function.Name, memoryQASubmitAnswerToolName,
+		)
+	}
+	return parseMemoryQARecoveryAnswer(string(call.Function.Arguments))
 }
 
 func parseMemoryQARecoveryAnswer(raw string) (string, error) {

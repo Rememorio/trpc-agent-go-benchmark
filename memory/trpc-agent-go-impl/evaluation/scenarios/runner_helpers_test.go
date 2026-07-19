@@ -24,6 +24,7 @@ import (
 type recoveryModel struct {
 	request      *model.Request
 	text         string
+	toolArgs     string
 	empty        bool
 	finishReason string
 	calls        int
@@ -36,8 +37,19 @@ func (m *recoveryModel) GenerateContent(
 	m.request = request
 	m.calls++
 	responseText := m.text
-	if responseText == "" && !m.empty {
-		responseText = `{"answer":"recovered answer"}`
+	message := model.NewAssistantMessage(responseText)
+	if !m.empty {
+		toolArgs := m.toolArgs
+		if toolArgs == "" {
+			toolArgs = `{"answer":"recovered answer"}`
+		}
+		message.ToolCalls = []model.ToolCall{{
+			ID: "submit-answer-id",
+			Function: model.FunctionDefinitionParam{
+				Name:      memoryQASubmitAnswerToolName,
+				Arguments: []byte(toolArgs),
+			},
+		}}
 	}
 	finishReason := m.finishReason
 	if finishReason == "" {
@@ -46,7 +58,7 @@ func (m *recoveryModel) GenerateContent(
 	ch := make(chan *model.Response, 1)
 	ch <- &model.Response{
 		Choices: []model.Choice{{
-			Message:      model.NewAssistantMessage(responseText),
+			Message:      message,
 			FinishReason: &finishReason,
 		}},
 		Usage: &model.Usage{
@@ -254,22 +266,21 @@ func TestRecoverMemoryQAAnswer(t *testing.T) {
 			MemoryQARecoveryMaxTokens,
 		)
 	}
-	if m.request.StructuredOutput == nil ||
-		m.request.StructuredOutput.Type != model.StructuredOutputJSONSchema ||
-		m.request.StructuredOutput.JSONSchema == nil ||
-		!m.request.StructuredOutput.JSONSchema.Strict {
-		t.Fatalf("structured output = %+v", m.request.StructuredOutput)
+	answerTool, ok := m.request.Tools[memoryQASubmitAnswerToolName]
+	if !ok || answerTool.Declaration().Name != memoryQASubmitAnswerToolName {
+		t.Fatalf("tools = %+v", m.request.Tools)
 	}
-	properties, ok := m.request.StructuredOutput.JSONSchema.Schema["properties"].(map[string]any)
-	if !ok || properties["answer"] == nil {
-		t.Fatalf(
-			"structured output schema = %+v",
-			m.request.StructuredOutput.JSONSchema.Schema,
-		)
+	toolChoice, ok := m.request.ExtraFields["tool_choice"].(map[string]any)
+	if !ok || toolChoice["type"] != "function" {
+		t.Fatalf("tool choice = %+v", m.request.ExtraFields["tool_choice"])
+	}
+	function, ok := toolChoice["function"].(map[string]string)
+	if !ok || function["name"] != memoryQASubmitAnswerToolName {
+		t.Fatalf("tool choice function = %+v", toolChoice["function"])
 	}
 	prompt := m.request.Messages[0].Content
 	for _, want := range []string{
-		"What happened?", `{"query":"first"}`, "evidence", `"answer"`,
+		"What happened?", `{"query":"first"}`, "evidence", "submit_answer",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("recovery prompt missing %q: %q", want, prompt)
@@ -325,7 +336,7 @@ func TestMemoryQARecoveryTriggerFormatViolation(t *testing.T) {
 
 func TestRecoverMemoryQAAnswerRejectsMalformedRecovery(t *testing.T) {
 	m := &recoveryModel{
-		text: `{"answer":"one two three four five six seven eight nine ten ` +
+		toolArgs: `{"answer":"one two three four five six seven eight nine ten ` +
 			`eleven twelve thirteen"}`,
 	}
 	res := collectResult{
@@ -360,6 +371,15 @@ func TestRecoverMemoryQAAnswerRejectsMalformedRecovery(t *testing.T) {
 	}
 	if got.steps[1].Error == "" {
 		t.Fatalf("recovery failure missing from step: %+v", got.steps[1])
+	}
+}
+
+func TestParseMemoryQARecoveryToolCallRequiresSubmitAnswer(t *testing.T) {
+	_, err := parseMemoryQARecoveryToolCall(
+		nil, "free-form response",
+	)
+	if err == nil || !strings.Contains(err.Error(), "did not call") {
+		t.Fatalf("error = %v", err)
 	}
 }
 
