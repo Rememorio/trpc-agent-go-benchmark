@@ -193,7 +193,7 @@ func (seedAgent) FindSubAgent(_ string) agent.Agent {
 	return nil
 }
 
-func sessionMessages(sample *dataset.LoCoMoSample, sess dataset.Session) []model.Message {
+func sessionMessages(sess dataset.Session) []model.Message {
 	msgs := make([]model.Message, 0, len(sess.Turns)+1)
 	if strings.TrimSpace(sess.SessionDate) != "" {
 		msgs = append(msgs, model.NewSystemMessage(
@@ -201,24 +201,25 @@ func sessionMessages(sample *dataset.LoCoMoSample, sess dataset.Session) []model
 		))
 	}
 
-	primarySpeaker := ""
-	secondarySpeaker := ""
-	if sample != nil {
-		if len(sample.Speakers) > 0 {
-			primarySpeaker = sample.Speakers[0]
-		}
-		if len(sample.Speakers) > 1 {
-			secondarySpeaker = sample.Speakers[1]
+	// Both LoCoMo participants are humans, so user/assistant is only a
+	// transport-level mapping. Anchor each session on its opening speaker to
+	// prevent strict chat providers from dropping a leading assistant message.
+	openingSpeaker := ""
+	for _, turn := range sess.Turns {
+		if strings.TrimSpace(turn.Speaker) != "" &&
+			strings.TrimSpace(turn.Text) != "" {
+			openingSpeaker = turn.Speaker
+			break
 		}
 	}
 
 	for _, turn := range sess.Turns {
 		role := model.RoleUser
 		speakerLower := strings.ToLower(turn.Speaker)
-		if secondarySpeaker != "" && turn.Speaker == secondarySpeaker {
-			role = model.RoleAssistant
-		} else if primarySpeaker != "" && turn.Speaker == primarySpeaker {
+		if openingSpeaker != "" && turn.Speaker == openingSpeaker {
 			role = model.RoleUser
+		} else if turn.Speaker != "" {
+			role = model.RoleAssistant
 		} else if strings.Contains(speakerLower, "assistant") {
 			role = model.RoleAssistant
 		} else if speakerLower == "user2" {
@@ -252,7 +253,7 @@ func buildHistoryMessages(
 	// Collect all conversation turns into messages.
 	var all []model.Message
 	for _, sess := range sample.Conversation {
-		msgs := sessionMessages(sample, sess)
+		msgs := sessionMessages(sess)
 		all = append(all, msgs...)
 	}
 	if len(all) <= k {
