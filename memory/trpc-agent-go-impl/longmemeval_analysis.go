@@ -297,6 +297,46 @@ func validateLongMemEvalComparison(baseline, candidate *runResult) error {
 			return errors.New("strict LongMemEval comparison requires a shared answer cache")
 		}
 	}
+	if longMemEvalMetadataPresent(baseline.Metadata, "model_response_cache_format_version") ||
+		longMemEvalMetadataPresent(candidate.Metadata, "model_response_cache_format_version") {
+		for _, key := range []string{
+			"model_response_cache_format_version",
+			"model_response_cache_shared",
+			"model_response_cache_ledger_id",
+			"model_response_cache_errors",
+		} {
+			if err := compareLongMemEvalMetadataValue(
+				baseline.Metadata,
+				candidate.Metadata,
+				key,
+				true,
+			); err != nil {
+				return err
+			}
+		}
+		baselineShared, ok := baseline.Metadata["model_response_cache_shared"].(bool)
+		if !ok || !baselineShared {
+			return errors.New(
+				"strict LongMemEval comparison requires a shared model response cache",
+			)
+		}
+		cacheErrors, ok := longMemEvalMetadataInt(
+			baseline.Metadata["model_response_cache_errors"],
+		)
+		if !ok {
+			return fmt.Errorf(
+				"strict LongMemEval comparison metadata %q is not an integer: %v",
+				"model_response_cache_errors",
+				baseline.Metadata["model_response_cache_errors"],
+			)
+		}
+		if cacheErrors != 0 {
+			return fmt.Errorf(
+				"strict LongMemEval comparison requires zero model response cache errors, got %d",
+				cacheErrors,
+			)
+		}
+	}
 	if longMemEvalMetadataPresent(baseline.Metadata, "judge_runs") ||
 		longMemEvalMetadataPresent(candidate.Metadata, "judge_runs") {
 		for _, key := range []string{

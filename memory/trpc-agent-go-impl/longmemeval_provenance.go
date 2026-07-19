@@ -41,6 +41,7 @@ const (
 	lmeJudgeProtocolVersion     = "lme-content-addressed-verdict-v1"
 	lmeJudgeCacheFormatVersion  = "lme-judge-cache-v1"
 	lmeAnswerCacheFormatVersion = "lme-answer-cache-v1"
+	lmeModelCacheFormatVersion  = "lme-model-response-cache-v1"
 )
 
 var (

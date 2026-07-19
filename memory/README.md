@@ -384,6 +384,18 @@ successful answer only when the recorded model, variant, prompt version, and
 generation settings all match. A strict comparison rejects runs that record
 different answer ledgers or do not both use a persistent shared ledger.
 
+For causal ablations of ingestion behavior, `-lme-model-response-cache` can
+share complete primary-run model response streams between sequential runs. Its
+key covers the deterministic request, tool declarations, model, and variant;
+the ledger stores only the request hash and responses, not request messages or
+headers. Run the control first to populate the ledger, then run the candidate
+with the same file, normally with `-lme-answer=false` so answer evaluation stays
+separate. Exact request matches replay with zero model calls and tokens, while
+requests changed by an earlier candidate state remain honest cache misses. A
+strict comparison rejects different or ephemeral model-response ledgers and
+any recorded cache error. This mode controls model-response variance for
+mechanism attribution; use an independent uncached run for production cost.
+
 The judge command checkpoints `judged_results.json` after each case. An odd
 `-lme-judge-runs` value greater than one records every independent vote and
 uses a strict majority. `-lme-judge-cache` supplies a shared, content-addressed
@@ -492,6 +504,7 @@ LongMemEval-specific options:
 | `-lme-model-call-timeout` | 5m      | Model timeout and mem0 OSS request cap       |
 | `-lme-answer`            | true    | Generate answers from retrieved memories     |
 | `-lme-answer-cache`      |         | Shared content-addressed answer cache         |
+| `-lme-model-response-cache` |      | Shared primary-run model response ledger      |
 | `-lme-blind-progress`    | false   | Hide answers and quality from progress logs  |
 | `-lme-implementation`    | (env)   | Reproducible implementation label            |
 | `-lme-reanswer-results`   |         | Re-answer using saved ranked retrieval hits  |

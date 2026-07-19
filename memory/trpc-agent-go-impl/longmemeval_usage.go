@@ -179,9 +179,12 @@ func (t *lmeTokenTracker) SnapshotCalls() []lmeModelCallTrace {
 }
 
 type lmeTrackingModel struct {
-	base    model.Model
-	tracker *lmeTokenTracker
-	timeout time.Duration
+	base          model.Model
+	tracker       *lmeTokenTracker
+	timeout       time.Duration
+	responseCache *longMemEvalModelResponseCache
+	modelName     string
+	modelVariant  string
 }
 
 func (m *lmeTrackingModel) GenerateContent(
@@ -189,6 +192,26 @@ func (m *lmeTrackingModel) GenerateContent(
 	req *model.Request,
 ) (<-chan *model.Response, error) {
 	req = longMemEvalDeterministicRequest(req)
+	call := lmeModelCallTrace{Source: lmeModelCallSourceModel}
+	var cacheIdentity lmeModelResponseCacheIdentity
+	if m.responseCache != nil {
+		identity, key, err := longMemEvalModelResponseCacheKey(
+			req, m.modelName, m.modelVariant,
+		)
+		if err != nil {
+			return nil, err
+		}
+		cacheIdentity = identity
+		call.CacheKey = key
+		responses, source, ok, err := m.responseCache.Lookup(key)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			call.Source = source
+			return m.replayLongMemEvalModelResponses(responses, call), nil
+		}
+	}
 	var cancel context.CancelFunc
 	if m.timeout > 0 {
 		ctx, cancel = context.WithTimeout(ctx, m.timeout)
@@ -198,6 +221,8 @@ func (m *lmeTrackingModel) GenerateContent(
 		if cancel != nil {
 			cancel()
 		}
+		call.Error = err.Error()
+		m.tracker.RecordCall(call)
 		return nil, err
 	}
 	out := make(chan *model.Response)
@@ -207,36 +232,18 @@ func (m *lmeTrackingModel) GenerateContent(
 		}
 		defer close(out)
 		sawError := false
-		call := lmeModelCallTrace{}
 		defer func() {
 			m.tracker.RecordCall(call)
 		}()
+		var responses []*model.Response
 		for resp := range respCh {
+			responses = append(responses, cloneLongMemEvalModelResponse(resp))
 			if resp != nil && resp.Usage != nil {
 				m.tracker.Record(resp.Usage)
 			}
+			trackLongMemEvalModelResponse(&call, resp)
 			if resp != nil && resp.Error != nil {
 				sawError = true
-				call.Error = resp.Error.Message
-			}
-			if resp != nil && len(resp.Choices) > 0 {
-				choice := resp.Choices[0]
-				if choice.FinishReason != nil {
-					call.FinishReason = *choice.FinishReason
-				}
-				msg := choice.Message
-				if msg.Content != "" {
-					call.Content = msg.Content
-				}
-				if len(msg.ToolCalls) > 0 {
-					call.ToolCalls = make([]lmeToolCallTrace, 0, len(msg.ToolCalls))
-					for _, toolCall := range msg.ToolCalls {
-						call.ToolCalls = append(call.ToolCalls, lmeToolCallTrace{
-							Name:      toolCall.Function.Name,
-							Arguments: string(toolCall.Function.Arguments),
-						})
-					}
-				}
 			}
 			out <- resp
 		}
@@ -250,9 +257,68 @@ func (m *lmeTrackingModel) GenerateContent(
 					Message: call.Error,
 				},
 			}
+			return
+		}
+		if !sawError && m.responseCache != nil && len(responses) > 0 {
+			if err := m.responseCache.Put(
+				call.CacheKey, cacheIdentity, responses,
+			); err != nil {
+				call.CacheError = err.Error()
+			}
 		}
 	}()
 	return out, nil
+}
+
+func (m *lmeTrackingModel) replayLongMemEvalModelResponses(
+	responses []*model.Response,
+	call lmeModelCallTrace,
+) <-chan *model.Response {
+	out := make(chan *model.Response)
+	go func() {
+		defer close(out)
+		defer func() {
+			m.tracker.RecordCall(call)
+		}()
+		for _, resp := range responses {
+			trackLongMemEvalModelResponse(&call, resp)
+			out <- resp
+		}
+	}()
+	return out
+}
+
+func trackLongMemEvalModelResponse(
+	call *lmeModelCallTrace,
+	resp *model.Response,
+) {
+	if call == nil || resp == nil {
+		return
+	}
+	if resp.Error != nil {
+		call.Error = resp.Error.Message
+	}
+	if len(resp.Choices) == 0 {
+		return
+	}
+	choice := resp.Choices[0]
+	if choice.FinishReason != nil {
+		call.FinishReason = *choice.FinishReason
+	}
+	msg := choice.Message
+	if msg.Content != "" {
+		call.Content = msg.Content
+	}
+	if len(msg.ToolCalls) == 0 {
+		return
+	}
+	call.ToolCalls = make([]lmeToolCallTrace, 0, len(msg.ToolCalls))
+	for _, toolCall := range msg.ToolCalls {
+		call.ToolCalls = append(call.ToolCalls, lmeToolCallTrace{
+			Name:      toolCall.Function.Name,
+			Arguments: string(toolCall.Function.Arguments),
+		})
+	}
 }
 
 func longMemEvalDeterministicRequest(req *model.Request) *model.Request {

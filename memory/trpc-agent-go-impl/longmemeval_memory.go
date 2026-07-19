@@ -210,6 +210,9 @@ type lmeModelCallTrace struct {
 	Content      string             `json:"content,omitempty"`
 	ToolCalls    []lmeToolCallTrace `json:"tool_calls,omitempty"`
 	FinishReason string             `json:"finish_reason,omitempty"`
+	Source       string             `json:"source,omitempty"`
+	CacheKey     string             `json:"cache_key,omitempty"`
+	CacheError   string             `json:"cache_error,omitempty"`
 	Error        string             `json:"error,omitempty"`
 }
 
@@ -951,6 +954,10 @@ func runLongMemEvalMemory(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	modelResponseCache, err := openConfiguredLongMemEvalModelResponseCache()
+	if err != nil {
+		return err
+	}
 
 	backends := parseMemoryBackends(*flagMemoryBackends)
 	mem0Implementation := ""
@@ -1027,6 +1034,9 @@ func runLongMemEvalMemory(ctx context.Context) error {
 		results.Metadata["mem0_implementation"] = mem0Implementation
 	}
 	initializeLongMemEvalAnswerCacheMetadata(results.Metadata, answerCache)
+	initializeLongMemEvalModelResponseCacheMetadata(
+		results.Metadata, modelResponseCache,
+	)
 	for _, backend := range backends {
 		if backend == "mem0" {
 			mode := "self-hosted-oss"
@@ -1057,9 +1067,12 @@ func runLongMemEvalMemory(ctx context.Context) error {
 		for _, backendName := range backends {
 			tracker := &lmeTokenTracker{}
 			llm := &lmeTrackingModel{
-				base:    baseLLM,
-				tracker: tracker,
-				timeout: *flagLMEModelCallTimeout,
+				base:          baseLLM,
+				tracker:       tracker,
+				timeout:       *flagLMEModelCallTimeout,
+				responseCache: modelResponseCache,
+				modelName:     modelName,
+				modelVariant:  modelVariant,
 			}
 			backend, err := newBackend(backendName, llm, pgExtractionConfig)
 			if err != nil {
@@ -1079,6 +1092,9 @@ func runLongMemEvalMemory(ctx context.Context) error {
 		}
 		results.Cases = append(results.Cases, cr)
 		updateLongMemEvalAnswerCacheMetadata(results.Metadata, answerCache)
+		updateLongMemEvalModelResponseCacheMetadata(
+			results.Metadata, modelResponseCache,
+		)
 		results.Summary = buildLongMemEvalSummary(results.Cases)
 		saveLongMemEvalResults(*flagOutput, results)
 	}
@@ -2822,8 +2838,9 @@ func saveCaseLog(outputDir string, cr *caseResult, br *backendResult) {
 					truncate(op.Memory, 220))
 			}
 			for i, call := range tr.Extraction.ModelCalls {
-				fmt.Fprintf(&b, "    model_call[%d] error=%s content=%s\n",
-					i, call.Error, truncate(call.Content, 500))
+				fmt.Fprintf(&b, "    model_call[%d] source=%s cache_key=%s cache_error=%s error=%s content=%s\n",
+					i, call.Source, call.CacheKey, call.CacheError,
+					call.Error, truncate(call.Content, 500))
 				for _, toolCall := range call.ToolCalls {
 					fmt.Fprintf(&b, "      tool=%s arguments=%s\n",
 						toolCall.Name, truncate(toolCall.Arguments, 500))
