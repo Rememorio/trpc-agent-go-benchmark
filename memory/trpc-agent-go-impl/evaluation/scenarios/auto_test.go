@@ -20,6 +20,21 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
+func TestAutoExtractionWaitTimeout(t *testing.T) {
+	if got := autoExtractionWaitTimeout(19, 20*time.Minute); got != 20*time.Minute {
+		t.Fatalf("configured timeout = %s, want 20m", got)
+	}
+	if got := autoExtractionWaitTimeout(19, 0); got != 19*time.Minute {
+		t.Fatalf("derived timeout = %s, want 19m", got)
+	}
+	if got := autoExtractionWaitTimeout(1, 0); got != 5*time.Minute {
+		t.Fatalf("minimum timeout = %s, want 5m", got)
+	}
+	if got := autoExtractionWaitTimeout(200, 0); got != 60*time.Minute {
+		t.Fatalf("maximum timeout = %s, want 60m", got)
+	}
+}
+
 func TestWaitForAutoExtraction(t *testing.T) {
 	first := autoExtractionTestSession("first", time.Now().UTC())
 	firstWant := latestAutoExtractionTimestamp(first)
