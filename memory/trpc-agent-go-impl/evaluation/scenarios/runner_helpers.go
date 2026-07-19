@@ -266,13 +266,15 @@ const (
 	fallbackAnswer = "The information is not available."
 
 	// MemoryQAPromptVersion identifies the shared memory-search QA protocol.
-	MemoryQAPromptVersion = "locomo-memory-qa-v5"
+	MemoryQAPromptVersion = "locomo-memory-qa-v6"
 
 	// MemoryQASearchStrategy identifies how multiple retrieval queries run.
 	MemoryQASearchStrategy = "sequential-adaptive"
 
 	// MemoryQARecoveryMaxTokens caps the no-tool answer recovery call.
-	MemoryQARecoveryMaxTokens = 1024
+	MemoryQARecoveryMaxTokens = 128
+
+	memoryQAMaxAnswerWords = 12
 )
 
 const qaInstructionHeader = `You are a memory retrieval assistant. Search memories, then output one concise answer.
@@ -588,12 +590,6 @@ Retrieved memory_search results:
 		return res, trace
 	}
 	trace.FinishReason = recovery.finishReason
-	trace.Succeeded = strings.TrimSpace(recovery.text) != ""
-	if !trace.Succeeded {
-		trace.Error = "recovery returned an empty answer"
-		return res, trace
-	}
-	res.text = strings.TrimSpace(recovery.text)
 	step := StepTrace{
 		Step:         len(res.steps) + 1,
 		Phase:        "answer-recovery",
@@ -612,13 +608,30 @@ Retrieved memory_search results:
 		res.usage.Add(tokenUsageFromModelUsage(recovery.usage))
 	}
 	res.steps = append(res.steps, step)
+
+	recoveredText := strings.TrimSpace(recovery.text)
+	trace.Succeeded = recoveredText != "" &&
+		memoryQAAnswerFormatViolation(recoveredText) == ""
+	if !trace.Succeeded {
+		if recoveredText == "" {
+			trace.Error = "recovery returned an empty answer"
+		} else {
+			trace.Error = "recovery returned a malformed answer: " +
+				memoryQAAnswerFormatViolation(recoveredText)
+		}
+		return res, trace
+	}
+	res.text = recoveredText
 	return res, trace
 }
 
 func memoryQARecoveryTrigger(res collectResult) string {
 	var reasons []string
-	if strings.TrimSpace(res.text) == "" {
+	answer := strings.TrimSpace(res.text)
+	if answer == "" {
 		reasons = append(reasons, "empty-answer")
+	} else if violation := memoryQAAnswerFormatViolation(answer); violation != "" {
+		reasons = append(reasons, "answer-format:"+violation)
 	}
 	if len(res.steps) > 0 {
 		finishReason := strings.ToLower(strings.TrimSpace(
@@ -630,6 +643,16 @@ func memoryQARecoveryTrigger(res collectResult) string {
 		}
 	}
 	return strings.Join(reasons, ",")
+}
+
+func memoryQAAnswerFormatViolation(answer string) string {
+	if strings.ContainsAny(answer, "\r\n") {
+		return "multiline"
+	}
+	if len(strings.Fields(answer)) > memoryQAMaxAnswerWords {
+		return "too-many-words"
+	}
+	return ""
 }
 
 func memoryQARetrievalEvidence(steps []StepTrace) string {

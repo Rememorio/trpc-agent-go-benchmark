@@ -121,7 +121,7 @@ type QAResult struct {
 	SessionRecall  *SessionRecallTrace  `json:"session_recall,omitempty"`
 }
 
-// AnswerRecoveryTrace records a direct answer retry after generation failure.
+// AnswerRecoveryTrace records a direct retry after generation or format failure.
 type AnswerRecoveryTrace struct {
 	Trigger      string `json:"trigger"`
 	Succeeded    bool   `json:"succeeded"`
