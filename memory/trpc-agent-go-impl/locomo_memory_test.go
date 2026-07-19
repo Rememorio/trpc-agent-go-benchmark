@@ -123,6 +123,22 @@ func TestBuildEvaluationResultRecordsMemoryQAPromptVersion(t *testing.T) {
 	}
 }
 
+func TestBuildEvaluationResultRecordsModelVariant(t *testing.T) {
+	restoreStringFlag(t, flagModelVariant, "glm")
+	result := buildEvaluationResult(
+		scenarios.Config{Scenario: scenarios.ScenarioAuto},
+		"pgvector",
+		time.Now(),
+		nil,
+		metrics.NewCategoryAggregator(),
+		0,
+		scenarios.TokenUsage{},
+	)
+	if got := result.Metadata.ModelVariant; got != "glm" {
+		t.Fatalf("model variant = %q, want glm", got)
+	}
+}
+
 func TestBuildEvaluationResultRecordsAutoExtractionTimeout(t *testing.T) {
 	configured := buildEvaluationResult(
 		scenarios.Config{

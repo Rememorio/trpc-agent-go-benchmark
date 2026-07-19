@@ -32,7 +32,6 @@ import (
 	memorymysql "trpc.group/trpc-go/trpc-agent-go/memory/mysql"
 	memorypgvector "trpc.group/trpc-go/trpc-agent-go/memory/pgvector"
 	"trpc.group/trpc-go/trpc-agent-go/model"
-	openaimodel "trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	sessionpgvector "trpc.group/trpc-go/trpc-agent-go/session/pgvector"
 )
@@ -95,6 +94,7 @@ type EvalMetadata struct {
 	Version               string                    `json:"version"`
 	Timestamp             time.Time                 `json:"timestamp"`
 	Model                 string                    `json:"model"`
+	ModelVariant          string                    `json:"model_variant,omitempty"`
 	EvalModel             string                    `json:"eval_model,omitempty"`
 	Scenario              string                    `json:"scenario"`
 	MemoryBackend         string                    `json:"memory_backend,omitempty"`
@@ -161,6 +161,7 @@ const (
 
 func runLoCoMoMemory(ctx context.Context) error {
 	modelName := getModelName()
+	modelVariant := getModelVariant()
 	evalModelName := getEvalModelName()
 	outputDir := *flagOutput
 	scenariosToRun := getScenarios(*flagScenario)
@@ -174,6 +175,9 @@ func runLoCoMoMemory(ctx context.Context) error {
 
 	log.Printf("=== Memory Evaluation (LoCoMo Benchmark) ===")
 	log.Printf("Model: %s", modelName)
+	if modelVariant != "" {
+		log.Printf("Model Variant: %s", modelVariant)
+	}
 	log.Printf("Eval Model: %s", evalModelName)
 	log.Printf("Scenario: %s", *flagScenario)
 	log.Printf("LLM Judge: %v", *flagLLMJudge)
@@ -210,10 +214,16 @@ func runLoCoMoMemory(ctx context.Context) error {
 	}
 
 	// Create models.
-	llm := openaimodel.New(modelName)
-	var evalLLM = llm
+	llm, err := newEvaluationModel(modelName, modelVariant)
+	if err != nil {
+		return fmt.Errorf("create model: %w", err)
+	}
+	evalLLM := llm
 	if evalModelName != "" && evalModelName != modelName {
-		evalLLM = openaimodel.New(evalModelName)
+		evalLLM, err = newEvaluationModel(evalModelName, modelVariant)
+		if err != nil {
+			return fmt.Errorf("create evaluation model: %w", err)
+		}
 	}
 
 	// Base scenario config.
@@ -1047,6 +1057,7 @@ func buildEvaluationResult(
 		Version:        "1.0.0",
 		Timestamp:      time.Now(),
 		Model:          getModelName(),
+		ModelVariant:   getModelVariant(),
 		EvalModel:      getEvalModelName(),
 		Scenario:       string(config.Scenario),
 		MemoryBackend:  backend,

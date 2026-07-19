@@ -39,7 +39,6 @@ import (
 	memorymem0 "trpc.group/trpc-go/trpc-agent-go/memory/mem0"
 	memorypgvector "trpc.group/trpc-go/trpc-agent-go/memory/pgvector"
 	"trpc.group/trpc-go/trpc-agent-go/model"
-	openaimodel "trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -842,33 +841,6 @@ func containsString(values []string, target string) bool {
 	return false
 }
 
-func newLongMemEvalModel(modelName, variant string) (model.Model, error) {
-	opts, err := openAIModelOptionsForVariant(variant)
-	if err != nil {
-		return nil, err
-	}
-	return openaimodel.New(modelName, opts...), nil
-}
-
-func openAIModelOptionsForVariant(variant string) ([]openaimodel.Option, error) {
-	switch strings.ToLower(strings.TrimSpace(variant)) {
-	case "":
-		return nil, nil
-	case "openai":
-		return []openaimodel.Option{openaimodel.WithVariant(openaimodel.VariantOpenAI)}, nil
-	case "deepseek":
-		return []openaimodel.Option{openaimodel.WithVariant(openaimodel.VariantDeepSeek)}, nil
-	case "hunyuan":
-		return []openaimodel.Option{openaimodel.WithVariant(openaimodel.VariantHunyuan)}, nil
-	case "qwen":
-		return []openaimodel.Option{openaimodel.WithVariant(openaimodel.VariantQwen)}, nil
-	case "glm":
-		return []openaimodel.Option{openaimodel.WithVariant(openaimodel.VariantGLM)}, nil
-	default:
-		return nil, fmt.Errorf("unsupported model variant %q", variant)
-	}
-}
-
 func runLongMemEvalMemory(ctx context.Context) error {
 	if strings.TrimSpace(*flagLMECompareResults) == "" &&
 		strings.TrimSpace(*flagLMEAnalyzeResults) == "" {
@@ -948,7 +920,7 @@ func runLongMemEvalMemory(ctx context.Context) error {
 
 	modelName := getModelName()
 	modelVariant := getModelVariant()
-	baseLLM, err := newLongMemEvalModel(modelName, modelVariant)
+	baseLLM, err := newEvaluationModel(modelName, modelVariant)
 	if err != nil {
 		return err
 	}
@@ -1642,7 +1614,7 @@ func reanswerLongMemEvalResults(ctx context.Context, path, outputDir string) err
 	}
 	modelName := getModelName()
 	modelVariant := getModelVariant()
-	baseLLM, err := newLongMemEvalModel(modelName, modelVariant)
+	baseLLM, err := newEvaluationModel(modelName, modelVariant)
 	if err != nil {
 		return err
 	}
@@ -1816,7 +1788,7 @@ func judgeLongMemEvalResults(ctx context.Context, path, outputDir string) error 
 	if err != nil {
 		return err
 	}
-	baseLLM, err := newLongMemEvalModel(modelName, modelVariant)
+	baseLLM, err := newEvaluationModel(modelName, modelVariant)
 	if err != nil {
 		return err
 	}

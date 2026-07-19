@@ -458,6 +458,9 @@ internal usage must not be interpreted as zero-cost usage.
 The runner also reads and records the sanitized self-hosted mem0 runtime
 configuration. `-mem0-llm-temperature` changes that configuration only when it
 is non-negative; the default keeps the server value while still recording it.
+Both LoCoMo and LongMemEval resolve `-model-variant` through the same provider
+adapter and record the resolved variant. This is required for provider-specific
+thinking controls and response fields to be encoded consistently.
 
 LoCoMo memory QA explicitly disables model thinking, uses low reasoning effort,
 and reserves 512 output tokens for tool calls and the final short answer. This
