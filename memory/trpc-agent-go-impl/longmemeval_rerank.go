@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -23,6 +24,7 @@ const (
 	lmeRerankInitialTokens  = 512
 	lmeRerankRetryTokens    = 4096
 	lmeRerankMaxAttempts    = 2
+	lmeRerankRRFK           = 60
 	lmeRerankRetryDirective = `Your previous attempt was truncated before the required JSON.
 Return the JSON object before any analysis. The first character must be "{".
 Do not repeat your reasoning.`
@@ -34,6 +36,7 @@ func rerankLongMemEvalHits(
 	inst *lmeInstance,
 	hits []memoryHit,
 	topN int,
+	runs int,
 ) ([]memoryHit, string, error) {
 	if llm == nil {
 		return nil, "", errors.New("rerank model is nil")
@@ -47,10 +50,54 @@ func rerankLongMemEvalHits(
 	if topN <= 0 {
 		return nil, "", fmt.Errorf("rerank topN must be positive, got %d", topN)
 	}
+	if runs <= 0 {
+		return nil, "", fmt.Errorf("rerank runs must be positive, got %d", runs)
+	}
 	if topN > len(hits) {
 		topN = len(hits)
 	}
 	prompt := buildLongMemEvalRerankPrompt(inst, hits, topN)
+	rankings := make([][]int, 0, runs)
+	trace := lmeRerankConsensusTrace{Runs: make([]lmeRerankConsensusRun, 0, runs)}
+	for run := 0; run < runs; run++ {
+		indices, raw, err := runLongMemEvalRerank(ctx, llm, prompt, len(hits), topN)
+		entry := lmeRerankConsensusRun{Raw: raw, Indices: indices}
+		if err != nil {
+			entry.Error = err.Error()
+			trace.Runs = append(trace.Runs, entry)
+			return nil, marshalLongMemEvalRerankTrace(trace), fmt.Errorf(
+				"rerank run %d/%d: %w", run+1, runs, err,
+			)
+		}
+		trace.Runs = append(trace.Runs, entry)
+		rankings = append(rankings, indices)
+	}
+	if runs == 1 {
+		return longMemEvalHitsByIndices(hits, rankings[0]), trace.Runs[0].Raw, nil
+	}
+	trace.FusedIndices = fuseLongMemEvalRerankIndices(rankings, topN)
+	return longMemEvalHitsByIndices(hits, trace.FusedIndices),
+		marshalLongMemEvalRerankTrace(trace), nil
+}
+
+type lmeRerankConsensusRun struct {
+	Raw     string `json:"raw"`
+	Indices []int  `json:"indices,omitempty"`
+	Error   string `json:"error,omitempty"`
+}
+
+type lmeRerankConsensusTrace struct {
+	Runs         []lmeRerankConsensusRun `json:"runs"`
+	FusedIndices []int                   `json:"fused_indices,omitempty"`
+}
+
+func runLongMemEvalRerank(
+	ctx context.Context,
+	llm model.Model,
+	prompt string,
+	candidateCount int,
+	topN int,
+) ([]int, string, error) {
 	var lastRaw string
 	for attempt := 0; attempt < lmeRerankMaxAttempts; attempt++ {
 		maxTokens := lmeRerankInitialTokens
@@ -68,13 +115,9 @@ func rerankLongMemEvalHits(
 			return nil, raw, err
 		}
 		lastRaw = raw
-		indices, parseErr := parseLongMemEvalRerankIndices(raw, len(hits), topN)
+		indices, parseErr := parseLongMemEvalRerankIndices(raw, candidateCount, topN)
 		if parseErr == nil {
-			reranked := make([]memoryHit, 0, len(indices))
-			for _, index := range indices {
-				reranked = append(reranked, hits[index-1])
-			}
-			return reranked, raw, nil
+			return indices, raw, nil
 		}
 		if attempt+1 == lmeRerankMaxAttempts ||
 			!isLongMemEvalRerankLengthFinish(finishReason) {
@@ -82,6 +125,53 @@ func rerankLongMemEvalHits(
 		}
 	}
 	return nil, lastRaw, errors.New("rerank exhausted attempts")
+}
+
+func fuseLongMemEvalRerankIndices(rankings [][]int, topN int) []int {
+	scores := make(map[int]float64)
+	bestRanks := make(map[int]int)
+	for _, ranking := range rankings {
+		for rank, index := range ranking {
+			scores[index] += 1 / float64(lmeRerankRRFK+rank+1)
+			if best, ok := bestRanks[index]; !ok || rank < best {
+				bestRanks[index] = rank
+			}
+		}
+	}
+	indices := make([]int, 0, len(scores))
+	for index := range scores {
+		indices = append(indices, index)
+	}
+	sort.Slice(indices, func(i, j int) bool {
+		left, right := indices[i], indices[j]
+		if scores[left] != scores[right] {
+			return scores[left] > scores[right]
+		}
+		if bestRanks[left] != bestRanks[right] {
+			return bestRanks[left] < bestRanks[right]
+		}
+		return left < right
+	})
+	if topN > 0 && len(indices) > topN {
+		indices = indices[:topN]
+	}
+	return indices
+}
+
+func longMemEvalHitsByIndices(hits []memoryHit, indices []int) []memoryHit {
+	reranked := make([]memoryHit, 0, len(indices))
+	for _, index := range indices {
+		reranked = append(reranked, hits[index-1])
+	}
+	return reranked
+}
+
+func marshalLongMemEvalRerankTrace(trace lmeRerankConsensusTrace) string {
+	data, err := json.Marshal(trace)
+	if err != nil {
+		return ""
+	}
+	return string(data)
 }
 
 func generateLongMemEvalRerankResponse(

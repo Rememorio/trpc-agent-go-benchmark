@@ -10,6 +10,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -38,6 +39,7 @@ func TestRerankLongMemEvalHits(t *testing.T) {
 		},
 		hits,
 		1,
+		1,
 	)
 	if err != nil {
 		t.Fatalf("rerank hits: %v", err)
@@ -55,6 +57,47 @@ func TestRerankLongMemEvalHits(t *testing.T) {
 	prompt := llm.requests[0].Messages[0].Content
 	if strings.Contains(prompt, "gold-secret") || strings.Contains(prompt, "hidden-label") {
 		t.Fatalf("rerank prompt leaked evaluation labels: %s", prompt)
+	}
+}
+
+func TestRerankLongMemEvalHitsConsensus(t *testing.T) {
+	stop := "stop"
+	response := func(content string) *model.Response {
+		return &model.Response{Choices: []model.Choice{{
+			Message:      model.NewAssistantMessage(content),
+			FinishReason: &stop,
+		}}}
+	}
+	llm := &queuedAnswerModel{responses: []*model.Response{
+		response(`{"indices":[2,1]}`),
+		response(`{"indices":[2,1]}`),
+		response(`{"indices":[1,2]}`),
+	}}
+	hits := []memoryHit{
+		{ID: "1", Memory: "Related but indirect."},
+		{ID: "2", Memory: "Directly answers the question."},
+	}
+	reranked, raw, err := rerankLongMemEvalHits(
+		context.Background(), llm,
+		&lmeInstance{Question: "What directly answers the question?"},
+		hits, 2, 3,
+	)
+	if err != nil {
+		t.Fatalf("rerank consensus: %v", err)
+	}
+	if len(reranked) != 2 || reranked[0].ID != "2" || reranked[1].ID != "1" {
+		t.Fatalf("reranked consensus = %#v", reranked)
+	}
+	var trace lmeRerankConsensusTrace
+	if err := json.Unmarshal([]byte(raw), &trace); err != nil {
+		t.Fatalf("decode consensus trace: %v", err)
+	}
+	if len(trace.Runs) != 3 || len(trace.FusedIndices) != 2 ||
+		trace.FusedIndices[0] != 2 || trace.FusedIndices[1] != 1 {
+		t.Fatalf("consensus trace = %#v", trace)
+	}
+	if len(llm.requests) != 3 {
+		t.Fatalf("rerank requests = %d, want 3", len(llm.requests))
 	}
 }
 
@@ -82,6 +125,7 @@ func TestRerankLongMemEvalHitsRetriesTruncatedResponse(t *testing.T) {
 		&lmeInstance{Question: "What is relevant?"},
 		hits,
 		1,
+		1,
 	)
 	if err != nil {
 		t.Fatalf("rerank hits after retry: %v", err)
@@ -100,6 +144,74 @@ func TestRerankLongMemEvalHitsRetriesTruncatedResponse(t *testing.T) {
 	}
 	if !strings.HasPrefix(llm.requests[1].Messages[0].Content, lmeRerankRetryDirective) {
 		t.Fatalf("retry prompt = %q", llm.requests[1].Messages[0].Content)
+	}
+}
+
+func TestRerankLongMemEvalHitsValidation(t *testing.T) {
+	ctx := context.Background()
+	llm := &queuedAnswerModel{}
+	inst := &lmeInstance{Question: "question"}
+	hits := []memoryHit{{ID: "1", Memory: "memory"}}
+
+	if _, _, err := rerankLongMemEvalHits(ctx, nil, inst, hits, 1, 1); err == nil ||
+		!strings.Contains(err.Error(), "model is nil") {
+		t.Fatalf("nil model error = %v", err)
+	}
+	if _, _, err := rerankLongMemEvalHits(ctx, llm, nil, hits, 1, 1); err == nil ||
+		!strings.Contains(err.Error(), "instance is nil") {
+		t.Fatalf("nil instance error = %v", err)
+	}
+	empty, raw, err := rerankLongMemEvalHits(ctx, llm, inst, nil, 1, 1)
+	if err != nil || len(empty) != 0 || raw != "" {
+		t.Fatalf("empty hits = %#v, raw = %q, err = %v", empty, raw, err)
+	}
+	if _, _, err := rerankLongMemEvalHits(ctx, llm, inst, hits, 0, 1); err == nil ||
+		!strings.Contains(err.Error(), "topN must be positive") {
+		t.Fatalf("invalid topN error = %v", err)
+	}
+	if _, _, err := rerankLongMemEvalHits(ctx, llm, inst, hits, 1, 0); err == nil ||
+		!strings.Contains(err.Error(), "runs must be positive") {
+		t.Fatalf("invalid runs error = %v", err)
+	}
+}
+
+func TestRerankLongMemEvalHitsConsensusFailureTrace(t *testing.T) {
+	stop := "stop"
+	response := func(content string) *model.Response {
+		return &model.Response{Choices: []model.Choice{{
+			Message:      model.NewAssistantMessage(content),
+			FinishReason: &stop,
+		}}}
+	}
+	llm := &queuedAnswerModel{responses: []*model.Response{
+		response(`{"indices":[1]}`),
+		response("invalid"),
+	}}
+	_, raw, err := rerankLongMemEvalHits(
+		context.Background(), llm,
+		&lmeInstance{Question: "question"},
+		[]memoryHit{{ID: "1", Memory: "memory"}},
+		1, 3,
+	)
+	if err == nil || !strings.Contains(err.Error(), "run 2/3") {
+		t.Fatalf("consensus error = %v", err)
+	}
+	var trace lmeRerankConsensusTrace
+	if err := json.Unmarshal([]byte(raw), &trace); err != nil {
+		t.Fatalf("decode failure trace: %v", err)
+	}
+	if len(trace.Runs) != 2 || trace.Runs[1].Error == "" {
+		t.Fatalf("failure trace = %#v", trace)
+	}
+}
+
+func TestFuseLongMemEvalRerankIndicesDeterministicTieAndLimit(t *testing.T) {
+	indices := fuseLongMemEvalRerankIndices([][]int{
+		{2, 1, 3},
+		{1, 2, 3},
+	}, 2)
+	if len(indices) != 2 || indices[0] != 1 || indices[1] != 2 {
+		t.Fatalf("fused indices = %#v", indices)
 	}
 }
 

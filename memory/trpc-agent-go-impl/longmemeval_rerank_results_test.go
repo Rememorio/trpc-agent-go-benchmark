@@ -19,6 +19,7 @@ import (
 
 func TestRerankLongMemEvalResultAllBackends(t *testing.T) {
 	restoreIntFlag(t, flagLMERerankTopN, 1)
+	restoreIntFlag(t, flagLMERerankRuns, 1)
 	relevant := memoryHit{
 		ID:              "relevant",
 		Memory:          "Visited the Science Museum.",
@@ -105,6 +106,7 @@ func TestRerankLongMemEvalResultAllBackends(t *testing.T) {
 	metadata, ok := result.Metadata["retrieval_rerank"].(map[string]any)
 	if !ok || metadata["source_sha256"] != "source-digest" ||
 		metadata["prompt_version"] != lmeRerankPromptVersion ||
+		metadata["runs"] != 1 ||
 		metadata["backend_scope"] != "all saved backend retrieval hits" ||
 		metadata["completed_backends"] != 2 {
 		t.Fatalf("rerank metadata = %#v", result.Metadata["retrieval_rerank"])
@@ -116,6 +118,7 @@ func TestRerankLongMemEvalResultAllBackends(t *testing.T) {
 		result.Metadata["rerank_model_variant"] != "glm" ||
 		result.Metadata["rerank_prompt_version"] != lmeRerankPromptVersion ||
 		result.Metadata["rerank_top_n"] != 1 ||
+		result.Metadata["rerank_runs"] != 1 ||
 		!reflect.DeepEqual(
 			result.Metadata["rerank_generation"],
 			currentLongMemEvalRerankGeneration(),
@@ -140,6 +143,7 @@ func TestRerankLongMemEvalResultAllBackends(t *testing.T) {
 
 func TestRerankLongMemEvalResultValidation(t *testing.T) {
 	restoreIntFlag(t, flagLMERerankTopN, 0)
+	restoreIntFlag(t, flagLMERerankRuns, 1)
 	llm := &queuedAnswerModel{}
 	if err := rerankLongMemEvalResult(
 		context.Background(), &runResult{}, llm, "", "", "", t.TempDir()+"/out.json",
@@ -152,6 +156,13 @@ func TestRerankLongMemEvalResultValidation(t *testing.T) {
 		t.Fatal("nil result should fail")
 	}
 	restoreIntFlag(t, flagLMERerankTopN, 1)
+	restoreIntFlag(t, flagLMERerankRuns, 0)
+	if err := rerankLongMemEvalResult(
+		context.Background(), &runResult{}, llm, "", "", "", t.TempDir()+"/out.json",
+	); err == nil || !strings.Contains(err.Error(), "rerank-runs") {
+		t.Fatalf("non-positive rerank runs error = %v", err)
+	}
+	restoreIntFlag(t, flagLMERerankRuns, 1)
 	if err := rerankLongMemEvalResult(
 		context.Background(), &runResult{Cases: []*caseResult{{
 			BackendResults: map[string]*backendResult{"pgvector": {}},
