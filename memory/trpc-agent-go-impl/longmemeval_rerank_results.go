@@ -39,7 +39,7 @@ func rerankLongMemEvalResults(
 	}
 	modelName := getModelName()
 	modelVariant := getModelVariant()
-	baseLLM, err := newLongMemEvalModel(modelName, modelVariant)
+	baseLLM, err := newEvaluationModel(modelName, modelVariant)
 	if err != nil {
 		return err
 	}
