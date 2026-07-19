@@ -266,7 +266,7 @@ const (
 	fallbackAnswer = "The information is not available."
 
 	// MemoryQAPromptVersion identifies the shared memory-search QA protocol.
-	MemoryQAPromptVersion = "locomo-memory-qa-v11"
+	MemoryQAPromptVersion = "locomo-memory-qa-v13"
 
 	// MemoryQASearchStrategy identifies how multiple retrieval queries run.
 	MemoryQASearchStrategy = "sequential-adaptive"
@@ -274,8 +274,11 @@ const (
 	// MemoryQARecoveryMaxTokens caps the forced-tool answer recovery call.
 	MemoryQARecoveryMaxTokens = 512
 
-	memoryQAMaxAnswerWords       = 12
-	memoryQASubmitAnswerToolName = "submit_answer"
+	memoryQAMaxPrimaryAnswerWords = 12
+	// The longest LoCoMo reference answer is 57 words. Recovery leaves
+	// headroom for equivalent wording while still rejecting runaway output.
+	memoryQAMaxRecoveryAnswerWords = 64
+	memoryQASubmitAnswerToolName   = "submit_answer"
 )
 
 type memoryQASubmitAnswerTool struct{}
@@ -292,7 +295,7 @@ func (memoryQASubmitAnswerTool) Declaration() *tool.Declaration {
 				"answer": {
 					Type: "string",
 					Description: "The shortest complete final answer " +
-						"span in 1-12 words.",
+						"span in at most 64 words.",
 				},
 			},
 			Required: []string{"answer"},
@@ -587,7 +590,7 @@ func recoverMemoryQAAnswer(
 		`The previous answer generation failed. Answer the question using only the retrieved memory_search results below. Call submit_answer exactly once and do not output text.
 
 Follow these rules:
-- Put only the shortest complete final answer span (1-12 words) in the answer argument.
+- Put only the shortest complete final answer span (at most 64 words) in the answer argument.
 - Use explicit entity names instead of vague references, and include every directly requested part supported by the memories.
 - Do not include evidence, explanation, context, or Markdown.
 - For yes/no, output only Yes or No.
@@ -714,7 +717,9 @@ func parseMemoryQARecoveryAnswer(raw string) (string, error) {
 	if answer == "" {
 		return "", fmt.Errorf("recovery returned an empty answer")
 	}
-	if violation := memoryQAAnswerFormatViolation(answer); violation != "" {
+	if violation := memoryQAAnswerFormatViolation(
+		answer, memoryQAMaxRecoveryAnswerWords,
+	); violation != "" {
 		return "", fmt.Errorf(
 			"recovery returned a malformed answer: %s", violation,
 		)
@@ -727,7 +732,9 @@ func memoryQARecoveryTrigger(res collectResult) string {
 	answer := strings.TrimSpace(res.text)
 	if answer == "" {
 		reasons = append(reasons, "empty-answer")
-	} else if violation := memoryQAAnswerFormatViolation(answer); violation != "" {
+	} else if violation := memoryQAAnswerFormatViolation(
+		answer, memoryQAMaxPrimaryAnswerWords,
+	); violation != "" {
 		reasons = append(reasons, "answer-format:"+violation)
 	}
 	if len(res.steps) > 0 {
@@ -742,11 +749,11 @@ func memoryQARecoveryTrigger(res collectResult) string {
 	return strings.Join(reasons, ",")
 }
 
-func memoryQAAnswerFormatViolation(answer string) string {
+func memoryQAAnswerFormatViolation(answer string, maxWords int) string {
 	if strings.ContainsAny(answer, "\r\n") {
 		return "multiline"
 	}
-	if len(strings.Fields(answer)) > memoryQAMaxAnswerWords {
+	if len(strings.Fields(answer)) > maxWords {
 		return "too-many-words"
 	}
 	return ""
