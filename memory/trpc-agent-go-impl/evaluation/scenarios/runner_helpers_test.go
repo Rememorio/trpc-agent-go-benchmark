@@ -118,7 +118,9 @@ func assertGroundedQAPrompt(t *testing.T, got string) {
 		"Never transfer a fact",
 		"Never output an empty answer",
 		`output exactly "Yes" or "No"`,
-		"shortest answer span",
+		"shortest complete answer span",
+		"never replace it with a pronoun or vague category label",
+		"every supported part",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing grounding rule %q: %q", want, got)
@@ -278,7 +280,9 @@ func TestMemoryQAUserMessageReinforcesAnswerFormat(t *testing.T) {
 	}
 	for _, want := range []string{
 		"What happened?",
-		"shortest final answer span",
+		"shortest complete final answer span",
+		"explicit entity names",
+		"every directly requested part",
 		"For yes/no, output only Yes or No",
 	} {
 		if !strings.Contains(msg.Content, want) {
