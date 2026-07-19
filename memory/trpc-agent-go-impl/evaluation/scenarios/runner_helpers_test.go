@@ -37,7 +37,7 @@ func (m *recoveryModel) GenerateContent(
 	m.calls++
 	responseText := m.text
 	if responseText == "" && !m.empty {
-		responseText = "recovered answer"
+		responseText = `{"answer":"recovered answer"}`
 	}
 	finishReason := m.finishReason
 	if finishReason == "" {
@@ -254,9 +254,22 @@ func TestRecoverMemoryQAAnswer(t *testing.T) {
 			MemoryQARecoveryMaxTokens,
 		)
 	}
+	if m.request.StructuredOutput == nil ||
+		m.request.StructuredOutput.Type != model.StructuredOutputJSONSchema ||
+		m.request.StructuredOutput.JSONSchema == nil ||
+		!m.request.StructuredOutput.JSONSchema.Strict {
+		t.Fatalf("structured output = %+v", m.request.StructuredOutput)
+	}
+	properties, ok := m.request.StructuredOutput.JSONSchema.Schema["properties"].(map[string]any)
+	if !ok || properties["answer"] == nil {
+		t.Fatalf(
+			"structured output schema = %+v",
+			m.request.StructuredOutput.JSONSchema.Schema,
+		)
+	}
 	prompt := m.request.Messages[0].Content
 	for _, want := range []string{
-		"What happened?", `{"query":"first"}`, "evidence",
+		"What happened?", `{"query":"first"}`, "evidence", `"answer"`,
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("recovery prompt missing %q: %q", want, prompt)
@@ -312,8 +325,8 @@ func TestMemoryQARecoveryTriggerFormatViolation(t *testing.T) {
 
 func TestRecoverMemoryQAAnswerRejectsMalformedRecovery(t *testing.T) {
 	m := &recoveryModel{
-		text: "one two three four five six seven eight nine ten " +
-			"eleven twelve thirteen",
+		text: `{"answer":"one two three four five six seven eight nine ten ` +
+			`eleven twelve thirteen"}`,
 	}
 	res := collectResult{
 		text: "This answer is already much too long because it contains " +
@@ -347,6 +360,20 @@ func TestRecoverMemoryQAAnswerRejectsMalformedRecovery(t *testing.T) {
 	}
 	if got.steps[1].Error == "" {
 		t.Fatalf("recovery failure missing from step: %+v", got.steps[1])
+	}
+}
+
+func TestParseMemoryQARecoveryAnswerRejectsInvalidJSON(t *testing.T) {
+	_, err := parseMemoryQARecoveryAnswer("not JSON")
+	if err == nil || !strings.Contains(err.Error(), "invalid JSON") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestParseMemoryQARecoveryAnswerTrimsAnswer(t *testing.T) {
+	got, err := parseMemoryQARecoveryAnswer(`{"answer":"  Sweden  "}`)
+	if err != nil || got != "Sweden" {
+		t.Fatalf("answer = %q, error = %v", got, err)
 	}
 }
 

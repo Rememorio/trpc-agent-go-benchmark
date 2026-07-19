@@ -266,13 +266,13 @@ const (
 	fallbackAnswer = "The information is not available."
 
 	// MemoryQAPromptVersion identifies the shared memory-search QA protocol.
-	MemoryQAPromptVersion = "locomo-memory-qa-v7"
+	MemoryQAPromptVersion = "locomo-memory-qa-v8"
 
 	// MemoryQASearchStrategy identifies how multiple retrieval queries run.
 	MemoryQASearchStrategy = "sequential-adaptive"
 
 	// MemoryQARecoveryMaxTokens caps the no-tool answer recovery call.
-	MemoryQARecoveryMaxTokens = 1024
+	MemoryQARecoveryMaxTokens = 256
 
 	memoryQAMaxAnswerWords = 12
 )
@@ -559,10 +559,10 @@ func recoverMemoryQAAnswer(
 		return res, trace
 	}
 	prompt := fmt.Sprintf(
-		`The previous answer generation failed. Answer the question using only the retrieved memory_search results below.
+		`The previous answer generation failed. Answer the question using only the retrieved memory_search results below. Return exactly one JSON object with an "answer" string.
 
 Follow these rules:
-- Output only the shortest complete final answer span (1-12 words).
+- Put only the shortest complete final answer span (1-12 words) in "answer".
 - Use explicit entity names instead of vague references, and include every directly requested part supported by the memories.
 - Do not include evidence, explanation, context, or Markdown.
 - For yes/no, output only Yes or No.
@@ -591,6 +591,26 @@ Retrieved memory_search results:
 				ReasoningEffort: &reasoningEffort,
 				ThinkingEnabled: &thinkingEnabled,
 			},
+			StructuredOutput: &model.StructuredOutput{
+				Type: model.StructuredOutputJSONSchema,
+				JSONSchema: &model.JSONSchemaConfig{
+					Name:        "memory_qa_short_answer",
+					Description: "A concise answer grounded only in the retrieved memories.",
+					Strict:      true,
+					Schema: map[string]any{
+						"type":                 "object",
+						"additionalProperties": false,
+						"properties": map[string]any{
+							"answer": map[string]any{
+								"type":      "string",
+								"minLength": 1,
+								"maxLength": 160,
+							},
+						},
+						"required": []string{"answer"},
+					},
+				},
+			},
 		},
 	)
 	trace.FinishReason = recovery.finishReason
@@ -614,16 +634,10 @@ Retrieved memory_search results:
 		res.steps = append(res.steps, step)
 		return res, trace
 	}
-	recoveredText := strings.TrimSpace(recovery.text)
-	trace.Succeeded = recoveredText != "" &&
-		memoryQAAnswerFormatViolation(recoveredText) == ""
-	if !trace.Succeeded {
-		if recoveredText == "" {
-			trace.Error = "recovery returned an empty answer"
-		} else {
-			trace.Error = "recovery returned a malformed answer: " +
-				memoryQAAnswerFormatViolation(recoveredText)
-		}
+	recoveredText, parseErr := parseMemoryQARecoveryAnswer(recovery.text)
+	trace.Succeeded = parseErr == nil
+	if parseErr != nil {
+		trace.Error = parseErr.Error()
 		step.Error = trace.Error
 		res.steps = append(res.steps, step)
 		return res, trace
@@ -631,6 +645,28 @@ Retrieved memory_search results:
 	res.steps = append(res.steps, step)
 	res.text = recoveredText
 	return res, trace
+}
+
+func parseMemoryQARecoveryAnswer(raw string) (string, error) {
+	if strings.TrimSpace(raw) == "" {
+		return "", fmt.Errorf("recovery returned an empty answer")
+	}
+	var payload struct {
+		Answer string `json:"answer"`
+	}
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return "", fmt.Errorf("recovery returned invalid JSON: %w", err)
+	}
+	answer := strings.TrimSpace(payload.Answer)
+	if answer == "" {
+		return "", fmt.Errorf("recovery returned an empty answer")
+	}
+	if violation := memoryQAAnswerFormatViolation(answer); violation != "" {
+		return "", fmt.Errorf(
+			"recovery returned a malformed answer: %s", violation,
+		)
+	}
+	return answer, nil
 }
 
 func memoryQARecoveryTrigger(res collectResult) string {
