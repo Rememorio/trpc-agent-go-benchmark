@@ -224,12 +224,14 @@ self-hosted mem0 comparison.
 Use `./run-longmemeval.sh` for every formal ingestion, answer, rerank, refresh,
 or judge run. It rejects a modified benchmark worktree and injects the exact
 benchmark commit and module manifest/checksum digests into the result
-provenance. Set `LME_AGENT_REPLACEMENT=<module-path>@<version>` to build an
-upstream arm from a deterministic temporary modfile without editing the
-worktree; the resolved module versions and both temporary manifest digests are
-recorded. `LME_AGENT_PROFILE=upstream` compiles the same runner without
-candidate-only extractor options and rejects non-default extraction settings;
-the default `candidate` profile enables those options. Plain `go run .` remains
+provenance. Set `LME_AGENT_REPLACEMENT=<module-path>@<version>` to build an arm
+from a deterministic temporary modfile without editing the worktree; the
+resolved module versions and both temporary manifest digests are recorded. A
+replacement also requires an explicit `LME_AGENT_PROFILE=candidate|upstream`,
+because its module path does not establish the experiment role.
+`LME_AGENT_PROFILE=upstream` compiles the runner without candidate-only
+extractor options and rejects non-default extraction settings; without a
+replacement, the profile defaults to `candidate`. Plain `go run .` remains
 useful for local smoke tests, but its output may omit formal provenance and is
 then intentionally rejected by strict comparison.
 

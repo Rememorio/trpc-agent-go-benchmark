@@ -34,7 +34,9 @@ fi
 build_profile="${LME_AGENT_PROFILE:-}"
 if [[ -z "${build_profile}" ]]; then
   if [[ -n "${LME_AGENT_REPLACEMENT:-}" ]]; then
-    build_profile="upstream"
+    echo "LME_AGENT_PROFILE must be set when LME_AGENT_REPLACEMENT is used." >&2
+    echo "Set it to candidate or upstream to record the arm role explicitly." >&2
+    exit 1
   else
     build_profile="candidate"
   fi
