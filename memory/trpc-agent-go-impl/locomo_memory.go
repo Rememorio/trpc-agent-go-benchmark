@@ -154,8 +154,8 @@ type EvalSummary struct {
 }
 
 const (
-	locomoAutoReplayProtocol = "chronological-session-batch-auto-v1"
-	locomoRoleMapping        = "primary human speaker=user; secondary human speaker=assistant; " +
+	locomoAutoReplayProtocol = "chronological-session-batch-auto-v2"
+	locomoRoleMapping        = "session-opening human speaker=user; other human speaker=assistant; " +
 		"speaker names retained in message content"
 )
 
@@ -625,7 +625,7 @@ func buildMemoryServiceOptions(
 			return memoryServiceOptions{}, err
 		}
 		if config.AssistantResultExtraction {
-			log.Printf("Warning: LoCoMo maps its secondary human speaker to the assistant role; " +
+			log.Printf("Warning: LoCoMo maps one human speaker per session to the assistant role; " +
 				"assistant-result extraction is a synthetic-role ablation, not a real assistant-output evaluation")
 		}
 		opts.pgvectorExtraction = config

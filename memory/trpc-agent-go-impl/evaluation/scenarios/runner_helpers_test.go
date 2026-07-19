@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go-benchmark/memory/trpc-agent-go-impl/evaluation/dataset"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
@@ -51,6 +52,39 @@ func (m *recoveryModel) GenerateContent(
 
 func (*recoveryModel) Info() model.Info {
 	return model.Info{}
+}
+
+func TestSessionMessagesAnchorsOpeningSpeakerAsUser(t *testing.T) {
+	sess := dataset.Session{
+		SessionDate: "2:24 pm on 14 August, 2023",
+		Turns: []dataset.Turn{
+			{Speaker: "Melanie", Text: "We celebrated my daughter's birthday."},
+			{Speaker: "Caroline", Text: "What concert was it?"},
+			{Speaker: "Melanie", Text: "It was Matt Patterson."},
+		},
+	}
+
+	got := sessionMessages(sess)
+	if len(got) != 4 {
+		t.Fatalf("messages = %d, want 4", len(got))
+	}
+	if got[0].Role != model.RoleSystem {
+		t.Fatalf("date role = %q, want system", got[0].Role)
+	}
+	wantRoles := []model.Role{
+		model.RoleUser,
+		model.RoleAssistant,
+		model.RoleUser,
+	}
+	for i, want := range wantRoles {
+		if got[i+1].Role != want {
+			t.Fatalf("message %d role = %q, want %q", i, got[i+1].Role, want)
+		}
+	}
+	if !strings.HasPrefix(got[1].Content, "[Melanie]:") ||
+		!strings.HasPrefix(got[2].Content, "[Caroline]:") {
+		t.Fatalf("speaker prefixes not retained: %+v", got)
+	}
 }
 
 func TestQAMemorySearchInstruction_SingleSearch(t *testing.T) {

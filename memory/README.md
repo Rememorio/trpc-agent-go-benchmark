@@ -166,6 +166,11 @@ go run . -scenario agentic
 Auto mode uses the built-in memory extractor to generate memories in the
 background. The QA stage only performs memory search.
 
+LoCoMo sessions are replayed chronologically and extracted once per session.
+Because both participants are humans, each session's opening speaker is mapped
+to the transport `user` role and the other speaker to `assistant`; speaker names
+remain in the message text. This keeps every opening turn on strict chat APIs.
+
 ```bash
 go run . -scenario auto
 ```

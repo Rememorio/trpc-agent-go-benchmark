@@ -387,7 +387,7 @@ func (e *SessionRecallEvaluator) seedSession(
 		return fmt.Errorf("create session: %w", err)
 	}
 
-	msgs := sessionRecallMessages(sample, sess)
+	msgs := sessionRecallMessages(sess)
 	for i, msg := range msgs {
 		if msg.Role != model.RoleUser &&
 			msg.Role != model.RoleAssistant {
@@ -429,11 +429,8 @@ func (e *SessionRecallEvaluator) cleanupSessions(
 	}
 }
 
-func sessionRecallMessages(
-	sample *dataset.LoCoMoSample,
-	sess dataset.Session,
-) []model.Message {
-	msgs := sessionMessages(sample, sess)
+func sessionRecallMessages(sess dataset.Session) []model.Message {
+	msgs := sessionMessages(sess)
 	datePrefix := ""
 	if sess.SessionDate != "" {
 		datePrefix = fmt.Sprintf(
