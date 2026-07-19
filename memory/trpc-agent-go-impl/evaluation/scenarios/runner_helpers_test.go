@@ -23,6 +23,7 @@ import (
 
 type recoveryModel struct {
 	request *model.Request
+	text    string
 }
 
 func (m *recoveryModel) GenerateContent(
@@ -30,11 +31,15 @@ func (m *recoveryModel) GenerateContent(
 	request *model.Request,
 ) (<-chan *model.Response, error) {
 	m.request = request
+	responseText := m.text
+	if responseText == "" {
+		responseText = "recovered answer"
+	}
 	finishReason := "stop"
 	ch := make(chan *model.Response, 1)
 	ch <- &model.Response{
 		Choices: []model.Choice{{
-			Message:      model.NewAssistantMessage("recovered answer"),
+			Message:      model.NewAssistantMessage(responseText),
 			FinishReason: &finishReason,
 		}},
 		Usage: &model.Usage{
@@ -254,6 +259,76 @@ func TestRecoverMemoryQAAnswerSkipsCompleteAnswer(t *testing.T) {
 	)
 	if trace != nil || got.text != res.text {
 		t.Fatalf("got = %+v, trace = %+v", got, trace)
+	}
+}
+
+func TestMemoryQARecoveryTriggerFormatViolation(t *testing.T) {
+	tests := []struct {
+		name    string
+		answer  string
+		trigger string
+	}{
+		{
+			name:    "multiline",
+			answer:  "Sweden\nBased on the memories, Sweden",
+			trigger: "answer-format:multiline",
+		},
+		{
+			name: "too many words",
+			answer: "one two three four five six seven eight nine ten " +
+				"eleven twelve thirteen",
+			trigger: "answer-format:too-many-words",
+		},
+		{
+			name:    "complete short answer",
+			answer:  "Friends, family, and mentors",
+			trigger: "",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := memoryQARecoveryTrigger(collectResult{text: test.answer})
+			if got != test.trigger {
+				t.Fatalf("trigger = %q, want %q", got, test.trigger)
+			}
+		})
+	}
+}
+
+func TestRecoverMemoryQAAnswerRejectsMalformedRecovery(t *testing.T) {
+	m := &recoveryModel{
+		text: "one two three four five six seven eight nine ten " +
+			"eleven twelve thirteen",
+	}
+	res := collectResult{
+		text: "This answer is already much too long because it contains " +
+			"more than twelve separate words for no useful reason",
+		usage: TokenUsage{LLMCalls: 3},
+		steps: []StepTrace{{
+			Step:  1,
+			Phase: "memory-search",
+			ToolCalls: []ToolCallTrace{{
+				Name:   "memory_search",
+				Result: `{"results":[{"memory":"evidence"}]}`,
+			}},
+		}},
+	}
+
+	got, trace := recoverMemoryQAAnswer(
+		context.Background(), m, "What happened?", res,
+	)
+	if trace == nil || trace.Succeeded ||
+		!strings.Contains(trace.Error, "too-many-words") {
+		t.Fatalf("trace = %+v", trace)
+	}
+	if got.text != res.text {
+		t.Fatalf("answer replaced with malformed recovery: %q", got.text)
+	}
+	if got.usage.LLMCalls != 4 || got.usage.TotalTokens != 23 {
+		t.Fatalf("usage = %+v", got.usage)
+	}
+	if len(got.steps) != 2 || got.steps[1].Phase != "answer-recovery" {
+		t.Fatalf("steps = %+v", got.steps)
 	}
 }
 
