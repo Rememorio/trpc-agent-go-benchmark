@@ -371,13 +371,9 @@ func (e *LongContextEvaluator) evaluateQA(
 		e.tokenCounter.Count(predicted)
 
 	var tu *TokenUsage
-	if result.usage != nil {
-		tu = &TokenUsage{
-			PromptTokens:     result.usage.PromptTokens,
-			CompletionTokens: result.usage.CompletionTokens,
-			TotalTokens:      result.usage.TotalTokens,
-			LLMCalls:         1,
-		}
+	if !result.usage.IsZero() {
+		usage := result.usage
+		tu = &usage
 	}
 	return &QAResult{
 		QuestionID: qa.QuestionID,
@@ -395,7 +391,7 @@ func (e *LongContextEvaluator) evaluateQA(
 // runModelResult holds the output of a model call.
 type runModelResult struct {
 	text         string
-	usage        *model.Usage
+	usage        TokenUsage
 	finishReason string
 }
 
@@ -406,15 +402,20 @@ func runModelWithRateLimitRetry(
 	m model.Model,
 	req *model.Request,
 ) (runModelResult, error) {
+	var result runModelResult
 	backoff := rateLimitInitialBackoff
 	for attempt := 0; attempt <= maxRateLimitRetries; attempt++ {
 		respCh, err := m.GenerateContent(ctx, req)
 		if err != nil {
+			result.usage.LLMCalls++
 			if isRateLimitError(err) {
+				if attempt == maxRateLimitRetries {
+					return result, err
+				}
 				if sleepErr := sleepWithContext(
 					ctx, backoff,
 				); sleepErr != nil {
-					return runModelResult{}, sleepErr
+					return result, sleepErr
 				}
 				backoff = minDuration(
 					backoff*time.Duration(rateLimitBackoffMultiplier),
@@ -422,44 +423,32 @@ func runModelWithRateLimitRetry(
 				)
 				continue
 			}
-			return runModelResult{}, err
+			return result, err
 		}
 
 		var lastContent string
 		var lastUsage *model.Usage
 		var lastFinishReason string
+		var responseErr error
+		var sawChoice bool
 		for resp := range respCh {
 			if resp == nil {
 				continue
 			}
 			if resp.Error != nil {
-				errMsg := resp.Error.Message
-				if isRateLimitError(
-					fmt.Errorf("%s", errMsg),
-				) {
+				responseErr = fmt.Errorf(
+					"model error: %s", resp.Error.Message,
+				)
+				if isRateLimitError(responseErr) {
 					// Drain remaining responses.
 					for range respCh {
 					}
-					if sleepErr := sleepWithContext(
-						ctx, backoff,
-					); sleepErr != nil {
-						return runModelResult{}, sleepErr
-					}
-					backoff = minDuration(
-						backoff*time.Duration(
-							rateLimitBackoffMultiplier,
-						),
-						rateLimitMaxBackoff,
-					)
-					lastContent = ""
-					lastUsage = nil
 					break
 				}
-				return runModelResult{}, fmt.Errorf(
-					"model error: %s", errMsg,
-				)
+				break
 			}
 			if len(resp.Choices) > 0 {
+				sawChoice = true
 				choice := resp.Choices[0]
 				c := choice.Message.Content
 				if c != "" {
@@ -473,12 +462,29 @@ func runModelWithRateLimitRetry(
 				lastUsage = resp.Usage
 			}
 		}
-		if lastContent != "" {
-			return runModelResult{
-				text:         strings.TrimSpace(lastContent),
-				usage:        lastUsage,
-				finishReason: lastFinishReason,
-			}, nil
+		callUsage := tokenUsageFromModelUsage(lastUsage)
+		if lastUsage == nil {
+			callUsage.LLMCalls = 1
+		}
+		result.usage.Add(callUsage)
+		if responseErr != nil {
+			if !isRateLimitError(responseErr) ||
+				attempt == maxRateLimitRetries {
+				return result, responseErr
+			}
+			if sleepErr := sleepWithContext(ctx, backoff); sleepErr != nil {
+				return result, sleepErr
+			}
+			backoff = minDuration(
+				backoff*time.Duration(rateLimitBackoffMultiplier),
+				rateLimitMaxBackoff,
+			)
+			continue
+		}
+		if lastContent != "" || sawChoice || lastUsage != nil {
+			result.text = strings.TrimSpace(lastContent)
+			result.finishReason = lastFinishReason
+			return result, nil
 		}
 		// Empty response (possibly rate limit or model overload).
 		// Apply backoff before retrying.
@@ -486,7 +492,7 @@ func runModelWithRateLimitRetry(
 			if sleepErr := sleepWithContext(
 				ctx, backoff,
 			); sleepErr != nil {
-				return runModelResult{}, sleepErr
+				return result, sleepErr
 			}
 			backoff = minDuration(
 				backoff*time.Duration(
@@ -497,7 +503,7 @@ func runModelWithRateLimitRetry(
 			continue
 		}
 	}
-	return runModelResult{}, fmt.Errorf("model returned empty response after retries")
+	return result, fmt.Errorf("model returned empty response after retries")
 }
 
 // buildTranscript concatenates all sessions into a single transcript

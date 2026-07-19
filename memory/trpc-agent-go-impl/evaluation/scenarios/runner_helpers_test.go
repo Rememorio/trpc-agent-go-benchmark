@@ -22,8 +22,11 @@ import (
 )
 
 type recoveryModel struct {
-	request *model.Request
-	text    string
+	request      *model.Request
+	text         string
+	empty        bool
+	finishReason string
+	calls        int
 }
 
 func (m *recoveryModel) GenerateContent(
@@ -31,11 +34,15 @@ func (m *recoveryModel) GenerateContent(
 	request *model.Request,
 ) (<-chan *model.Response, error) {
 	m.request = request
+	m.calls++
 	responseText := m.text
-	if responseText == "" {
+	if responseText == "" && !m.empty {
 		responseText = "recovered answer"
 	}
-	finishReason := "stop"
+	finishReason := m.finishReason
+	if finishReason == "" {
+		finishReason = "stop"
+	}
 	ch := make(chan *model.Response, 1)
 	ch <- &model.Response{
 		Choices: []model.Choice{{
@@ -239,6 +246,14 @@ func TestRecoverMemoryQAAnswer(t *testing.T) {
 	if m.request == nil || len(m.request.Messages) != 1 {
 		t.Fatalf("request = %+v", m.request)
 	}
+	if m.request.GenerationConfig.MaxTokens == nil ||
+		*m.request.GenerationConfig.MaxTokens != MemoryQARecoveryMaxTokens {
+		t.Fatalf(
+			"recovery max tokens = %v, want %d",
+			m.request.GenerationConfig.MaxTokens,
+			MemoryQARecoveryMaxTokens,
+		)
+	}
 	prompt := m.request.Messages[0].Content
 	for _, want := range []string{
 		"What happened?", `{"query":"first"}`, "evidence",
@@ -329,6 +344,47 @@ func TestRecoverMemoryQAAnswerRejectsMalformedRecovery(t *testing.T) {
 	}
 	if len(got.steps) != 2 || got.steps[1].Phase != "answer-recovery" {
 		t.Fatalf("steps = %+v", got.steps)
+	}
+	if got.steps[1].Error == "" {
+		t.Fatalf("recovery failure missing from step: %+v", got.steps[1])
+	}
+}
+
+func TestRecoverMemoryQAAnswerRecordsTerminalEmptyResponse(t *testing.T) {
+	m := &recoveryModel{empty: true, finishReason: "length"}
+	res := collectResult{
+		usage: TokenUsage{LLMCalls: 3},
+		steps: []StepTrace{{
+			Step:  1,
+			Phase: "memory-search",
+			ToolCalls: []ToolCallTrace{{
+				Name:   "memory_search",
+				Result: `{"results":[{"memory":"Sweden"}]}`,
+			}},
+		}},
+	}
+
+	got, trace := recoverMemoryQAAnswer(
+		context.Background(), m, "Where did Caroline move from?", res,
+	)
+	if m.calls != 1 {
+		t.Fatalf("model calls = %d, want 1", m.calls)
+	}
+	if trace == nil || trace.Succeeded || trace.FinishReason != "length" ||
+		trace.Error != "recovery returned an empty answer" {
+		t.Fatalf("trace = %+v", trace)
+	}
+	if got.usage.LLMCalls != 4 || got.usage.TotalTokens != 23 {
+		t.Fatalf("usage = %+v", got.usage)
+	}
+	if len(got.steps) != 2 {
+		t.Fatalf("steps = %+v", got.steps)
+	}
+	step := got.steps[1]
+	if step.Phase != "answer-recovery" || step.LLMCalls != 1 ||
+		step.FinishReason != "length" || step.TotalTokens != 23 ||
+		step.Error != trace.Error {
+		t.Fatalf("recovery step = %+v", step)
 	}
 }
 
