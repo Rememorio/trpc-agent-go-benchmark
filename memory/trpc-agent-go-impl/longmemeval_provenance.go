@@ -10,10 +10,12 @@
 package main
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -35,7 +37,7 @@ const (
 
 	// These versions are part of the experiment contract. Bump the relevant
 	// version whenever replay, prompting, or judging semantics change.
-	lmeProtocolVersion          = "lme-memory-turn-pair-v1"
+	lmeProtocolVersion          = "lme-memory-turn-pair-v2"
 	lmeAnswerPromptVersion      = "lme-memory-answer-v7"
 	lmeJudgePromptVersion       = "lme-official-superset-judge-v3"
 	lmeJudgeProtocolVersion     = "lme-content-addressed-verdict-v1"
@@ -70,19 +72,30 @@ type lmeModuleProvenance struct {
 }
 
 type lmeProtocolProvenance struct {
-	Version             string `json:"version"`
-	ReplayUnit          string `json:"replay_unit"`
-	SessionOrder        string `json:"session_order"`
-	ExtractionCadence   string `json:"extraction_cadence"`
-	RetrievalInput      string `json:"retrieval_input"`
-	AnswerInput         string `json:"answer_input"`
-	AnswerPromptVersion string `json:"answer_prompt_version"`
-	TopK                int    `json:"top_k"`
-	MaxSessions         int    `json:"max_sessions"`
-	MaxPairs            int    `json:"max_pairs"`
-	IngestWait          string `json:"ingest_wait"`
-	ModelCallTimeout    string `json:"model_call_timeout"`
-	AnswerEnabled       bool   `json:"answer_enabled"`
+	Version              string                        `json:"version"`
+	ReplayUnit           string                        `json:"replay_unit"`
+	SessionOrder         string                        `json:"session_order"`
+	ExtractionCadence    string                        `json:"extraction_cadence"`
+	RetrievalInput       string                        `json:"retrieval_input"`
+	AnswerInput          string                        `json:"answer_input"`
+	AnswerModel          string                        `json:"answer_model"`
+	AnswerModelVariant   string                        `json:"answer_model_variant"`
+	ModelTemperature     float64                       `json:"model_temperature"`
+	AnswerPromptVersion  string                        `json:"answer_prompt_version"`
+	AnswerGeneration     lmeAnswerGenerationProvenance `json:"answer_generation"`
+	EmbeddingModel       string                        `json:"embedding_model"`
+	JudgeModel           string                        `json:"judge_model"`
+	JudgeModelVariant    string                        `json:"judge_model_variant"`
+	JudgeRuns            int                           `json:"judge_runs"`
+	JudgePromptVersion   string                        `json:"judge_prompt_version"`
+	JudgeProtocolVersion string                        `json:"judge_protocol_version"`
+	JudgeGeneration      lmeJudgeGenerationProvenance  `json:"judge_generation"`
+	TopK                 int                           `json:"top_k"`
+	MaxSessions          int                           `json:"max_sessions"`
+	MaxPairs             int                           `json:"max_pairs"`
+	IngestWait           string                        `json:"ingest_wait"`
+	ModelCallTimeout     string                        `json:"model_call_timeout"`
+	AnswerEnabled        bool                          `json:"answer_enabled"`
 }
 
 type lmeAnswerGenerationProvenance struct {
@@ -153,20 +166,137 @@ func currentLongMemEvalRerankGeneration() lmeRerankGenerationProvenance {
 
 func currentLongMemEvalProtocol() lmeProtocolProvenance {
 	return lmeProtocolProvenance{
-		Version:             lmeProtocolVersion,
-		ReplayUnit:          "user-assistant-pair",
-		SessionOrder:        "haystack-date-ascending-stable",
-		ExtractionCadence:   "after-each-pair",
-		RetrievalInput:      "question-to-memory-search",
-		AnswerInput:         "ranked-memories-only",
-		AnswerPromptVersion: lmeAnswerPromptVersion,
-		TopK:                *flagVectorTopK,
-		MaxSessions:         *flagLMEMaxSessions,
-		MaxPairs:            *flagLMEMaxPairs,
-		IngestWait:          flagLMEIngestWait.String(),
-		ModelCallTimeout:    flagLMEModelCallTimeout.String(),
-		AnswerEnabled:       *flagLMEAnswer,
+		Version:              lmeProtocolVersion,
+		ReplayUnit:           "user-assistant-pair",
+		SessionOrder:         "haystack-date-ascending-stable",
+		ExtractionCadence:    "after-each-pair",
+		RetrievalInput:       "question-to-memory-search",
+		AnswerInput:          "ranked-memories-only",
+		AnswerModel:          getModelName(),
+		AnswerModelVariant:   getModelVariant(),
+		ModelTemperature:     0,
+		AnswerPromptVersion:  lmeAnswerPromptVersion,
+		AnswerGeneration:     currentLongMemEvalAnswerGeneration(),
+		EmbeddingModel:       getEmbedModelName(),
+		JudgeModel:           getEvalModelName(),
+		JudgeModelVariant:    getModelVariant(),
+		JudgeRuns:            *flagLMEJudgeRuns,
+		JudgePromptVersion:   lmeJudgePromptVersion,
+		JudgeProtocolVersion: lmeJudgeProtocolVersion,
+		JudgeGeneration:      currentLongMemEvalJudgeGeneration(),
+		TopK:                 *flagVectorTopK,
+		MaxSessions:          *flagLMEMaxSessions,
+		MaxPairs:             *flagLMEMaxPairs,
+		IngestWait:           flagLMEIngestWait.String(),
+		ModelCallTimeout:     flagLMEModelCallTimeout.String(),
+		AnswerEnabled:        *flagLMEAnswer,
 	}
+}
+
+func validateLongMemEvalProtocol(protocol lmeProtocolProvenance) error {
+	if protocol.Version != lmeProtocolVersion {
+		return fmt.Errorf(
+			"LongMemEval protocol version is %q, current version is %q",
+			protocol.Version, lmeProtocolVersion,
+		)
+	}
+	for name, value := range map[string]string{
+		"answer model":           protocol.AnswerModel,
+		"embedding model":        protocol.EmbeddingModel,
+		"judge model":            protocol.JudgeModel,
+		"answer prompt version":  protocol.AnswerPromptVersion,
+		"judge prompt version":   protocol.JudgePromptVersion,
+		"judge protocol version": protocol.JudgeProtocolVersion,
+	} {
+		if strings.TrimSpace(value) == "" {
+			return fmt.Errorf("LongMemEval protocol %s is missing", name)
+		}
+	}
+	if protocol.JudgeRuns <= 0 || protocol.JudgeRuns%2 == 0 {
+		return fmt.Errorf(
+			"LongMemEval protocol judge runs must be a positive odd number, got %d",
+			protocol.JudgeRuns,
+		)
+	}
+	if protocol.TopK <= 0 {
+		return fmt.Errorf(
+			"LongMemEval protocol top-k must be positive, got %d",
+			protocol.TopK,
+		)
+	}
+	if protocol.MaxSessions < 0 || protocol.MaxPairs < 0 {
+		return errors.New(
+			"LongMemEval protocol session and pair limits must not be negative",
+		)
+	}
+	if protocol.AnswerGeneration.PrimaryMaxTokens <= 0 ||
+		protocol.AnswerGeneration.RetryMaxTokens <= 0 ||
+		protocol.AnswerGeneration.MaxAttempts <= 0 {
+		return errors.New("LongMemEval answer generation contract is invalid")
+	}
+	if protocol.JudgeGeneration.PrimaryMaxTokens <= 0 ||
+		protocol.JudgeGeneration.RepairMaxTokens <= 0 {
+		return errors.New("LongMemEval judge generation contract is invalid")
+	}
+	return nil
+}
+
+func validateLongMemEvalResultProtocol(
+	metadata map[string]any,
+	current lmeProtocolProvenance,
+) error {
+	if metadata == nil {
+		return errors.New("LongMemEval result metadata is missing")
+	}
+	value, ok := metadata["protocol"]
+	if !ok {
+		return errors.New("LongMemEval result protocol is missing")
+	}
+	data, err := json.Marshal(value)
+	if err != nil {
+		return fmt.Errorf("marshal LongMemEval result protocol: %w", err)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	var recorded lmeProtocolProvenance
+	if err := decoder.Decode(&recorded); err != nil {
+		return fmt.Errorf("decode LongMemEval result protocol: %w", err)
+	}
+	if err := validateLongMemEvalProtocol(recorded); err != nil {
+		return fmt.Errorf("invalid recorded LongMemEval protocol: %w", err)
+	}
+	declaredVersion, ok := metadata["protocol_version"].(string)
+	if !ok || declaredVersion != recorded.Version {
+		return fmt.Errorf(
+			"LongMemEval result protocol version is %q, payload version is %q",
+			declaredVersion, recorded.Version,
+		)
+	}
+	recordedDigest, err := longMemEvalJSONSHA256(recorded)
+	if err != nil {
+		return fmt.Errorf("hash recorded LongMemEval protocol: %w", err)
+	}
+	declaredDigest, ok := metadata["protocol_sha256"].(string)
+	if !ok || declaredDigest != recordedDigest {
+		return fmt.Errorf(
+			"LongMemEval result protocol digest is %q, payload digest is %q",
+			declaredDigest, recordedDigest,
+		)
+	}
+	if err := validateLongMemEvalProtocol(current); err != nil {
+		return fmt.Errorf("invalid current LongMemEval protocol: %w", err)
+	}
+	currentDigest, err := longMemEvalJSONSHA256(current)
+	if err != nil {
+		return fmt.Errorf("hash current LongMemEval protocol: %w", err)
+	}
+	if currentDigest != recordedDigest {
+		return fmt.Errorf(
+			"current LongMemEval protocol digest is %q, result requires %q",
+			currentDigest, recordedDigest,
+		)
+	}
+	return nil
 }
 
 func longMemEvalImplementation() string {

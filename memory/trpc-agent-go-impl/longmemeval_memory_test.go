@@ -308,8 +308,17 @@ func TestWriteLongMemEvalSelectionOmitsQuestionContent(t *testing.T) {
 		len(got.Cases) != 2 {
 		t.Fatalf("unexpected manifest: %+v", got)
 	}
-	if got.Protocol.Version != lmeProtocolVersion ||
-		got.Protocol.TopK != *flagVectorTopK {
+	if got.SchemaVersion != lmeSelectionManifestSchemaVersion ||
+		got.Protocol.Version != lmeProtocolVersion ||
+		got.Protocol.TopK != *flagVectorTopK ||
+		got.Protocol.AnswerModel != getModelName() ||
+		got.Protocol.AnswerModelVariant != getModelVariant() ||
+		got.Protocol.EmbeddingModel != getEmbedModelName() ||
+		got.Protocol.JudgeModel != getEvalModelName() ||
+		got.Protocol.JudgeRuns != *flagLMEJudgeRuns ||
+		got.Protocol.AnswerPromptVersion != lmeAnswerPromptVersion ||
+		got.Protocol.JudgePromptVersion != lmeJudgePromptVersion ||
+		got.Protocol.JudgeProtocolVersion != lmeJudgeProtocolVersion {
 		t.Fatalf("selection omitted protocol provenance: %+v", got.Protocol)
 	}
 	wantExcludedDigest, err := longMemEvalJSONSHA256([]string{"question-a", "question-z"})

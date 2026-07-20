@@ -244,6 +244,10 @@ then intentionally rejected by strict comparison.
 export PGVECTOR_DSN="postgres://user:password@localhost:5432/vectordb?sslmode=disable"
 export MEM0_HOST="http://localhost:8888"
 export MEM0_IMPLEMENTATION="mem0-oss-<source-commit-or-image-digest>"
+export LME_ANSWER_MODEL="<answer-model>"
+export LME_JUDGE_MODEL="<judge-model>"
+export LME_MODEL_VARIANT="<openai-compatible-provider-variant>"
+export LME_EMBED_MODEL="text-embedding-3-small"
 
 # One-case smoke test.
 go run . \
@@ -269,9 +273,11 @@ go run . \
 # model, embedding, database, or Mem0 provider. Use the formal runner so the
 # manifest records a clean benchmark revision and pinned modules. The manifest
 # contains only question IDs, types, sampling parameters, and provenance
-# digests. Keep the frozen exclusion set in a one-question-ID-per-line file;
-# IDs are merged with any CSV exclusions, deduplicated, sorted, and checked
-# against the selected dataset before sampling.
+# digests. Protocol v2 also binds the logical answer, embedding, and judge
+# configurations shown below without contacting those providers. Keep the
+# frozen exclusion set in a one-question-ID-per-line file; IDs are merged with
+# any CSV exclusions, deduplicated, sorted, and checked against the selected
+# dataset before sampling.
 LME_AGENT_PROFILE=candidate \
 LME_AGENT_REPLACEMENT="trpc.group/trpc-go/trpc-agent-go@<candidate-pseudo-version>" \
 ./run-longmemeval.sh \
@@ -281,12 +287,21 @@ LME_AGENT_REPLACEMENT="trpc.group/trpc-go/trpc-agent-go@<candidate-pseudo-versio
   -lme-abstention-count 4 \
   -lme-exclude-question-ids-file ../results/lme-observed-question-ids.txt \
   -lme-sample-seed 48 \
+  -model "$LME_ANSWER_MODEL" \
+  -eval-model "$LME_JUDGE_MODEL" \
+  -model-variant "$LME_MODEL_VARIANT" \
+  -embed-model "$LME_EMBED_MODEL" \
+  -lme-judge-runs 3 \
+  -lme-answer=true \
+  -vector-topk 30 \
   -lme-selection-only \
   > ../results/lme-holdout-selection.json
 
 # Execute exactly the preregistered selection. Dataset, protocol, exclusion
 # set, case metadata, and benchmark revision must still match the manifest.
-# Additional case filters, resampling, and max-tasks truncation are rejected.
+# Additional case filters, resampling, max-tasks truncation, and model,
+# embedding, answer-generation, or judge drift are rejected before provider
+# initialization.
 LME_AGENT_PROFILE=upstream \
 LME_AGENT_REPLACEMENT="trpc.group/trpc-go/trpc-agent-go@<upstream-pseudo-version>" \
 ./run-longmemeval.sh \
@@ -297,6 +312,12 @@ LME_AGENT_REPLACEMENT="trpc.group/trpc-go/trpc-agent-go@<upstream-pseudo-version
   -lme-exclude-question-ids-file ../results/lme-observed-question-ids.txt \
   -lme-implementation upstream-holdout-<commit> \
   -lme-blind-progress=true \
+  -model "$LME_ANSWER_MODEL" \
+  -eval-model "$LME_JUDGE_MODEL" \
+  -model-variant "$LME_MODEL_VARIANT" \
+  -embed-model "$LME_EMBED_MODEL" \
+  -lme-judge-runs 3 \
+  -lme-answer=true \
   -vector-topk 30 \
   -table-suffix _lme_holdout_upstream \
   -output ../results/lme-holdout-upstream
@@ -343,21 +364,44 @@ LME_AGENT_PROFILE=upstream \
 ./run-longmemeval.sh \
   -dataset-format longmemeval \
   -lme-judge-results ../results/lme-upstream/results.json \
+  -model "$LME_ANSWER_MODEL" \
+  -eval-model "$LME_JUDGE_MODEL" \
+  -model-variant "$LME_MODEL_VARIANT" \
+  -embed-model "$LME_EMBED_MODEL" \
   -lme-judge-runs 3 \
+  -lme-answer=true \
+  -vector-topk 30 \
   -lme-judge-cache ../results/lme-judge-cache.json \
   -output ../results/lme-upstream
 
-# Regenerate only the answers from saved retrieval hits after changing the
-# shared answer protocol, then judge that output.
+# Generate an independent answer replicate from saved retrieval hits under the
+# exact frozen protocol, then judge that output. Both commands validate the
+# recorded protocol hash before initializing a model.
+# Legacy protocol-v1 results remain available to offline analysis and comparison,
+# but cannot be re-answered or judged as protocol-v2 results.
 ./run-longmemeval.sh \
   -dataset-format longmemeval \
   -lme-reanswer-results ../results/lme-upstream/results.json \
-  -lme-answer-cache ../results/lme-answer-cache.json \
+  -model "$LME_ANSWER_MODEL" \
+  -eval-model "$LME_JUDGE_MODEL" \
+  -model-variant "$LME_MODEL_VARIANT" \
+  -embed-model "$LME_EMBED_MODEL" \
+  -lme-judge-runs 3 \
+  -lme-answer=true \
+  -vector-topk 30 \
+  -lme-reanswer-reuse-source-answers=false \
+  -lme-answer-cache ../results/lme-answer-replicate-2-cache.json \
   -output ../results/lme-upstream
 ./run-longmemeval.sh \
   -dataset-format longmemeval \
   -lme-judge-results ../results/lme-upstream/reanswered_results.json \
+  -model "$LME_ANSWER_MODEL" \
+  -eval-model "$LME_JUDGE_MODEL" \
+  -model-variant "$LME_MODEL_VARIANT" \
+  -embed-model "$LME_EMBED_MODEL" \
   -lme-judge-runs 3 \
+  -lme-answer=true \
+  -vector-topk 30 \
   -lme-judge-cache ../results/lme-judge-cache.json \
   -output ../results/lme-upstream
 
@@ -367,6 +411,12 @@ LME_AGENT_PROFILE=upstream \
   -dataset-format longmemeval \
   -lme-refresh-retrieval-results ../results/lme-candidate/results.json \
   -table-suffix _lme_candidate \
+  -model "$LME_ANSWER_MODEL" \
+  -eval-model "$LME_JUDGE_MODEL" \
+  -model-variant "$LME_MODEL_VARIANT" \
+  -embed-model "$LME_EMBED_MODEL" \
+  -lme-judge-runs 3 \
+  -lme-answer=true \
   -vector-topk 30 \
   -output ../results/lme-candidate
 

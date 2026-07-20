@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -340,9 +341,9 @@ func TestValidateLongMemEvalPreregisteredSelection(t *testing.T) {
 		want       string
 	}{
 		{
-			name: "schema drift",
+			name: "legacy schema",
 			mutate: func(m *lmeSelectionManifest, _ *lmeBuildProvenance) {
-				m.SchemaVersion++
+				m.SchemaVersion = 1
 			},
 			want: "schema version",
 		},
@@ -381,6 +382,27 @@ func TestValidateLongMemEvalPreregisteredSelection(t *testing.T) {
 				m.Protocol.TopK++
 			},
 			want: "protocol payload digest",
+		},
+		{
+			name: "missing answer model",
+			mutate: func(m *lmeSelectionManifest, _ *lmeBuildProvenance) {
+				m.Protocol.AnswerModel = ""
+			},
+			want: "answer model is missing",
+		},
+		{
+			name: "invalid judge runs",
+			mutate: func(m *lmeSelectionManifest, _ *lmeBuildProvenance) {
+				m.Protocol.JudgeRuns = 2
+			},
+			want: "positive odd number",
+		},
+		{
+			name: "invalid answer generation",
+			mutate: func(m *lmeSelectionManifest, _ *lmeBuildProvenance) {
+				m.Protocol.AnswerGeneration.MaxAttempts = 0
+			},
+			want: "answer generation contract",
 		},
 		{
 			name:       "negative sampling metadata",
@@ -533,7 +555,7 @@ func testLongMemEvalSelectionManifest(
 	instances []*lmeInstance,
 ) lmeSelectionManifest {
 	t.Helper()
-	protocol := lmeProtocolProvenance{Version: lmeProtocolVersion}
+	protocol := testLongMemEvalProtocol()
 	protocolDigest, err := longMemEvalJSONSHA256(protocol)
 	if err != nil {
 		t.Fatalf("hash protocol: %v", err)
@@ -561,5 +583,267 @@ func testLongMemEvalSelectionManifest(
 		AbstentionCount: 4,
 		SampleSeed:      271,
 		Cases:           cases,
+	}
+}
+
+func testLongMemEvalProtocol() lmeProtocolProvenance {
+	return lmeProtocolProvenance{
+		Version:              lmeProtocolVersion,
+		AnswerModel:          "answer-model",
+		AnswerModelVariant:   "glm",
+		AnswerPromptVersion:  lmeAnswerPromptVersion,
+		AnswerGeneration:     currentLongMemEvalAnswerGeneration(),
+		EmbeddingModel:       "embedding-model",
+		JudgeModel:           "judge-model",
+		JudgeModelVariant:    "glm",
+		JudgeRuns:            3,
+		JudgePromptVersion:   lmeJudgePromptVersion,
+		JudgeProtocolVersion: lmeJudgeProtocolVersion,
+		JudgeGeneration:      currentLongMemEvalJudgeGeneration(),
+		TopK:                 30,
+		MaxSessions:          0,
+		MaxPairs:             0,
+	}
+}
+
+func TestCurrentLongMemEvalProtocolBindsEvaluationConfiguration(t *testing.T) {
+	originalModel := *flagModel
+	originalVariant := *flagModelVariant
+	originalEvalModel := *flagEvalModel
+	originalEmbedModel := *flagEmbedModel
+	originalJudgeRuns := *flagLMEJudgeRuns
+	t.Cleanup(func() {
+		*flagModel = originalModel
+		*flagModelVariant = originalVariant
+		*flagEvalModel = originalEvalModel
+		*flagEmbedModel = originalEmbedModel
+		*flagLMEJudgeRuns = originalJudgeRuns
+	})
+	*flagModel = "answer-model-v2"
+	*flagModelVariant = "glm"
+	*flagEvalModel = "judge-model-v2"
+	*flagEmbedModel = "embedding-model-v2"
+	*flagLMEJudgeRuns = 3
+
+	protocol := currentLongMemEvalProtocol()
+	if protocol.AnswerModel != *flagModel ||
+		protocol.AnswerModelVariant != *flagModelVariant ||
+		protocol.EmbeddingModel != *flagEmbedModel ||
+		protocol.JudgeModel != *flagEvalModel ||
+		protocol.JudgeModelVariant != *flagModelVariant ||
+		protocol.JudgeRuns != *flagLMEJudgeRuns ||
+		protocol.AnswerPromptVersion != lmeAnswerPromptVersion ||
+		protocol.JudgePromptVersion != lmeJudgePromptVersion ||
+		protocol.JudgeProtocolVersion != lmeJudgeProtocolVersion ||
+		!reflect.DeepEqual(protocol.AnswerGeneration,
+			currentLongMemEvalAnswerGeneration()) ||
+		!reflect.DeepEqual(protocol.JudgeGeneration,
+			currentLongMemEvalJudgeGeneration()) {
+		t.Fatalf("protocol omitted evaluation configuration: %+v", protocol)
+	}
+	if err := validateLongMemEvalProtocol(protocol); err != nil {
+		t.Fatalf("validate protocol: %v", err)
+	}
+
+	digest, err := longMemEvalJSONSHA256(protocol)
+	if err != nil {
+		t.Fatalf("hash protocol: %v", err)
+	}
+	for name, mutate := range map[string]func(*lmeProtocolProvenance){
+		"answer model":    func(p *lmeProtocolProvenance) { p.AnswerModel = "other" },
+		"embedding model": func(p *lmeProtocolProvenance) { p.EmbeddingModel = "other" },
+		"judge runs":      func(p *lmeProtocolProvenance) { p.JudgeRuns = 1 },
+	} {
+		t.Run(name, func(t *testing.T) {
+			changed := protocol
+			mutate(&changed)
+			changedDigest, hashErr := longMemEvalJSONSHA256(changed)
+			if hashErr != nil {
+				t.Fatalf("hash changed protocol: %v", hashErr)
+			}
+			if changedDigest == digest {
+				t.Fatalf("%s did not change protocol digest", name)
+			}
+		})
+	}
+}
+
+func TestValidateLongMemEvalResultProtocol(t *testing.T) {
+	protocol := testLongMemEvalProtocol()
+	digest, err := longMemEvalJSONSHA256(protocol)
+	if err != nil {
+		t.Fatalf("hash protocol: %v", err)
+	}
+	newMetadata := func(t *testing.T) map[string]any {
+		t.Helper()
+		data, marshalErr := json.Marshal(protocol)
+		if marshalErr != nil {
+			t.Fatalf("marshal protocol: %v", marshalErr)
+		}
+		var payload map[string]any
+		if unmarshalErr := json.Unmarshal(data, &payload); unmarshalErr != nil {
+			t.Fatalf("unmarshal protocol: %v", unmarshalErr)
+		}
+		return map[string]any{
+			"protocol":         payload,
+			"protocol_version": protocol.Version,
+			"protocol_sha256":  digest,
+		}
+	}
+
+	if err := validateLongMemEvalResultProtocol(
+		newMetadata(t), protocol,
+	); err != nil {
+		t.Fatalf("validate matching result protocol: %v", err)
+	}
+	if err := validateLongMemEvalResultProtocol(nil, protocol); err == nil ||
+		!strings.Contains(err.Error(), "metadata is missing") {
+		t.Fatalf("missing metadata error = %v", err)
+	}
+
+	tests := []struct {
+		name    string
+		current lmeProtocolProvenance
+		mutate  func(map[string]any)
+		want    string
+	}{
+		{
+			name:    "missing protocol",
+			current: protocol,
+			mutate:  func(metadata map[string]any) { delete(metadata, "protocol") },
+			want:    "protocol is missing",
+		},
+		{
+			name:    "unencodable protocol",
+			current: protocol,
+			mutate: func(metadata map[string]any) {
+				metadata["protocol"] = make(chan int)
+			},
+			want: "marshal LongMemEval result protocol",
+		},
+		{
+			name:    "unknown protocol field",
+			current: protocol,
+			mutate: func(metadata map[string]any) {
+				metadata["protocol"].(map[string]any)["unknown"] = true
+			},
+			want: "unknown field",
+		},
+		{
+			name:    "declared version drift",
+			current: protocol,
+			mutate: func(metadata map[string]any) {
+				metadata["protocol_version"] = "other-version"
+			},
+			want: "payload version",
+		},
+		{
+			name:    "declared digest drift",
+			current: protocol,
+			mutate: func(metadata map[string]any) {
+				metadata["protocol_sha256"] = "other-digest"
+			},
+			want: "payload digest",
+		},
+		{
+			name:    "invalid recorded protocol",
+			current: protocol,
+			mutate: func(metadata map[string]any) {
+				metadata["protocol"].(map[string]any)["answer_model"] = ""
+			},
+			want: "invalid recorded LongMemEval protocol",
+		},
+		{
+			name: "current protocol drift",
+			current: func() lmeProtocolProvenance {
+				changed := protocol
+				changed.AnswerModel = "other-answer-model"
+				return changed
+			}(),
+			want: "result requires",
+		},
+		{
+			name: "invalid current protocol",
+			current: func() lmeProtocolProvenance {
+				changed := protocol
+				changed.TopK = 0
+				return changed
+			}(),
+			want: "invalid current LongMemEval protocol",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			metadata := newMetadata(t)
+			if test.mutate != nil {
+				test.mutate(metadata)
+			}
+			err := validateLongMemEvalResultProtocol(metadata, test.current)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v, want containing %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestValidateLongMemEvalProtocolRejectsInvalidContracts(t *testing.T) {
+	valid := testLongMemEvalProtocol()
+	if err := validateLongMemEvalProtocol(valid); err != nil {
+		t.Fatalf("validate protocol: %v", err)
+	}
+	tests := []struct {
+		name   string
+		mutate func(*lmeProtocolProvenance)
+		want   string
+	}{
+		{
+			name:   "version",
+			mutate: func(p *lmeProtocolProvenance) { p.Version = "legacy" },
+			want:   "protocol version",
+		},
+		{
+			name:   "missing embedding model",
+			mutate: func(p *lmeProtocolProvenance) { p.EmbeddingModel = "" },
+			want:   "embedding model is missing",
+		},
+		{
+			name:   "judge runs",
+			mutate: func(p *lmeProtocolProvenance) { p.JudgeRuns = 0 },
+			want:   "positive odd number",
+		},
+		{
+			name:   "top-k",
+			mutate: func(p *lmeProtocolProvenance) { p.TopK = 0 },
+			want:   "top-k must be positive",
+		},
+		{
+			name:   "negative session limit",
+			mutate: func(p *lmeProtocolProvenance) { p.MaxSessions = -1 },
+			want:   "must not be negative",
+		},
+		{
+			name: "answer generation",
+			mutate: func(p *lmeProtocolProvenance) {
+				p.AnswerGeneration.PrimaryMaxTokens = 0
+			},
+			want: "answer generation contract",
+		},
+		{
+			name: "judge generation",
+			mutate: func(p *lmeProtocolProvenance) {
+				p.JudgeGeneration.RepairMaxTokens = 0
+			},
+			want: "judge generation contract",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			protocol := valid
+			test.mutate(&protocol)
+			err := validateLongMemEvalProtocol(protocol)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v, want containing %q", err, test.want)
+			}
+		})
 	}
 }

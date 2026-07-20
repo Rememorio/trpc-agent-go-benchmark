@@ -10,6 +10,8 @@ package main
 
 import (
 	"context"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"trpc.group/trpc-go/trpc-agent-go/memory"
@@ -68,6 +70,56 @@ func TestLongMemEvalRetrievalRefreshImplementation(t *testing.T) {
 	*flagLMEImplementation = ""
 	if _, err := longMemEvalRetrievalRefreshImplementation(result); err == nil {
 		t.Fatal("accepted an unspecified refresh implementation")
+	}
+}
+
+func TestRefreshLongMemEvalRetrievalResultsRejectsProtocolDriftBeforeProvider(
+	t *testing.T,
+) {
+	restoreStringFlag(t, flagTableSuffix, "_refresh_protocol")
+	restoreStringFlag(t, flagModel, "answer-model")
+	restoreStringFlag(t, flagModelVariant, "variant")
+	restoreStringFlag(t, flagEvalModel, "judge-model")
+	restoreStringFlag(t, flagEmbedModel, "embedding-model")
+	restoreStringFlag(t, flagLMEImplementation, "target-refresh")
+	restoreIntFlag(t, flagVectorTopK, 30)
+	restoreIntFlag(t, flagLMEJudgeRuns, 3)
+	restoreBoolFlag(t, flagLMEAnswer, true)
+
+	recorded := currentLongMemEvalProtocol()
+	digest, err := longMemEvalJSONSHA256(recorded)
+	if err != nil {
+		t.Fatalf("hash recorded protocol: %v", err)
+	}
+	result := &runResult{
+		Metadata: map[string]any{
+			"implementation":   "source-run",
+			"table_suffix":     *flagTableSuffix,
+			"model":            getModelName(),
+			"model_variant":    getModelVariant(),
+			"embedding_model":  getEmbedModelName(),
+			"top_k":            *flagVectorTopK,
+			"protocol":         recorded,
+			"protocol_version": recorded.Version,
+			"protocol_sha256":  digest,
+		},
+		Cases: []*caseResult{{
+			BackendResults: map[string]*backendResult{"pgvector": {}},
+		}},
+	}
+	sourcePath := filepath.Join(t.TempDir(), "results.json")
+	if err := writeLongMemEvalResults(sourcePath, result); err != nil {
+		t.Fatalf("write source results: %v", err)
+	}
+
+	*flagLMEJudgeRuns = 1
+	err = refreshLongMemEvalRetrievalResults(
+		context.Background(), sourcePath, t.TempDir(),
+	)
+	if err == nil || !strings.Contains(
+		err.Error(), "validate LongMemEval retrieval refresh protocol",
+	) {
+		t.Fatalf("protocol drift error = %v", err)
 	}
 }
 
@@ -303,6 +355,13 @@ func restoreStringFlag(t *testing.T, target *string, value string) {
 }
 
 func restoreIntFlag(t *testing.T, target *int, value int) {
+	t.Helper()
+	original := *target
+	*target = value
+	t.Cleanup(func() { *target = original })
+}
+
+func restoreBoolFlag(t *testing.T, target *bool, value bool) {
 	t.Helper()
 	original := *target
 	*target = value

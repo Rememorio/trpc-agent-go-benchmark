@@ -43,6 +43,13 @@ func refreshLongMemEvalRetrievalResults(
 	if err := validateLongMemEvalRetrievalRefresh(result); err != nil {
 		return err
 	}
+	if *flagLMEAnswer {
+		if err := validateLongMemEvalResultProtocol(
+			result.Metadata, currentLongMemEvalProtocol(),
+		); err != nil {
+			return fmt.Errorf("validate LongMemEval retrieval refresh protocol: %w", err)
+		}
+	}
 	implementation, err := longMemEvalRetrievalRefreshImplementation(result)
 	if err != nil {
 		return err

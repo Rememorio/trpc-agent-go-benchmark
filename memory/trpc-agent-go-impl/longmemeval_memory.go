@@ -906,6 +906,9 @@ func runLongMemEvalMemory(ctx context.Context) error {
 		return fmt.Errorf("no cases selected")
 	}
 	protocol := currentLongMemEvalProtocol()
+	if err := validateLongMemEvalProtocol(protocol); err != nil {
+		return err
+	}
 	datasetDigest, selectionDigest, protocolDigest, err := longMemEvalExperimentDigests(
 		datasetPath,
 		cases,
@@ -1651,6 +1654,11 @@ func reanswerLongMemEvalResults(ctx context.Context, path, outputDir string) err
 	if err != nil {
 		return err
 	}
+	if err := validateLongMemEvalResultProtocol(
+		result.Metadata, currentLongMemEvalProtocol(),
+	); err != nil {
+		return fmt.Errorf("validate LongMemEval re-answer protocol: %w", err)
+	}
 	modelName := getModelName()
 	modelVariant := getModelVariant()
 	baseLLM, err := newEvaluationModel(modelName, modelVariant)
@@ -1823,6 +1831,11 @@ func judgeLongMemEvalResults(ctx context.Context, path, outputDir string) error 
 	var result runResult
 	if err := json.Unmarshal(data, &result); err != nil {
 		return fmt.Errorf("parse results: %w", err)
+	}
+	if err := validateLongMemEvalResultProtocol(
+		result.Metadata, currentLongMemEvalProtocol(),
+	); err != nil {
+		return fmt.Errorf("validate LongMemEval judge protocol: %w", err)
 	}
 	modelName := getEvalModelName()
 	modelVariant := getModelVariant()

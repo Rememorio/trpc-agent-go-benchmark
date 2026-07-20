@@ -20,7 +20,7 @@ import (
 	"strings"
 )
 
-const lmeSelectionManifestSchemaVersion = 1
+const lmeSelectionManifestSchemaVersion = 2
 
 type lmePreregisteredSelection struct {
 	Manifest       lmeSelectionManifest
@@ -306,6 +306,9 @@ func validateLongMemEvalPreregisteredSelection(
 			"LongMemEval preregistration protocol payload version is %q, declared version is %q",
 			manifest.Protocol.Version, manifest.ProtocolVersion,
 		)
+	}
+	if err := validateLongMemEvalProtocol(manifest.Protocol); err != nil {
+		return fmt.Errorf("invalid LongMemEval preregistration protocol: %w", err)
 	}
 	manifestProtocolDigest, err := longMemEvalJSONSHA256(manifest.Protocol)
 	if err != nil {
