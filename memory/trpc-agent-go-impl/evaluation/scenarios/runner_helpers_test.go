@@ -238,7 +238,8 @@ func TestRecoverMemoryQAAnswer(t *testing.T) {
 	got, trace := recoverMemoryQAAnswer(
 		context.Background(), m, "What happened?", res,
 	)
-	if trace == nil || !trace.Succeeded {
+	if trace == nil || !trace.Succeeded || !trace.Applied ||
+		trace.SelectedAnswerSource != memoryQAAnswerSourceRecovery {
 		t.Fatalf("recovery trace = %+v", trace)
 	}
 	if trace.Trigger != "empty-answer,finish-reason:length" {
@@ -281,6 +282,7 @@ func TestRecoverMemoryQAAnswer(t *testing.T) {
 	prompt := m.request.Messages[0].Content
 	for _, want := range []string{
 		"What happened?", "Memory: evidence", "submit_answer",
+		"Previous answer:", "<answer><empty></answer>",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("recovery prompt missing %q: %q", want, prompt)
@@ -399,8 +401,10 @@ func TestRecoverMemoryQAAnswerRejectsMalformedRecovery(t *testing.T) {
 		!strings.Contains(trace.Error, "too-many-words") {
 		t.Fatalf("trace = %+v", trace)
 	}
-	if got.text != fallbackAnswer || !trace.FallbackApplied {
-		t.Fatalf("fallback was not applied: answer=%q trace=%+v", got.text, trace)
+	if got.text != strings.TrimSpace(res.text) ||
+		!trace.InitialAnswerRetained || trace.FallbackApplied ||
+		trace.SelectedAnswerSource != memoryQAAnswerSourceInitial {
+		t.Fatalf("initial answer was not retained: answer=%q trace=%+v", got.text, trace)
 	}
 	if got.usage.LLMCalls != 4 || got.usage.TotalTokens != 23 {
 		t.Fatalf("usage = %+v", got.usage)
@@ -410,6 +414,97 @@ func TestRecoverMemoryQAAnswerRejectsMalformedRecovery(t *testing.T) {
 	}
 	if got.steps[1].Error == "" {
 		t.Fatalf("recovery failure missing from step: %+v", got.steps[1])
+	}
+}
+
+func TestRecoverMemoryQAAnswerRetainsInitialWhenRecoveryIsNotShorter(
+	t *testing.T,
+) {
+	const initial = "her own journey and the support she received and counseling improved her life"
+	const recovered = "her own journey and the support she received and how counseling greatly improved her life"
+	m := &recoveryModel{toolArgs: `{"answer":"` + recovered + `"}`}
+	res := collectResult{
+		text: initial,
+		steps: []StepTrace{{
+			Phase: "memory-search",
+			ToolCalls: []ToolCallTrace{{
+				Name:   "memory_search",
+				Result: `{"results":[{"memory":"evidence"}]}`,
+			}},
+		}},
+	}
+
+	got, trace := recoverMemoryQAAnswer(
+		context.Background(), m, "What motivated Caroline?", res,
+	)
+	if trace == nil || !trace.Succeeded || trace.Applied ||
+		!trace.InitialAnswerRetained || trace.InitialAnswer != initial ||
+		trace.RecoveredAnswer != recovered ||
+		trace.SelectedAnswerSource != memoryQAAnswerSourceInitial {
+		t.Fatalf("trace = %+v", trace)
+	}
+	if got.text != initial {
+		t.Fatalf("answer = %q, want initial %q", got.text, initial)
+	}
+}
+
+func TestRecoverMemoryQAAnswerAppliesShorterRecovery(t *testing.T) {
+	const initial = "her own journey and the support she received and counseling improved her life"
+	const recovered = "Her journey and support"
+	m := &recoveryModel{toolArgs: `{"answer":"` + recovered + `"}`}
+	res := collectResult{
+		text: initial,
+		steps: []StepTrace{{
+			Phase: "memory-search",
+			ToolCalls: []ToolCallTrace{{
+				Name:   "memory_search",
+				Result: `{"results":[{"memory":"evidence"}]}`,
+			}},
+		}},
+	}
+
+	got, trace := recoverMemoryQAAnswer(
+		context.Background(), m, "What motivated Caroline?", res,
+	)
+	if trace == nil || !trace.Succeeded || !trace.Applied ||
+		trace.InitialAnswerRetained || trace.InitialAnswer != initial ||
+		trace.RecoveredAnswer != recovered ||
+		trace.SelectedAnswerSource != memoryQAAnswerSourceRecovery {
+		t.Fatalf("trace = %+v", trace)
+	}
+	if got.text != recovered {
+		t.Fatalf("answer = %q, want recovery %q", got.text, recovered)
+	}
+}
+
+func TestRecoverMemoryQAAnswerFallsBackWhenBothAnswersAreUnusable(
+	t *testing.T,
+) {
+	tooLong := strings.TrimSpace(strings.Repeat(
+		"word ", memoryQAMaxRecoveryAnswerWords+1,
+	))
+	m := &recoveryModel{toolArgs: `{"answer":"` + tooLong + `"}`}
+	res := collectResult{
+		text: tooLong,
+		steps: []StepTrace{{
+			Phase: "memory-search",
+			ToolCalls: []ToolCallTrace{{
+				Name:   "memory_search",
+				Result: `{"results":[{"memory":"evidence"}]}`,
+			}},
+		}},
+	}
+
+	got, trace := recoverMemoryQAAnswer(
+		context.Background(), m, "What happened?", res,
+	)
+	if trace == nil || trace.Succeeded || trace.InitialAnswerRetained ||
+		!trace.FallbackApplied ||
+		trace.SelectedAnswerSource != memoryQAAnswerSourceFallback {
+		t.Fatalf("trace = %+v", trace)
+	}
+	if got.text != fallbackAnswer {
+		t.Fatalf("answer = %q, want fallback", got.text)
 	}
 }
 

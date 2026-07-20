@@ -266,7 +266,7 @@ const (
 	fallbackAnswer = "The information is not available."
 
 	// MemoryQAPromptVersion identifies the shared memory-search QA protocol.
-	MemoryQAPromptVersion = "locomo-memory-qa-v13"
+	MemoryQAPromptVersion = "locomo-memory-qa-v14"
 
 	// MemoryQASearchStrategy identifies how multiple retrieval queries run.
 	MemoryQASearchStrategy = "sequential-adaptive"
@@ -279,6 +279,9 @@ const (
 	// headroom for equivalent wording while still rejecting runaway output.
 	memoryQAMaxRecoveryAnswerWords = 64
 	memoryQASubmitAnswerToolName   = "submit_answer"
+	memoryQAAnswerSourceInitial    = "initial"
+	memoryQAAnswerSourceRecovery   = "recovery"
+	memoryQAAnswerSourceFallback   = "fallback"
 )
 
 type memoryQASubmitAnswerTool struct{}
@@ -578,19 +581,29 @@ func recoverMemoryQAAnswer(
 	if trigger == "" {
 		return res, nil
 	}
-	trace := &AnswerRecoveryTrace{Trigger: trigger}
+	initialAnswer := strings.TrimSpace(res.text)
+	trace := &AnswerRecoveryTrace{
+		Trigger:       trigger,
+		InitialAnswer: initialAnswer,
+	}
 	evidence := memoryQARetrievalEvidence(res.steps)
 	if strings.TrimSpace(evidence) == "" {
 		trace.Error = "no memory_search evidence available for recovery"
 		trace.FallbackApplied = true
+		trace.SelectedAnswerSource = memoryQAAnswerSourceFallback
 		res.text = fallbackAnswer
 		return res, trace
+	}
+	previousAnswer := initialAnswer
+	if previousAnswer == "" {
+		previousAnswer = "<empty>"
 	}
 	prompt := fmt.Sprintf(
 		`The previous answer generation failed. Answer the question using only the retrieved memory_search results below. Call submit_answer exactly once and do not output text.
 
 Follow these rules:
-- Put only the shortest complete final answer span (at most 64 words) in the answer argument.
+- Put only the shortest complete final answer span in the answer argument. Target 1-12 words; exceed 12 only when every directly requested item cannot otherwise fit, and never exceed 64 words.
+- Treat the previous answer as a draft. If it is supported, preserve its answer-bearing terms while removing explanation and unrelated context. When it exceeds 12 words, the submitted answer must contain fewer words.
 - Use explicit entity names instead of vague references, and include every directly requested part supported by the memories.
 - Do not include evidence, explanation, context, or Markdown.
 - For yes/no, output only Yes or No.
@@ -599,10 +612,14 @@ Follow these rules:
 Question:
 %s
 
+Previous answer:
+<answer>%s</answer>
+
 Retrieved memory_search results:
 %s`,
 		fallbackAnswer,
 		question,
+		previousAnswer,
 		evidence,
 	)
 	reasoningEffort := "low"
@@ -657,6 +674,7 @@ Retrieved memory_search results:
 		trace.Error = err.Error()
 		step.Error = err.Error()
 		res.steps = append(res.steps, step)
+		selectMemoryQARecoveryFallback(&res, trace)
 		return res, trace
 	}
 	recoveredText, parseErr := parseMemoryQARecoveryToolCall(
@@ -665,15 +683,47 @@ Retrieved memory_search results:
 	trace.Succeeded = parseErr == nil
 	if parseErr != nil {
 		trace.Error = parseErr.Error()
-		trace.FallbackApplied = true
 		step.Error = trace.Error
 		res.steps = append(res.steps, step)
-		res.text = fallbackAnswer
+		selectMemoryQARecoveryFallback(&res, trace)
 		return res, trace
 	}
+	trace.RecoveredAnswer = recoveredText
 	res.steps = append(res.steps, step)
+	if memoryQAAnswerUsable(initialAnswer) &&
+		len(strings.Fields(recoveredText)) >=
+			len(strings.Fields(initialAnswer)) {
+		trace.InitialAnswerRetained = true
+		trace.SelectedAnswerSource = memoryQAAnswerSourceInitial
+		res.text = initialAnswer
+		return res, trace
+	}
+	trace.Applied = true
+	trace.SelectedAnswerSource = memoryQAAnswerSourceRecovery
 	res.text = recoveredText
 	return res, trace
+}
+
+func selectMemoryQARecoveryFallback(
+	res *collectResult,
+	trace *AnswerRecoveryTrace,
+) {
+	if memoryQAAnswerUsable(trace.InitialAnswer) {
+		trace.InitialAnswerRetained = true
+		trace.SelectedAnswerSource = memoryQAAnswerSourceInitial
+		res.text = trace.InitialAnswer
+		return
+	}
+	trace.FallbackApplied = true
+	trace.SelectedAnswerSource = memoryQAAnswerSourceFallback
+	res.text = fallbackAnswer
+}
+
+func memoryQAAnswerUsable(answer string) bool {
+	answer = strings.TrimSpace(answer)
+	return answer != "" && memoryQAAnswerFormatViolation(
+		answer, memoryQAMaxRecoveryAnswerWords,
+	) == ""
 }
 
 func parseMemoryQARecoveryToolCall(
