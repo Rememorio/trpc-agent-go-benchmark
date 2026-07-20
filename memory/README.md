@@ -404,7 +404,62 @@ go run . \
   -dataset-format longmemeval \
   -lme-compare-results ../results/lme-upstream/judged_results.json,../results/lme-candidate/judged_results.json \
   -output ../results/lme-candidate
+
+# Aggregate three independently answered and judged three-arm comparisons.
+go run . \
+  -dataset-format longmemeval \
+  -lme-compare-replicates ../results/lme-holdout/replicates.json \
+  -output ../results/lme-holdout
 ```
+
+The replicate manifest freezes the statistical and cost promotion gate alongside
+the input files. Paths are resolved relative to the manifest:
+
+```json
+{
+  "schema_version": 1,
+  "replicates": [
+    {
+      "name": "primary",
+      "kind": "primary",
+      "baseline_results": "primary/baseline/judged_results.json",
+      "candidate_results": "primary/candidate/judged_results.json"
+    },
+    {
+      "name": "answer-2",
+      "kind": "independent-reanswer",
+      "baseline_results": "answer-2/baseline/judged_results.json",
+      "candidate_results": "answer-2/candidate/judged_results.json"
+    },
+    {
+      "name": "answer-3",
+      "kind": "independent-reanswer",
+      "baseline_results": "answer-3/baseline/judged_results.json",
+      "candidate_results": "answer-3/candidate/judged_results.json"
+    }
+  ],
+  "gate": {
+    "expected_cases": 16,
+    "judge_runs": 3,
+    "per_type_max_deficit": 1,
+    "memory_llm_token_ratio_maximum": 1.35,
+    "memory_embedding_token_ratio_maximum": 2.0,
+    "final_memory_count_ratio_maximum": 2.0
+  }
+}
+```
+
+The first entry is the primary ingestion run. Later entries must be produced
+with `-lme-reanswer-reuse-source-answers=false`; every entry must start with
+empty, distinct answer and judge cache ledgers. The aggregator verifies that ingestion,
+persisted memories, retrieval hits, and memory-layer usage are byte-stable after
+normalizing answer and judge fields. It then reports primary accuracy, majority
+accuracy, total correct answer replicates, per-type results, instability, and
+source-run cost for the fixed pgvector-main, Mem0, and pgvector-candidate arms.
+The candidate passes only when both majority and replicate totals strictly beat
+both baselines, category deficits stay bounded, all usage is reported, and the
+pre-registered cost ratios hold. The JSON, TSV, and Markdown outputs retain
+input hashes and gate details for audit.
 
 `-lme-answer-cache` supplies a shared, content-addressed answer ledger. Its key
 covers the exact ordered memories and metadata shown to the answer model, the
@@ -567,6 +622,7 @@ LongMemEval-specific options:
 | `-lme-judge-cache`       |         | Shared content-addressed judge verdict cache  |
 | `-lme-analyze-results`   |         | Analyze one saved LongMemEval `results.json` |
 | `-lme-compare-results`   |         | Compare baseline,candidate `results.json`    |
+| `-lme-compare-replicates` |        | Aggregate a preregistered replicate manifest |
 | `-mem0-host`             | (env)   | Self-hosted mem0 OSS host                    |
 | `-mem0-implementation`   | (env)   | Mem0 source revision or image digest         |
 | `-mem0-cloud`            | false   | Use hosted mem0 API semantics                |

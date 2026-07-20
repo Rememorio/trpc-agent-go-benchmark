@@ -282,6 +282,11 @@ var (
 		"",
 		"Compare two LongMemEval results.json files (baseline,candidate)",
 	)
+	flagLMECompareReplicates = flag.String(
+		"lme-compare-replicates",
+		"",
+		"Aggregate and gate LongMemEval answer replicates from a comparison manifest",
+	)
 	flagMem0Host = flag.String(
 		"mem0-host",
 		"",
