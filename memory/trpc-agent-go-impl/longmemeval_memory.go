@@ -89,17 +89,19 @@ type lmeSelectionCase struct {
 }
 
 type lmeSelectionManifest struct {
-	Build           lmeBuildProvenance `json:"build"`
-	DatasetSHA256   string             `json:"dataset_sha256"`
-	SelectionSHA256 string             `json:"selection_sha256"`
-	ProtocolVersion string             `json:"protocol_version"`
-	ProtocolSHA256  string             `json:"protocol_sha256"`
-	SamplePerType   int                `json:"sample_per_type"`
-	AbstentionCount int                `json:"sample_abstention_count"`
-	SampleSeed      int64              `json:"sample_seed"`
-	ExcludedCount   int                `json:"excluded_question_id_count"`
-	ExcludedSHA256  string             `json:"excluded_question_ids_sha256"`
-	Cases           []lmeSelectionCase `json:"cases"`
+	SchemaVersion   int                   `json:"schema_version"`
+	Build           lmeBuildProvenance    `json:"build"`
+	DatasetSHA256   string                `json:"dataset_sha256"`
+	SelectionSHA256 string                `json:"selection_sha256"`
+	ProtocolVersion string                `json:"protocol_version"`
+	ProtocolSHA256  string                `json:"protocol_sha256"`
+	Protocol        lmeProtocolProvenance `json:"protocol"`
+	SamplePerType   int                   `json:"sample_per_type"`
+	AbstentionCount int                   `json:"sample_abstention_count"`
+	SampleSeed      int64                 `json:"sample_seed"`
+	ExcludedCount   int                   `json:"excluded_question_id_count"`
+	ExcludedSHA256  string                `json:"excluded_question_ids_sha256"`
+	Cases           []lmeSelectionCase    `json:"cases"`
 }
 
 type flexString string
@@ -888,7 +890,11 @@ func runLongMemEvalMemory(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("load dataset: %w", err)
 	}
-	cases := filterCases(instances)
+	cases, preregisteredSelection, err :=
+		resolveLongMemEvalPreregisteredSelection(instances)
+	if err != nil {
+		return err
+	}
 	if len(cases) == 0 {
 		return fmt.Errorf("no cases selected")
 	}
@@ -901,6 +907,16 @@ func runLongMemEvalMemory(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if err := validateLongMemEvalPreregisteredSelection(
+		preregisteredSelection,
+		cases,
+		datasetDigest,
+		selectionDigest,
+		protocolDigest,
+		currentLongMemEvalBuildProvenance(),
+	); err != nil {
+		return err
+	}
 	if *flagLMESelectionOnly {
 		return writeLongMemEvalSelection(
 			os.Stdout,
@@ -908,6 +924,7 @@ func runLongMemEvalMemory(ctx context.Context) error {
 			datasetDigest,
 			selectionDigest,
 			protocolDigest,
+			protocol,
 		)
 	}
 	if err := os.MkdirAll(*flagOutput, 0755); err != nil {
@@ -1006,6 +1023,16 @@ func runLongMemEvalMemory(ctx context.Context) error {
 	}
 	if mem0Implementation != "" {
 		results.Metadata["mem0_implementation"] = mem0Implementation
+	}
+	if preregisteredSelection != nil {
+		results.Metadata["preregistered_selection"] =
+			preregisteredSelection.metadata()
+		results.Metadata["sample_per_type"] =
+			preregisteredSelection.Manifest.SamplePerType
+		results.Metadata["sample_abstention_count"] =
+			preregisteredSelection.Manifest.AbstentionCount
+		results.Metadata["sample_seed"] =
+			preregisteredSelection.Manifest.SampleSeed
 	}
 	initializeLongMemEvalAnswerCacheMetadata(results.Metadata, answerCache)
 	initializeLongMemEvalModelResponseCacheMetadata(
@@ -2712,6 +2739,7 @@ func writeLongMemEvalSelection(
 	datasetDigest string,
 	selectionDigest string,
 	protocolDigest string,
+	protocol lmeProtocolProvenance,
 ) error {
 	excludedIDs := longMemEvalExcludedQuestionIDs()
 	excludedDigest, err := longMemEvalJSONSHA256(excludedIDs)
@@ -2730,11 +2758,13 @@ func writeLongMemEvalSelection(
 		})
 	}
 	manifest := lmeSelectionManifest{
+		SchemaVersion:   lmeSelectionManifestSchemaVersion,
 		Build:           currentLongMemEvalBuildProvenance(),
 		DatasetSHA256:   datasetDigest,
 		SelectionSHA256: selectionDigest,
 		ProtocolVersion: lmeProtocolVersion,
 		ProtocolSHA256:  protocolDigest,
+		Protocol:        protocol,
 		SamplePerType:   *flagLMEPerType,
 		AbstentionCount: *flagLMEAbstentionCount,
 		SampleSeed:      *flagLMESampleSeed,

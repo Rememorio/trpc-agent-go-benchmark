@@ -248,6 +248,7 @@ func TestWriteLongMemEvalSelectionOmitsQuestionContent(t *testing.T) {
 		"dataset-digest",
 		"selection-digest",
 		"protocol-digest",
+		currentLongMemEvalProtocol(),
 	); err != nil {
 		t.Fatalf("write selection: %v", err)
 	}
@@ -263,6 +264,10 @@ func TestWriteLongMemEvalSelectionOmitsQuestionContent(t *testing.T) {
 		got.AbstentionCount != 1 || got.ExcludedCount != 2 ||
 		len(got.Cases) != 2 {
 		t.Fatalf("unexpected manifest: %+v", got)
+	}
+	if got.Protocol.Version != lmeProtocolVersion ||
+		got.Protocol.TopK != *flagVectorTopK {
+		t.Fatalf("selection omitted protocol provenance: %+v", got.Protocol)
 	}
 	wantExcludedDigest, err := longMemEvalJSONSHA256([]string{"question-a", "question-z"})
 	if err != nil {
