@@ -31,6 +31,8 @@ if [[ -n "$(git -C "${repo_root}" status --porcelain --untracked-files=normal)" 
   exit 1
 fi
 
+cd "${script_dir}"
+
 build_profile="${LME_AGENT_PROFILE:-}"
 if [[ -z "${build_profile}" ]]; then
   if [[ -n "${LME_AGENT_REPLACEMENT:-}" ]]; then
@@ -83,6 +85,5 @@ ldflags="-X=main.lmeInjectedBuildRevision=${revision} -X=main.lmeInjectedBuildMo
 ldflags+=" -X=main.lmeInjectedModuleManifestSHA256=${manifest_sha}"
 ldflags+=" -X=main.lmeInjectedModuleSumSHA256=${sum_sha}"
 ldflags+=" -X=main.lmeInjectedBuildProfile=${build_profile}"
-cd "${script_dir}"
 GOWORK=off go run -mod=readonly "${go_build_flags[@]}" \
   "${go_mod_flags[@]}" -ldflags "${ldflags}" . "$@"
