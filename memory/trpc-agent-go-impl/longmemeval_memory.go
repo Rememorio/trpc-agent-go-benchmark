@@ -1192,8 +1192,6 @@ func runCaseBackend(
 	sess := session.NewSession(lmeAppName, userID, sessionID)
 	provenance := make(map[string]map[string]bool)
 	answerProvenance := make(map[string]bool)
-	pendingSources := make(map[string]bool)
-	pendingHasAnswer := false
 	br := &backendResult{
 		Backend:      backend.Name(),
 		UserID:       userID,
@@ -1227,8 +1225,6 @@ func runCaseBackend(
 			}
 			pairStart := time.Now()
 			appendMessages(sess, pair.Messages, s.ID, pairIdx)
-			pendingSources[s.ID] = true
-			pendingHasAnswer = pendingHasAnswer || pair.HasAnswer
 			extraction, err := backend.IngestPair(ctx, sess, ingestMeta{
 				QuestionID: inst.QuestionID,
 				SessionID:  s.ID,
@@ -1262,15 +1258,13 @@ func runCaseBackend(
 			trace.ProviderUsageReported = providerUsage.Reported
 			trace.ProviderUsageError = providerUsage.Error
 			addLongMemEvalBackendUsage(br, usage, embeddingUsage, providerUsage)
+			// IngestPair completes this pair's extraction before returning. Do not
+			// attribute a later pair's memories to an earlier extraction miss.
 			memories, newOrChanged := applySnapshotProvenance(
 				br.FinalMemories, memories,
 				provenance, answerProvenance,
-				sortedSet(pendingSources), pendingHasAnswer,
+				[]string{s.ID}, pair.HasAnswer,
 			)
-			if len(newOrChanged) > 0 {
-				pendingSources = make(map[string]bool)
-				pendingHasAnswer = false
-			}
 			trace.MemoryCount = len(memories)
 			trace.SnapshotTruncated = snapshotTruncated
 			trace.NewMemories = newOrChanged
@@ -1310,7 +1304,7 @@ afterIngest:
 		br.FinalMemories, _ = applySnapshotProvenance(
 			br.FinalMemories, memories,
 			provenance, answerProvenance,
-			sortedSet(pendingSources), pendingHasAnswer,
+			nil, false,
 		)
 		br.SnapshotTruncated = snapshotTruncated
 	} else {

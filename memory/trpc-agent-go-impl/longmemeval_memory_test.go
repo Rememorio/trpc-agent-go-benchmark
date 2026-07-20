@@ -44,6 +44,51 @@ type lmeStagedExtractorStub struct {
 	assistantOps []*extractor.Operation
 }
 
+type lmePairProvenanceBackend struct {
+	ingested int
+}
+
+func (b *lmePairProvenanceBackend) Name() string { return "pair-provenance" }
+
+func (b *lmePairProvenanceBackend) IngestPair(
+	context.Context,
+	*session.Session,
+	ingestMeta,
+) (*extractionTrace, error) {
+	b.ingested++
+	return nil, nil
+}
+
+func (b *lmePairProvenanceBackend) Flush(context.Context) error { return nil }
+
+func (b *lmePairProvenanceBackend) Search(
+	context.Context,
+	memory.UserKey,
+	string,
+	int,
+) ([]memoryHit, error) {
+	return []memoryHit{{ID: "memory-1", Memory: "unrelated second-pair fact"}}, nil
+}
+
+func (b *lmePairProvenanceBackend) Read(
+	context.Context,
+	memory.UserKey,
+) ([]memorySnapshot, bool, error) {
+	if b.ingested < 2 {
+		return nil, false, nil
+	}
+	return []memorySnapshot{{
+		ID:     "memory-1",
+		Memory: "unrelated second-pair fact",
+	}}, false, nil
+}
+
+func (b *lmePairProvenanceBackend) SnapshotProviderUsage() lmeProviderUsage {
+	return lmeProviderUsage{}
+}
+
+func (b *lmePairProvenanceBackend) Close() error { return nil }
+
 func (s *lmeStagedExtractorStub) ExtractOperationStages(
 	context.Context,
 	[]model.Message,
@@ -2596,6 +2641,76 @@ func TestDiffSnapshotsIncludesMetadataOnlyChanges(t *testing.T) {
 	got := diffSnapshots(before, after)
 	if len(got) != 1 || len(got[0].Topics) != 2 {
 		t.Fatalf("metadata-only change was not captured: %+v", got)
+	}
+}
+
+func TestRunCaseBackendKeepsAnswerProvenanceOnProducingPair(t *testing.T) {
+	oldAnswer := *flagLMEAnswer
+	oldIngestWait := *flagLMEIngestWait
+	oldMaxSessions := *flagLMEMaxSessions
+	oldMaxPairs := *flagLMEMaxPairs
+	oldTopK := *flagVectorTopK
+	*flagLMEAnswer = false
+	*flagLMEIngestWait = 0
+	*flagLMEMaxSessions = 0
+	*flagLMEMaxPairs = 0
+	*flagVectorTopK = 30
+	t.Cleanup(func() {
+		*flagLMEAnswer = oldAnswer
+		*flagLMEIngestWait = oldIngestWait
+		*flagLMEMaxSessions = oldMaxSessions
+		*flagLMEMaxPairs = oldMaxPairs
+		*flagVectorTopK = oldTopK
+	})
+
+	instance := &lmeInstance{
+		QuestionID:       "question-1",
+		QuestionType:     "single-session-user",
+		Question:         "What fact was retained?",
+		Answer:           flexString("answer-bearing first-pair fact"),
+		AnswerSessionIDs: []string{"answer-session"},
+		HaystackDates:    []string{"2026/07/20 (Mon) 12:00"},
+		HaystackSessionIDs: []string{
+			"answer-session",
+		},
+		HaystackSessions: [][]lmeTurn{{
+			{Role: "user", Content: "answer-bearing first-pair fact", HasAnswer: true},
+			{Role: "assistant", Content: "acknowledged"},
+			{Role: "user", Content: "unrelated second-pair fact"},
+			{Role: "assistant", Content: "acknowledged"},
+		}},
+	}
+	backend := &lmePairProvenanceBackend{}
+	result := runCaseBackend(
+		context.Background(), nil, &lmeTokenTracker{}, backend,
+		instance, "run-1", "glm52", "glm", nil,
+	)
+
+	if result.Error != "" {
+		t.Fatalf("runCaseBackend() error = %q", result.Error)
+	}
+	if len(result.IngestTraces) != 2 ||
+		len(result.IngestTraces[0].NewMemories) != 0 ||
+		len(result.IngestTraces[1].NewMemories) != 1 {
+		t.Fatalf("unexpected ingest traces: %+v", result.IngestTraces)
+	}
+	if len(result.FinalMemories) != 1 || len(result.Retrieval) != 1 {
+		t.Fatalf("unexpected final state: memories=%+v retrieval=%+v",
+			result.FinalMemories, result.Retrieval)
+	}
+	for name, item := range map[string]memorySnapshot{
+		"second-pair trace": result.IngestTraces[1].NewMemories[0],
+		"final snapshot":    result.FinalMemories[0],
+	} {
+		if item.SourceHasAnswer {
+			t.Fatalf("%s inherited answer provenance: %+v", name, item)
+		}
+		if !slices.Equal(item.SourceSessions, []string{"answer-session"}) {
+			t.Fatalf("%s has unexpected source sessions: %+v", name, item)
+		}
+	}
+	if result.Retrieval[0].SourceHasAnswer {
+		t.Fatalf("retrieval inherited answer provenance: %+v", result.Retrieval)
 	}
 }
 
