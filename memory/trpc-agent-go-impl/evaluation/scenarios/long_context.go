@@ -123,11 +123,16 @@ type QAResult struct {
 
 // AnswerRecoveryTrace records a direct retry after generation or format failure.
 type AnswerRecoveryTrace struct {
-	Trigger         string `json:"trigger"`
-	Succeeded       bool   `json:"succeeded"`
-	FallbackApplied bool   `json:"fallback_applied,omitempty"`
-	Error           string `json:"error,omitempty"`
-	FinishReason    string `json:"finish_reason,omitempty"`
+	Trigger               string `json:"trigger"`
+	Succeeded             bool   `json:"succeeded"`
+	Applied               bool   `json:"applied,omitempty"`
+	InitialAnswerRetained bool   `json:"initial_answer_retained,omitempty"`
+	FallbackApplied       bool   `json:"fallback_applied,omitempty"`
+	InitialAnswer         string `json:"initial_answer,omitempty"`
+	RecoveredAnswer       string `json:"recovered_answer,omitempty"`
+	SelectedAnswerSource  string `json:"selected_answer_source,omitempty"`
+	Error                 string `json:"error,omitempty"`
+	FinishReason          string `json:"finish_reason,omitempty"`
 }
 
 // SessionRecallTrace records the query-time session recall

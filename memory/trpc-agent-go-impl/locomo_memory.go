@@ -137,6 +137,8 @@ type EvalSummary struct {
 	ProtocolViolations      int     `json:"protocol_violations"`
 	AnswerRecoveryAttempts  int     `json:"answer_recovery_attempts"`
 	AnswerRecoverySuccesses int     `json:"answer_recovery_successes"`
+	AnswerRecoveryApplied   int     `json:"answer_recovery_applied"`
+	AnswerRecoveryRetained  int     `json:"answer_recovery_initial_retained"`
 	AnswerRecoveryFallbacks int     `json:"answer_recovery_fallbacks"`
 	AvgPromptTokensPerQA    float64 `json:"avg_prompt_tokens_per_qa"`
 	AvgCompletionPerQA      float64 `json:"avg_completion_tokens_per_qa"`
@@ -1045,7 +1047,8 @@ func buildEvaluationResult(
 	overall := catAgg.GetOverall()
 	qCount := max(totalQuestions, 1)
 	protocolViolations := countProtocolViolations(sampleResults)
-	recoveryAttempts, recoverySuccesses, recoveryFallbacks :=
+	recoveryAttempts, recoverySuccesses, recoveryApplied,
+		recoveryRetained, recoveryFallbacks :=
 		countAnswerRecoveries(sampleResults)
 	phaseUsage := aggregateLoCoMoPhaseUsage(sampleResults)
 	effectiveCachedTokens := totalUsage.CachedPromptTokens()
@@ -1115,6 +1118,8 @@ func buildEvaluationResult(
 			ProtocolViolations:       protocolViolations,
 			AnswerRecoveryAttempts:   recoveryAttempts,
 			AnswerRecoverySuccesses:  recoverySuccesses,
+			AnswerRecoveryApplied:    recoveryApplied,
+			AnswerRecoveryRetained:   recoveryRetained,
 			AnswerRecoveryFallbacks:  recoveryFallbacks,
 			AvgPromptTokensPerQA:     float64(totalUsage.PromptTokens) / float64(qCount),
 			AvgCompletionPerQA:       float64(totalUsage.CompletionTokens) / float64(qCount),
@@ -1205,7 +1210,7 @@ func countProtocolViolations(results []*scenarios.SampleResult) int {
 
 func countAnswerRecoveries(
 	results []*scenarios.SampleResult,
-) (attempts, successes, fallbacks int) {
+) (attempts, successes, applied, retained, fallbacks int) {
 	for _, sample := range results {
 		if sample == nil {
 			continue
@@ -1218,12 +1223,18 @@ func countAnswerRecoveries(
 			if qa.AnswerRecovery.Succeeded {
 				successes++
 			}
+			if qa.AnswerRecovery.Applied {
+				applied++
+			}
+			if qa.AnswerRecovery.InitialAnswerRetained {
+				retained++
+			}
 			if qa.AnswerRecovery.FallbackApplied {
 				fallbacks++
 			}
 		}
 	}
-	return attempts, successes, fallbacks
+	return attempts, successes, applied, retained, fallbacks
 }
 
 func saveResults(outputDir string, result *EvaluationResult) {
