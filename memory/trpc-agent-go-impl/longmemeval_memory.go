@@ -890,11 +890,12 @@ func runLongMemEvalMemory(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("load dataset: %w", err)
 	}
-	cases, preregisteredSelection, err :=
-		resolveLongMemEvalPreregisteredSelection(instances)
+	selection, err := resolveLongMemEvalSelection(instances)
 	if err != nil {
 		return err
 	}
+	cases := selection.Cases
+	preregisteredSelection := selection.Preregistered
 	if len(cases) == 0 {
 		return fmt.Errorf("no cases selected")
 	}
@@ -910,6 +911,7 @@ func runLongMemEvalMemory(ctx context.Context) error {
 	if err := validateLongMemEvalPreregisteredSelection(
 		preregisteredSelection,
 		cases,
+		selection.ExcludedQuestionIDs,
 		datasetDigest,
 		selectionDigest,
 		protocolDigest,
@@ -921,11 +923,18 @@ func runLongMemEvalMemory(ctx context.Context) error {
 		return writeLongMemEvalSelection(
 			os.Stdout,
 			cases,
+			selection.ExcludedQuestionIDs,
 			datasetDigest,
 			selectionDigest,
 			protocolDigest,
 			protocol,
 		)
+	}
+	excludedQuestionIDsDigest, err := longMemEvalJSONSHA256(
+		selection.ExcludedQuestionIDs,
+	)
+	if err != nil {
+		return fmt.Errorf("hash excluded LongMemEval question IDs: %w", err)
 	}
 	if err := os.MkdirAll(*flagOutput, 0755); err != nil {
 		return fmt.Errorf("create output dir: %w", err)
@@ -969,40 +978,42 @@ func runLongMemEvalMemory(ctx context.Context) error {
 	runID := time.Now().UTC().Format("20060102T150405Z")
 	results := &runResult{
 		Metadata: map[string]any{
-			"benchmark":               "longmemeval-memory",
-			"implementation":          longMemEvalImplementation(),
-			"build":                   currentLongMemEvalBuildProvenance(),
-			"dataset":                 datasetPath,
-			"dataset_sha256":          datasetDigest,
-			"selection_sha256":        selectionDigest,
-			"protocol":                protocol,
-			"protocol_version":        lmeProtocolVersion,
-			"protocol_sha256":         protocolDigest,
-			"answer_prompt_version":   lmeAnswerPromptVersion,
-			"answer_generation":       currentLongMemEvalAnswerGeneration(),
-			"judge_prompt_version":    lmeJudgePromptVersion,
-			"judge_protocol_version":  lmeJudgeProtocolVersion,
-			"judge_generation":        currentLongMemEvalJudgeGeneration(),
-			"model":                   modelName,
-			"model_variant":           modelVariant,
-			"model_temperature":       0,
-			"model_call_timeout":      flagLMEModelCallTimeout.String(),
-			"embedding_model":         getEmbedModelName(),
-			"pgvector_extraction":     pgExtractionConfig,
-			"backends":                backends,
-			"top_k":                   *flagVectorTopK,
-			"table_suffix":            *flagTableSuffix,
-			"answer_enabled":          *flagLMEAnswer,
-			"run_id":                  runID,
-			"started_at":              time.Now().UTC().Format(time.RFC3339),
-			"max_sessions":            *flagLMEMaxSessions,
-			"max_pairs":               *flagLMEMaxPairs,
-			"sample_per_type":         *flagLMEPerType,
-			"sample_abstention_count": *flagLMEAbstentionCount,
-			"sample_seed":             *flagLMESampleSeed,
-			"selected_question_ids":   questionIDs(cases),
-			"ingest_wait":             flagLMEIngestWait.String(),
-			"ingest_policy":           "chronological session replay; trigger extraction after each user/assistant pair",
+			"benchmark":                    "longmemeval-memory",
+			"implementation":               longMemEvalImplementation(),
+			"build":                        currentLongMemEvalBuildProvenance(),
+			"dataset":                      datasetPath,
+			"dataset_sha256":               datasetDigest,
+			"selection_sha256":             selectionDigest,
+			"protocol":                     protocol,
+			"protocol_version":             lmeProtocolVersion,
+			"protocol_sha256":              protocolDigest,
+			"answer_prompt_version":        lmeAnswerPromptVersion,
+			"answer_generation":            currentLongMemEvalAnswerGeneration(),
+			"judge_prompt_version":         lmeJudgePromptVersion,
+			"judge_protocol_version":       lmeJudgeProtocolVersion,
+			"judge_generation":             currentLongMemEvalJudgeGeneration(),
+			"model":                        modelName,
+			"model_variant":                modelVariant,
+			"model_temperature":            0,
+			"model_call_timeout":           flagLMEModelCallTimeout.String(),
+			"embedding_model":              getEmbedModelName(),
+			"pgvector_extraction":          pgExtractionConfig,
+			"backends":                     backends,
+			"top_k":                        *flagVectorTopK,
+			"table_suffix":                 *flagTableSuffix,
+			"answer_enabled":               *flagLMEAnswer,
+			"run_id":                       runID,
+			"started_at":                   time.Now().UTC().Format(time.RFC3339),
+			"max_sessions":                 *flagLMEMaxSessions,
+			"max_pairs":                    *flagLMEMaxPairs,
+			"sample_per_type":              *flagLMEPerType,
+			"sample_abstention_count":      *flagLMEAbstentionCount,
+			"sample_seed":                  *flagLMESampleSeed,
+			"excluded_question_id_count":   len(selection.ExcludedQuestionIDs),
+			"excluded_question_ids_sha256": excludedQuestionIDsDigest,
+			"selected_question_ids":        questionIDs(cases),
+			"ingest_wait":                  flagLMEIngestWait.String(),
+			"ingest_policy":                "chronological session replay; trigger extraction after each user/assistant pair",
 			"pgvector_ingest_path": "memory.Service.EnqueueAutoMemoryJob; wait for " +
 				"memory:last_extract_at completion after each pair",
 			"retrieval_note": "retrieval hits are searched memories, not raw transcript chunks",
@@ -2598,7 +2609,10 @@ func loadLongMemEval(path string) ([]*lmeInstance, error) {
 	return instances, nil
 }
 
-func filterCases(instances []*lmeInstance) []*lmeInstance {
+func filterCases(
+	instances []*lmeInstance,
+	excludedQuestionIDs []string,
+) []*lmeInstance {
 	idSet := make(map[string]bool)
 	if strings.TrimSpace(*flagLMEQuestionID) != "" {
 		idSet[strings.TrimSpace(*flagLMEQuestionID)] = true
@@ -2607,7 +2621,7 @@ func filterCases(instances []*lmeInstance) []*lmeInstance {
 		idSet[id] = true
 	}
 	excludedIDSet := make(map[string]bool)
-	for _, id := range longMemEvalExcludedQuestionIDs() {
+	for _, id := range excludedQuestionIDs {
 		excludedIDSet[id] = true
 	}
 	typeSet := make(map[string]bool)
@@ -2635,23 +2649,6 @@ func filterCases(instances []*lmeInstance) []*lmeInstance {
 		out = out[:*flagMaxTasks]
 	}
 	return out
-}
-
-func longMemEvalExcludedQuestionIDs() []string {
-	ids := parseCommaList(*flagLMEExcludeQuestionIDs)
-	if len(ids) == 0 {
-		return nil
-	}
-	unique := make(map[string]struct{}, len(ids))
-	for _, id := range ids {
-		unique[id] = struct{}{}
-	}
-	result := make([]string, 0, len(unique))
-	for id := range unique {
-		result = append(result, id)
-	}
-	sort.Strings(result)
-	return result
 }
 
 func sampleCases(instances []*lmeInstance, perType, abstentionCount int, seed int64) []*lmeInstance {
@@ -2736,12 +2733,12 @@ func questionIDs(instances []*lmeInstance) []string {
 func writeLongMemEvalSelection(
 	w io.Writer,
 	instances []*lmeInstance,
+	excludedIDs []string,
 	datasetDigest string,
 	selectionDigest string,
 	protocolDigest string,
 	protocol lmeProtocolProvenance,
 ) error {
-	excludedIDs := longMemEvalExcludedQuestionIDs()
 	excludedDigest, err := longMemEvalJSONSHA256(excludedIDs)
 	if err != nil {
 		return fmt.Errorf("hash excluded LongMemEval question IDs: %w", err)

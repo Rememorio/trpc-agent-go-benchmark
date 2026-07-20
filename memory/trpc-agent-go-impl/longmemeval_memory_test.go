@@ -215,17 +215,14 @@ func TestWriteLongMemEvalSelectionOmitsQuestionContent(t *testing.T) {
 	originalPerType := *flagLMEPerType
 	originalAbstentionCount := *flagLMEAbstentionCount
 	originalSeed := *flagLMESampleSeed
-	originalExcludedIDs := *flagLMEExcludeQuestionIDs
 	t.Cleanup(func() {
 		*flagLMEPerType = originalPerType
 		*flagLMEAbstentionCount = originalAbstentionCount
 		*flagLMESampleSeed = originalSeed
-		*flagLMEExcludeQuestionIDs = originalExcludedIDs
 	})
 	*flagLMEPerType = 2
 	*flagLMEAbstentionCount = 1
 	*flagLMESampleSeed = 271
-	*flagLMEExcludeQuestionIDs = "question-z, question-a, question-z"
 
 	instances := []*lmeInstance{
 		{
@@ -245,6 +242,7 @@ func TestWriteLongMemEvalSelectionOmitsQuestionContent(t *testing.T) {
 	if err := writeLongMemEvalSelection(
 		&output,
 		instances,
+		[]string{"question-a", "question-z"},
 		"dataset-digest",
 		"selection-digest",
 		"protocol-digest",
@@ -1172,7 +1170,6 @@ func TestLongMemEvalRuntimeError(t *testing.T) {
 func TestFilterCasesByQuestionIDs(t *testing.T) {
 	oldID := *flagLMEQuestionID
 	oldIDs := *flagLMEQuestionIDs
-	oldExcludedIDs := *flagLMEExcludeQuestionIDs
 	oldTypes := *flagLMEQuestionTypes
 	oldPerType := *flagLMEPerType
 	oldAbstention := *flagLMEAbstentionCount
@@ -1180,7 +1177,6 @@ func TestFilterCasesByQuestionIDs(t *testing.T) {
 	defer func() {
 		*flagLMEQuestionID = oldID
 		*flagLMEQuestionIDs = oldIDs
-		*flagLMEExcludeQuestionIDs = oldExcludedIDs
 		*flagLMEQuestionTypes = oldTypes
 		*flagLMEPerType = oldPerType
 		*flagLMEAbstentionCount = oldAbstention
@@ -1189,7 +1185,6 @@ func TestFilterCasesByQuestionIDs(t *testing.T) {
 
 	*flagLMEQuestionID = "q1"
 	*flagLMEQuestionIDs = "q3, q2"
-	*flagLMEExcludeQuestionIDs = "skip, q2, q2"
 	*flagLMEQuestionTypes = ""
 	*flagLMEPerType = 0
 	*flagLMEAbstentionCount = 0
@@ -1202,7 +1197,7 @@ func TestFilterCasesByQuestionIDs(t *testing.T) {
 		{QuestionID: "q3", QuestionType: "temporal-reasoning"},
 		nil,
 	}
-	got := filterCases(instances)
+	got := filterCases(instances, []string{"q2", "skip"})
 	want := []string{"q1", "q3"}
 	if len(got) != len(want) {
 		t.Fatalf("unexpected case count: got %d want %d", len(got), len(want))

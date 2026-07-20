@@ -23,6 +23,7 @@ func TestResolveLongMemEvalPreregisteredSelection(t *testing.T) {
 	originalQuestionID := *flagLMEQuestionID
 	originalQuestionIDs := *flagLMEQuestionIDs
 	originalExcluded := *flagLMEExcludeQuestionIDs
+	originalExcludedFile := *flagLMEExcludeQuestionIDsFile
 	originalTypes := *flagLMEQuestionTypes
 	originalPerType := *flagLMEPerType
 	originalAbstention := *flagLMEAbstentionCount
@@ -33,6 +34,7 @@ func TestResolveLongMemEvalPreregisteredSelection(t *testing.T) {
 		*flagLMEQuestionID = originalQuestionID
 		*flagLMEQuestionIDs = originalQuestionIDs
 		*flagLMEExcludeQuestionIDs = originalExcluded
+		*flagLMEExcludeQuestionIDsFile = originalExcludedFile
 		*flagLMEQuestionTypes = originalTypes
 		*flagLMEPerType = originalPerType
 		*flagLMEAbstentionCount = originalAbstention
@@ -43,6 +45,7 @@ func TestResolveLongMemEvalPreregisteredSelection(t *testing.T) {
 	*flagLMEQuestionID = "q1"
 	*flagLMEQuestionIDs = ""
 	*flagLMEExcludeQuestionIDs = ""
+	*flagLMEExcludeQuestionIDsFile = ""
 	*flagLMEQuestionTypes = ""
 	*flagLMEPerType = 0
 	*flagLMEAbstentionCount = 0
@@ -52,13 +55,14 @@ func TestResolveLongMemEvalPreregisteredSelection(t *testing.T) {
 		{QuestionID: "q2_abs", QuestionType: "temporal-reasoning"},
 	}
 
-	cases, selection, err := resolveLongMemEvalPreregisteredSelection(instances)
+	resolved, err := resolveLongMemEvalSelection(instances)
 	if err != nil {
 		t.Fatalf("resolve ordinary selection: %v", err)
 	}
-	if selection != nil || len(cases) != 1 || cases[0].QuestionID != "q1" {
+	if resolved.Preregistered != nil || len(resolved.Cases) != 1 ||
+		resolved.Cases[0].QuestionID != "q1" {
 		t.Fatalf("unexpected ordinary selection: cases=%v selection=%+v",
-			questionIDs(cases), selection)
+			questionIDs(resolved.Cases), resolved.Preregistered)
 	}
 
 	*flagLMEQuestionID = ""
@@ -73,26 +77,69 @@ func TestResolveLongMemEvalPreregisteredSelection(t *testing.T) {
 		t.Fatalf("write manifest: %v", err)
 	}
 	*flagLMEPreregisteredSelection = path
-	cases, selection, err = resolveLongMemEvalPreregisteredSelection(instances)
+	resolved, err = resolveLongMemEvalSelection(instances)
 	if err != nil {
 		t.Fatalf("resolve preregistered selection: %v", err)
 	}
-	if selection == nil || selection.ManifestSHA256 == "" ||
-		len(cases) != 2 || cases[0].QuestionID != "q2_abs" {
+	if resolved.Preregistered == nil ||
+		resolved.Preregistered.ManifestSHA256 == "" ||
+		len(resolved.Cases) != 2 || resolved.Cases[0].QuestionID != "q2_abs" {
 		t.Fatalf("unexpected preregistered selection: cases=%v selection=%+v",
-			questionIDs(cases), selection)
+			questionIDs(resolved.Cases), resolved.Preregistered)
 	}
 
 	*flagLMEPerType = 1
-	if _, _, err := resolveLongMemEvalPreregisteredSelection(instances); err == nil ||
+	if _, err := resolveLongMemEvalSelection(instances); err == nil ||
 		!strings.Contains(err.Error(), "-lme-per-type") {
 		t.Fatalf("conflicting flags error = %v", err)
 	}
 	*flagLMEPerType = 0
 	*flagLMEPreregisteredSelection = filepath.Join(t.TempDir(), "missing.json")
-	if _, _, err := resolveLongMemEvalPreregisteredSelection(instances); err == nil ||
+	if _, err := resolveLongMemEvalSelection(instances); err == nil ||
 		!strings.Contains(err.Error(), "open LongMemEval selection manifest") {
 		t.Fatalf("missing manifest error = %v", err)
+	}
+}
+
+func TestLoadLongMemEvalExcludedQuestionIDs(t *testing.T) {
+	originalIDs := *flagLMEExcludeQuestionIDs
+	originalFile := *flagLMEExcludeQuestionIDsFile
+	t.Cleanup(func() {
+		*flagLMEExcludeQuestionIDs = originalIDs
+		*flagLMEExcludeQuestionIDsFile = originalFile
+	})
+	instances := []*lmeInstance{
+		{QuestionID: "q1"},
+		{QuestionID: "q2_abs"},
+		{QuestionID: "q3"},
+		nil,
+	}
+	path := filepath.Join(t.TempDir(), "excluded.txt")
+	if err := os.WriteFile(path, []byte("q2_abs\n q3 \nq2_abs\n\n"), 0644); err != nil {
+		t.Fatalf("write exclusion file: %v", err)
+	}
+	*flagLMEExcludeQuestionIDs = "q3,q1"
+	*flagLMEExcludeQuestionIDsFile = path
+	got, err := loadLongMemEvalExcludedQuestionIDs(instances)
+	if err != nil {
+		t.Fatalf("load exclusions: %v", err)
+	}
+	want := []string{"q1", "q2_abs", "q3"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("exclusions = %v, want %v", got, want)
+	}
+
+	*flagLMEExcludeQuestionIDs = "missing"
+	*flagLMEExcludeQuestionIDsFile = ""
+	if _, err := loadLongMemEvalExcludedQuestionIDs(instances); err == nil ||
+		!strings.Contains(err.Error(), "absent from the dataset") {
+		t.Fatalf("unknown exclusion error = %v", err)
+	}
+	*flagLMEExcludeQuestionIDs = ""
+	*flagLMEExcludeQuestionIDsFile = filepath.Join(t.TempDir(), "missing.txt")
+	if _, err := loadLongMemEvalExcludedQuestionIDs(instances); err == nil ||
+		!strings.Contains(err.Error(), "open LongMemEval question ID exclusion file") {
+		t.Fatalf("missing exclusion file error = %v", err)
 	}
 }
 
@@ -240,10 +287,6 @@ func TestLoadLongMemEvalSelectionManifest(t *testing.T) {
 }
 
 func TestValidateLongMemEvalPreregisteredSelection(t *testing.T) {
-	originalExcluded := *flagLMEExcludeQuestionIDs
-	t.Cleanup(func() { *flagLMEExcludeQuestionIDs = originalExcluded })
-	*flagLMEExcludeQuestionIDs = "excluded-b,excluded-a"
-
 	instances := []*lmeInstance{
 		{QuestionID: "q1", QuestionType: "single-session-user"},
 		{QuestionID: "q2_abs", QuestionType: "temporal-reasoning"},
@@ -265,6 +308,7 @@ func TestValidateLongMemEvalPreregisteredSelection(t *testing.T) {
 	if err := validateLongMemEvalPreregisteredSelection(
 		selection,
 		instances,
+		[]string{"excluded-a", "excluded-b"},
 		"dataset-digest",
 		"selection-digest",
 		manifest.ProtocolSHA256,
@@ -273,7 +317,7 @@ func TestValidateLongMemEvalPreregisteredSelection(t *testing.T) {
 		t.Fatalf("validate selection: %v", err)
 	}
 	if err := validateLongMemEvalPreregisteredSelection(
-		nil, nil, "", "", "", lmeBuildProvenance{},
+		nil, nil, nil, "", "", "", lmeBuildProvenance{},
 	); err != nil {
 		t.Fatalf("nil selection: %v", err)
 	}
@@ -395,13 +439,14 @@ func TestValidateLongMemEvalPreregisteredSelection(t *testing.T) {
 			if protocol == "" {
 				protocol = manifest.ProtocolSHA256
 			}
-			*flagLMEExcludeQuestionIDs = test.exclusions
-			if test.exclusions == "" {
-				*flagLMEExcludeQuestionIDs = "excluded-b,excluded-a"
+			exclusions := []string{"excluded-a", "excluded-b"}
+			if test.exclusions == "different-exclusion" {
+				exclusions = []string{"different-exclusion"}
 			}
 			err := validateLongMemEvalPreregisteredSelection(
 				&lmePreregisteredSelection{Manifest: candidate},
 				instances,
+				exclusions,
 				dataset,
 				selected,
 				protocol,
@@ -419,10 +464,10 @@ func TestValidateLongMemEvalPreregisteredSelection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("hash selected exclusion: %v", err)
 	}
-	*flagLMEExcludeQuestionIDs = "q1"
 	if err := validateLongMemEvalPreregisteredSelection(
 		&lmePreregisteredSelection{Manifest: selectedExcluded},
 		instances,
+		[]string{"q1"},
 		"dataset-digest",
 		"selection-digest",
 		manifest.ProtocolSHA256,

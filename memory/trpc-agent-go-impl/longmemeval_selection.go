@@ -10,11 +10,13 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
 )
 
@@ -25,28 +27,106 @@ type lmePreregisteredSelection struct {
 	ManifestSHA256 string
 }
 
-func resolveLongMemEvalPreregisteredSelection(
+type lmeResolvedSelection struct {
+	Cases               []*lmeInstance
+	Preregistered       *lmePreregisteredSelection
+	ExcludedQuestionIDs []string
+}
+
+func resolveLongMemEvalSelection(
 	instances []*lmeInstance,
-) ([]*lmeInstance, *lmePreregisteredSelection, error) {
+) (lmeResolvedSelection, error) {
 	path := strings.TrimSpace(*flagLMEPreregisteredSelection)
-	if path == "" {
-		return filterCases(instances), nil, nil
+	if path != "" {
+		if err := validateLongMemEvalPreregisteredSelectionFlags(); err != nil {
+			return lmeResolvedSelection{}, err
+		}
 	}
-	if err := validateLongMemEvalPreregisteredSelectionFlags(); err != nil {
-		return nil, nil, err
+	excluded, err := loadLongMemEvalExcludedQuestionIDs(instances)
+	if err != nil {
+		return lmeResolvedSelection{}, err
+	}
+	if path == "" {
+		return lmeResolvedSelection{
+			Cases:               filterCases(instances, excluded),
+			ExcludedQuestionIDs: excluded,
+		}, nil
 	}
 	manifest, digest, err := loadLongMemEvalSelectionManifest(path)
 	if err != nil {
-		return nil, nil, err
+		return lmeResolvedSelection{}, err
 	}
 	cases, err := longMemEvalCasesFromSelection(instances, manifest)
 	if err != nil {
-		return nil, nil, err
+		return lmeResolvedSelection{}, err
 	}
-	return cases, &lmePreregisteredSelection{
-		Manifest:       manifest,
-		ManifestSHA256: digest,
+	return lmeResolvedSelection{
+		Cases: cases,
+		Preregistered: &lmePreregisteredSelection{
+			Manifest:       manifest,
+			ManifestSHA256: digest,
+		},
+		ExcludedQuestionIDs: excluded,
 	}, nil
+}
+
+func loadLongMemEvalExcludedQuestionIDs(
+	instances []*lmeInstance,
+) ([]string, error) {
+	ids := parseCommaList(*flagLMEExcludeQuestionIDs)
+	path := strings.TrimSpace(*flagLMEExcludeQuestionIDsFile)
+	if path != "" {
+		file, err := os.Open(path)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"open LongMemEval question ID exclusion file: %w", err,
+			)
+		}
+		scanner := bufio.NewScanner(file)
+		for scanner.Scan() {
+			if id := strings.TrimSpace(scanner.Text()); id != "" {
+				ids = append(ids, id)
+			}
+		}
+		scanErr := scanner.Err()
+		closeErr := file.Close()
+		if scanErr != nil {
+			return nil, fmt.Errorf(
+				"read LongMemEval question ID exclusion file: %w", scanErr,
+			)
+		}
+		if closeErr != nil {
+			return nil, fmt.Errorf(
+				"close LongMemEval question ID exclusion file: %w", closeErr,
+			)
+		}
+	}
+	if len(ids) == 0 {
+		return nil, nil
+	}
+
+	datasetIDs := make(map[string]struct{}, len(instances))
+	for _, instance := range instances {
+		if instance == nil {
+			continue
+		}
+		datasetIDs[instance.QuestionID] = struct{}{}
+	}
+	unique := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		if _, exists := datasetIDs[id]; !exists {
+			return nil, fmt.Errorf(
+				"excluded LongMemEval question_id %q is absent from the dataset", id,
+			)
+		}
+		unique[id] = struct{}{}
+	}
+	result := make([]string, 0, len(unique))
+	for id := range unique {
+		result = append(result, id)
+	}
+	sort.Strings(result)
+	return result, nil
 }
 
 func validateLongMemEvalPreregisteredSelectionFlags() error {
@@ -187,6 +267,7 @@ func longMemEvalCasesFromSelection(
 func validateLongMemEvalPreregisteredSelection(
 	selection *lmePreregisteredSelection,
 	cases []*lmeInstance,
+	excluded []string,
 	datasetDigest string,
 	selectionDigest string,
 	protocolDigest string,
@@ -248,7 +329,6 @@ func validateLongMemEvalPreregisteredSelection(
 			"LongMemEval preregistration contains negative sampling metadata",
 		)
 	}
-	excluded := longMemEvalExcludedQuestionIDs()
 	excludedDigest, err := longMemEvalJSONSHA256(excluded)
 	if err != nil {
 		return fmt.Errorf("hash excluded LongMemEval question IDs: %w", err)

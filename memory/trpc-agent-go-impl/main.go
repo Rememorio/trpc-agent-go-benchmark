@@ -132,6 +132,11 @@ var (
 		"",
 		"Comma-separated LongMemEval question_ids excluded before sampling",
 	)
+	flagLMEExcludeQuestionIDsFile = flag.String(
+		"lme-exclude-question-ids-file",
+		"",
+		"File containing one LongMemEval question_id per line to exclude before sampling",
+	)
 	flagLMEQuestionTypes = flag.String(
 		"lme-question-types",
 		"",

@@ -269,8 +269,9 @@ go run . \
 # model, embedding, database, or Mem0 provider. Use the formal runner so the
 # manifest records a clean benchmark revision and pinned modules. The manifest
 # contains only question IDs, types, sampling parameters, and provenance
-# digests. A frozen exclusion list keeps all observed questions out of a
-# holdout.
+# digests. Keep the frozen exclusion set in a one-question-ID-per-line file;
+# IDs are merged with any CSV exclusions, deduplicated, sorted, and checked
+# against the selected dataset before sampling.
 LME_AGENT_PROFILE=candidate \
 LME_AGENT_REPLACEMENT="trpc.group/trpc-go/trpc-agent-go@<candidate-pseudo-version>" \
 ./run-longmemeval.sh \
@@ -278,7 +279,7 @@ LME_AGENT_REPLACEMENT="trpc.group/trpc-go/trpc-agent-go@<candidate-pseudo-versio
   -dataset ../../summary/data/longmemeval-cleaned/longmemeval_oracle.json \
   -lme-per-type 2 \
   -lme-abstention-count 4 \
-  -lme-exclude-question-ids <previously-observed-question-ids> \
+  -lme-exclude-question-ids-file ../results/lme-observed-question-ids.txt \
   -lme-sample-seed 48 \
   -lme-selection-only \
   > ../results/lme-holdout-selection.json
@@ -293,7 +294,7 @@ LME_AGENT_REPLACEMENT="trpc.group/trpc-go/trpc-agent-go@<upstream-pseudo-version
   -dataset ../../summary/data/longmemeval-cleaned/longmemeval_oracle.json \
   -memory-backend pgvector,mem0 \
   -lme-preregistered-selection ../results/lme-holdout-selection.json \
-  -lme-exclude-question-ids <previously-observed-question-ids> \
+  -lme-exclude-question-ids-file ../results/lme-observed-question-ids.txt \
   -lme-implementation upstream-holdout-<commit> \
   -lme-blind-progress=true \
   -vector-topk 30 \
@@ -536,6 +537,7 @@ LongMemEval-specific options:
 | `-lme-question-id`       |         | Run one LongMemEval question                 |
 | `-lme-question-ids`      |         | Comma-separated `question_id` filter         |
 | `-lme-exclude-question-ids` |      | Exclude IDs before filtering and sampling    |
+| `-lme-exclude-question-ids-file` | | Exclude one `question_id` per non-empty line |
 | `-lme-question-types`    |         | Comma-separated `question_type` filter       |
 | `-lme-per-type`          | 0       | Stratified sample count per question type    |
 | `-lme-abstention-count`  | 0       | Additional abstention questions to sample    |
