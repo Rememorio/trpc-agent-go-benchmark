@@ -178,7 +178,7 @@ func TestReanswerLongMemEvalResultSeedsCompatibleAnswerCache(t *testing.T) {
 	llm := &queuedJudgeModel{responses: []string{"Option A"}}
 	outPath := filepath.Join(t.TempDir(), "reanswered_results.json")
 	if err := reanswerLongMemEvalResult(
-		context.Background(), result, llm, "answer-model", "glm", cache, outPath,
+		context.Background(), result, llm, "answer-model", "glm", cache, true, outPath,
 	); err != nil {
 		t.Fatalf("seed answer cache: %v", err)
 	}
@@ -200,6 +200,57 @@ func TestReanswerLongMemEvalResultSeedsCompatibleAnswerCache(t *testing.T) {
 		result.Metadata["answer_cache_final_entries"] != 1 ||
 		result.Metadata["answer_cache_hits"] != 1 {
 		t.Fatalf("answer cache metadata: %#v", result.Metadata)
+	}
+	if result.Metadata["reanswer_reuse_source_answers"] != true {
+		t.Fatalf("source-answer reuse metadata: %#v", result.Metadata)
+	}
+}
+
+func TestReanswerLongMemEvalResultCanDisableSourceAnswerReuse(t *testing.T) {
+	t.Parallel()
+
+	result := &runResult{
+		Metadata: map[string]any{
+			"model":                 "answer-model",
+			"model_variant":         "glm",
+			"answer_prompt_version": lmeAnswerPromptVersion,
+			"answer_generation":     currentLongMemEvalAnswerGeneration(),
+		},
+		Cases: []*caseResult{{
+			QuestionID: "q-independent-answer",
+			Question:   "Which option?",
+			Answer:     "Option A",
+			BackendResults: map[string]*backendResult{
+				"mem0": {
+					Backend:   "mem0",
+					Answer:    "Option B",
+					RawAnswer: "Option B",
+					Retrieval: []memoryHit{{Memory: "Option A was selected."}},
+				},
+			},
+		}},
+	}
+	cache, err := openLongMemEvalAnswerCache("")
+	if err != nil {
+		t.Fatalf("open cache: %v", err)
+	}
+	llm := &queuedJudgeModel{responses: []string{"Option A"}}
+	outPath := filepath.Join(t.TempDir(), "reanswered_results.json")
+	if err := reanswerLongMemEvalResult(
+		context.Background(), result, llm, "answer-model", "glm", cache, false, outPath,
+	); err != nil {
+		t.Fatalf("independent re-answer: %v", err)
+	}
+
+	backend := result.Cases[0].BackendResults["mem0"]
+	if llm.calls != 1 || backend.Answer != "Option A" ||
+		backend.AnswerSource != lmeAnswerSourceModel ||
+		cache.Len() != 1 || cache.Hits() != 0 {
+		t.Fatalf("independent answer calls=%d backend=%+v entries=%d hits=%d",
+			llm.calls, backend, cache.Len(), cache.Hits())
+	}
+	if result.Metadata["reanswer_reuse_source_answers"] != false {
+		t.Fatalf("source-answer reuse metadata: %#v", result.Metadata)
 	}
 }
 

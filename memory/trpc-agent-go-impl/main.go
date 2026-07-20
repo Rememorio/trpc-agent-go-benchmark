@@ -222,6 +222,11 @@ var (
 		"",
 		"Regenerate answers from retrieval hits in an existing LongMemEval results.json",
 	)
+	flagLMEReanswerReuseSourceAnswers = flag.Bool(
+		"lme-reanswer-reuse-source-answers",
+		true,
+		"Seed the answer cache from compatible answers in the source LongMemEval results",
+	)
 	flagLMERefreshRetrievalResults = flag.String(
 		"lme-refresh-retrieval-results",
 		"",

@@ -1539,7 +1539,7 @@ func TestReanswerLongMemEvalResult(t *testing.T) {
 	}
 	outPath := filepath.Join(t.TempDir(), "reanswered_results.json")
 	if err := reanswerLongMemEvalResult(
-		context.Background(), result, llm, "answer-model", "glm", nil, outPath,
+		context.Background(), result, llm, "answer-model", "glm", nil, true, outPath,
 	); err != nil {
 		t.Fatalf("re-answer result: %v", err)
 	}
@@ -1592,7 +1592,7 @@ func TestReanswerLongMemEvalResult(t *testing.T) {
 		t.Fatalf("unexpected re-answer summary: %+v", got.Summary)
 	}
 	if err := reanswerLongMemEvalResult(
-		context.Background(), nil, llm, "", "", nil, outPath,
+		context.Background(), nil, llm, "", "", nil, true, outPath,
 	); err == nil {
 		t.Fatal("nil result should fail")
 	}

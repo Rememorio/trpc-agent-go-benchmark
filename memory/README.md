@@ -415,6 +415,9 @@ calls or tokens. Re-answering a result may seed the ledger from an existing
 successful answer only when the recorded model, variant, prompt version, and
 generation settings all match. A strict comparison rejects runs that record
 different answer ledgers or do not both use a persistent shared ledger.
+Set `-lme-reanswer-reuse-source-answers=false` with a new empty cache when an
+independent answer replicate is required. The result records this choice, and
+the model must answer every cache miss instead of seeding from the source run.
 
 For causal ablations of ingestion behavior, `-lme-model-response-cache` can
 share complete primary-run model response streams between sequential runs. Its
@@ -554,6 +557,7 @@ LongMemEval-specific options:
 | `-lme-blind-progress`    | false   | Hide answers and quality from progress logs  |
 | `-lme-implementation`    | (env)   | Reproducible implementation label            |
 | `-lme-reanswer-results`   |         | Re-answer using saved ranked retrieval hits  |
+| `-lme-reanswer-reuse-source-answers` | true | Seed cache from compatible source answers |
 | `-lme-refresh-memory-snapshots` | | Refresh final snapshots without model calls  |
 | `-lme-refresh-retrieval-results` | | Refresh persisted pgvector retrieval         |
 | `-lme-rerank-results`     |         | Rerank saved hits for every result backend   |

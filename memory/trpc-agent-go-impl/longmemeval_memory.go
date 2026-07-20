@@ -1665,6 +1665,7 @@ func reanswerLongMemEvalResults(ctx context.Context, path, outputDir string) err
 		modelName,
 		modelVariant,
 		answerCache,
+		*flagLMEReanswerReuseSourceAnswers,
 		filepath.Join(outputDir, "reanswered_results.json"),
 	)
 }
@@ -1676,6 +1677,7 @@ func reanswerLongMemEvalResult(
 	modelName string,
 	modelVariant string,
 	answerCache *longMemEvalAnswerCache,
+	reuseSourceAnswers bool,
 	outPath string,
 ) error {
 	if result == nil {
@@ -1684,7 +1686,7 @@ func reanswerLongMemEvalResult(
 	if result.Metadata == nil {
 		result.Metadata = make(map[string]any)
 	}
-	reuseExistingAnswers := longMemEvalAnswerProvenanceMatches(
+	reuseExistingAnswers := reuseSourceAnswers && longMemEvalAnswerProvenanceMatches(
 		result.Metadata, modelName, modelVariant,
 	)
 	result.Metadata["reanswer_model"] = modelName
@@ -1696,6 +1698,7 @@ func reanswerLongMemEvalResult(
 	result.Metadata["judge_protocol_version"] = lmeJudgeProtocolVersion
 	result.Metadata["judge_generation"] = currentLongMemEvalJudgeGeneration()
 	result.Metadata["reanswered_at"] = time.Now().UTC().Format(time.RFC3339)
+	result.Metadata["reanswer_reuse_source_answers"] = reuseSourceAnswers
 	result.Metadata["answer_scoring"] = "raw model output; no retrieval-assisted answer post-processing"
 	result.Metadata["reanswer_note"] = "Answers regenerated from saved ranked retrieval hits; backend-specific similarity scores are not shown to the answer model. Responses ending with a length finish reason are retried once with the recorded larger token limit."
 	initializeLongMemEvalAnswerCacheMetadata(result.Metadata, answerCache)
