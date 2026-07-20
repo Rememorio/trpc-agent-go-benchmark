@@ -119,7 +119,7 @@ func TestRefreshLongMemEvalRetrievalResult(t *testing.T) {
 	outPath := t.TempDir() + "/refreshed.json"
 	if err := refreshLongMemEvalRetrievalResult(
 		context.Background(), result, backend, llm,
-		"answer-model", "variant", "refreshed-implementation",
+		"answer-model", "variant", true, "refreshed-implementation",
 		"source-digest", outPath,
 	); err != nil {
 		t.Fatalf("refresh retrieval result: %v", err)
@@ -167,6 +167,98 @@ func TestRefreshLongMemEvalRetrievalResult(t *testing.T) {
 	}
 	if _, err := loadLongMemEvalResults(outPath); err != nil {
 		t.Fatalf("load retrieval refresh checkpoint: %v", err)
+	}
+}
+
+func TestRefreshLongMemEvalRetrievalResultWithoutAnswers(t *testing.T) {
+	restoreStringFlag(t, flagTableSuffix, "_refresh_test")
+	restoreIntFlag(t, flagVectorTopK, 30)
+
+	persisted := memorySnapshot{
+		ID: "memory-1", Memory: "Visited the Science Museum.",
+		SourceSessions: []string{"answer-session"},
+	}
+	backend := &refreshTestBackend{
+		hits: []memoryHit{{
+			ID: persisted.ID, Memory: persisted.Memory, Score: 0.9,
+		}},
+		stored: []memorySnapshot{{
+			ID: persisted.ID, Memory: persisted.Memory,
+		}},
+	}
+	result := &runResult{
+		Metadata: map[string]any{
+			"implementation":               "source-implementation",
+			"reanswer_model":               "stale-model",
+			"answer_cache_initial_entries": 1,
+		},
+		Cases: []*caseResult{{
+			QuestionID:       "q1",
+			QuestionType:     "single-session-user",
+			Question:         "Which museum did I visit?",
+			Answer:           "Science Museum",
+			AnswerSessionIDs: []string{"answer-session"},
+			BackendResults: map[string]*backendResult{
+				"pgvector": {
+					Backend:          "pgvector",
+					UserID:           "user-1",
+					FinalMemories:    []memorySnapshot{persisted},
+					Retrieval:        []memoryHit{{Memory: "stale"}},
+					Answer:           "stale answer",
+					RawAnswer:        "stale answer",
+					AnswerCacheKey:   "stale-key",
+					AnswerSource:     "model",
+					AnswerModelCalls: []lmeModelCallTrace{{Content: "stale answer"}},
+					TokenUsage:       tokenUsagePtr(lmeTokenUsage{TotalTokens: 100}),
+					AnswerUsage:      tokenUsagePtr(lmeTokenUsage{TotalTokens: 20}),
+					ExactMatch:       true,
+					F1:               1,
+					BLEU:             1,
+					Judge:            &lmeJudgeResult{Correct: true},
+					Evidence:         &evidenceMetrics{HasAnswerTurnLabels: true},
+				},
+			},
+		}},
+	}
+	outPath := t.TempDir() + "/refreshed.json"
+	if err := refreshLongMemEvalRetrievalResult(
+		context.Background(), result, backend, nil,
+		"answer-model", "variant", false, "retrieval-only",
+		"source-digest", outPath,
+	); err != nil {
+		t.Fatalf("refresh retrieval result without answers: %v", err)
+	}
+
+	br := result.Cases[0].BackendResults["pgvector"]
+	if br.Answer != "" || br.RawAnswer != "" || br.AnswerCacheKey != "" ||
+		br.AnswerSource != "" || len(br.AnswerModelCalls) != 0 ||
+		br.AnswerUsage != nil || br.ExactMatch || br.F1 != 0 || br.BLEU != 0 {
+		t.Fatalf("answer state was not cleared: %#v", br)
+	}
+	if br.TokenUsage == nil || br.TokenUsage.TotalTokens != 80 {
+		t.Fatalf("token usage = %#v, want ingestion-only total 80", br.TokenUsage)
+	}
+	if br.FailureStage != "retrieval_only" || br.Judge != nil {
+		t.Fatalf("retrieval-only state = stage %q judge %#v", br.FailureStage, br.Judge)
+	}
+	if len(br.Retrieval) != 1 || br.Retrieval[0].ID != persisted.ID ||
+		br.Evidence == nil || !br.Evidence.RetrievalRecallAll {
+		t.Fatalf("refreshed retrieval evidence = %#v %#v", br.Retrieval, br.Evidence)
+	}
+	refresh, ok := result.Metadata["retrieval_refresh"].(map[string]any)
+	if !ok || refresh["answer_enabled"] != false ||
+		result.Metadata["answer_enabled"] != false ||
+		result.Metadata["answer_scoring"] != "disabled for retrieval-only refresh" {
+		t.Fatalf("retrieval-only metadata = %#v", result.Metadata)
+	}
+	if _, ok := result.Metadata["reanswer_model"]; ok {
+		t.Fatalf("stale reanswer metadata retained: %#v", result.Metadata)
+	}
+	if _, ok := result.Metadata["answer_cache_initial_entries"]; ok {
+		t.Fatalf("stale answer cache metadata retained: %#v", result.Metadata)
+	}
+	if _, err := loadLongMemEvalResults(outPath); err != nil {
+		t.Fatalf("load retrieval-only refresh checkpoint: %v", err)
 	}
 }
 

@@ -49,9 +49,12 @@ func refreshLongMemEvalRetrievalResults(
 	}
 	modelName := getModelName()
 	modelVariant := getModelVariant()
-	baseLLM, err := newEvaluationModel(modelName, modelVariant)
-	if err != nil {
-		return err
+	var baseLLM model.Model
+	if *flagLMEAnswer {
+		baseLLM, err = newEvaluationModel(modelName, modelVariant)
+		if err != nil {
+			return err
+		}
 	}
 	backend, err := newLongMemEvalPGVectorBackend(
 		nil, pgvectorExtractionConfig{}, true,
@@ -70,6 +73,7 @@ func refreshLongMemEvalRetrievalResults(
 		baseLLM,
 		modelName,
 		modelVariant,
+		*flagLMEAnswer,
 		implementation,
 		sourceDigest,
 		filepath.Join(outputDir, lmeRetrievalRefreshOutput),
@@ -174,6 +178,7 @@ func refreshLongMemEvalRetrievalResult(
 	baseLLM model.Model,
 	modelName string,
 	modelVariant string,
+	answerEnabled bool,
 	implementation string,
 	sourceDigest string,
 	outPath string,
@@ -184,12 +189,16 @@ func refreshLongMemEvalRetrievalResult(
 	if backend == nil {
 		return errors.New("retrieval refresh backend is nil")
 	}
-	if baseLLM == nil {
+	if answerEnabled && baseLLM == nil {
 		return errors.New("retrieval refresh model is nil")
 	}
-	answerCache, err := openConfiguredLongMemEvalAnswerCache()
-	if err != nil {
-		return err
+	var answerCache *longMemEvalAnswerCache
+	if answerEnabled {
+		var err error
+		answerCache, err = openConfiguredLongMemEvalAnswerCache()
+		if err != nil {
+			return err
+		}
 	}
 	if result.Metadata == nil {
 		result.Metadata = make(map[string]any)
@@ -199,6 +208,10 @@ func refreshLongMemEvalRetrievalResult(
 	)
 	refreshBuild := currentLongMemEvalBuildProvenance()
 	refreshedAt := time.Now().UTC().Format(time.RFC3339)
+	preservedCostScope := "ingestion and original query embedding; answer usage is replaced"
+	if !answerEnabled {
+		preservedCostScope = "ingestion and original query embedding; source answer usage is removed"
+	}
 	refresh := map[string]any{
 		"backend":               backend.Name(),
 		"source_implementation": sourceImplementation,
@@ -210,25 +223,46 @@ func refreshLongMemEvalRetrievalResult(
 		"embedding_model":       getEmbedModelName(),
 		"table_suffix":          *flagTableSuffix,
 		"top_k":                 *flagVectorTopK,
+		"answer_enabled":        answerEnabled,
 		"completed_cases":       0,
 		"embedding_usage":       lmeEmbeddingUsage{},
 		"refreshed_at":          refreshedAt,
 		"memory_verification":   "canonical persisted memories match source final_memories",
-		"preserved_cost_scope":  "ingestion and original query embedding; answer usage is replaced",
+		"preserved_cost_scope":  preservedCostScope,
 	}
 	result.Metadata["retrieval_refresh"] = refresh
 	result.Metadata["implementation"] = implementation
-	result.Metadata["reanswer_model"] = modelName
-	result.Metadata["reanswer_model_variant"] = modelVariant
-	result.Metadata["reanswer_build"] = refreshBuild
-	result.Metadata["reanswered_at"] = refreshedAt
-	result.Metadata["reanswer_note"] = "Answers regenerated from refreshed PGVector retrieval hits using the recorded answer protocol."
-	result.Metadata["answer_generation"] = currentLongMemEvalAnswerGeneration()
+	result.Metadata["answer_enabled"] = answerEnabled
+	if answerEnabled {
+		delete(result.Metadata, "retrieval_refresh_note")
+		result.Metadata["reanswer_model"] = modelName
+		result.Metadata["reanswer_model_variant"] = modelVariant
+		result.Metadata["reanswer_build"] = refreshBuild
+		result.Metadata["reanswered_at"] = refreshedAt
+		result.Metadata["reanswer_note"] = "Answers regenerated from refreshed PGVector retrieval hits using the recorded answer protocol."
+	} else {
+		for _, key := range []string{
+			"reanswer_model",
+			"reanswer_model_variant",
+			"reanswer_build",
+			"reanswered_at",
+			"reanswer_note",
+		} {
+			delete(result.Metadata, key)
+		}
+		result.Metadata["retrieval_refresh_note"] = "Retrieval-only refresh; source answers, scores, and answer usage were cleared without model calls."
+	}
+	if answerEnabled {
+		result.Metadata["answer_generation"] = currentLongMemEvalAnswerGeneration()
+		result.Metadata["answer_scoring"] = "raw model output; no retrieval-assisted answer post-processing"
+	} else {
+		delete(result.Metadata, "answer_generation")
+		result.Metadata["answer_scoring"] = "disabled for retrieval-only refresh"
+	}
 	result.Metadata["answer_prompt_version"] = lmeAnswerPromptVersion
 	result.Metadata["judge_prompt_version"] = lmeJudgePromptVersion
 	result.Metadata["judge_protocol_version"] = lmeJudgeProtocolVersion
 	result.Metadata["judge_generation"] = currentLongMemEvalJudgeGeneration()
-	result.Metadata["answer_scoring"] = "raw model output; no retrieval-assisted answer post-processing"
 	initializeLongMemEvalAnswerCacheMetadata(result.Metadata, answerCache)
 	clearLongMemEvalJudgeRunMetadata(result.Metadata)
 	for _, cr := range result.Cases {
@@ -293,11 +327,11 @@ func refreshLongMemEvalRetrievalResult(
 		replaceLongMemEvalRerankUsage(br, lmeTokenUsage{})
 		br.Retrieval = hits
 		br.Judge = nil
-		resetLongMemEvalAnswerError(br)
+		clearLongMemEvalRefreshAnswer(br)
 		if searchErr != nil {
 			br.Error = appendError(br.Error, "refresh search: "+searchErr.Error())
 			br.FailureStage = "search_error"
-		} else {
+		} else if answerEnabled {
 			tracker := &lmeTokenTracker{}
 			llm := &lmeTrackingModel{
 				base: baseLLM, tracker: tracker, timeout: *flagLMEModelCallTimeout,
@@ -325,6 +359,14 @@ func refreshLongMemEvalRetrievalResult(
 					previousEvidence.HasAnswerTurnLabels
 			}
 			br.FailureStage = classifyFailure(inst, br)
+		} else {
+			previousEvidence := br.Evidence
+			br.Evidence = computeEvidenceMetrics(inst, br, *flagVectorTopK)
+			if previousEvidence != nil {
+				br.Evidence.HasAnswerTurnLabels =
+					previousEvidence.HasAnswerTurnLabels
+			}
+			br.FailureStage = "retrieval_only"
 		}
 		completed++
 		refresh["completed_cases"] = completed
@@ -334,7 +376,7 @@ func refreshLongMemEvalRetrievalResult(
 		if err := writeLongMemEvalResults(outPath, result); err != nil {
 			return fmt.Errorf("checkpoint retrieval refresh results: %w", err)
 		}
-		if *flagLMEBlindProgress {
+		if *flagLMEBlindProgress || !answerEnabled {
 			log.Printf("  %s hits=%d embed_calls=%d err=%v",
 				backend.Name(), len(hits), providerUsage.Embedding.Calls, searchErr)
 		} else {
@@ -349,6 +391,24 @@ func refreshLongMemEvalRetrievalResult(
 	printLongMemEvalSummary(result)
 	log.Printf("LongMemEval retrieval-refreshed results written to %s", outPath)
 	return nil
+}
+
+func clearLongMemEvalRefreshAnswer(br *backendResult) {
+	if br == nil {
+		return
+	}
+	resetLongMemEvalAnswerError(br)
+	replaceLongMemEvalAnswerUsage(br, lmeTokenUsage{})
+	br.AnswerUsage = nil
+	br.Answer = ""
+	br.RawAnswer = ""
+	br.AnswerCacheKey = ""
+	br.AnswerSource = ""
+	br.AnswerModelCalls = nil
+	br.AnswerDuration = 0
+	br.ExactMatch = false
+	br.F1 = 0
+	br.BLEU = 0
 }
 
 type lmePersistedMemoryIdentity struct {
