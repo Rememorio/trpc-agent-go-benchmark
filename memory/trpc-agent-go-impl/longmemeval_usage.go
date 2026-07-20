@@ -33,6 +33,7 @@ type lmeTokenUsage struct {
 	CacheReadTokens     int     `json:"cache_read_tokens,omitempty"`
 	ReasoningTokens     int     `json:"reasoning_tokens,omitempty"`
 	LLMCalls            int     `json:"llm_calls"`
+	UsageMissingCalls   int     `json:"usage_missing_calls,omitempty"`
 	CacheHitRate        float64 `json:"cache_hit_rate,omitempty"`
 }
 
@@ -45,6 +46,7 @@ func (u *lmeTokenUsage) Add(other lmeTokenUsage) {
 	u.CacheReadTokens += other.CacheReadTokens
 	u.ReasoningTokens += other.ReasoningTokens
 	u.LLMCalls += other.LLMCalls
+	u.UsageMissingCalls += other.UsageMissingCalls
 	u.setCacheHitRate()
 }
 
@@ -57,6 +59,9 @@ func (u *lmeTokenUsage) Sub(other lmeTokenUsage) {
 	u.CacheReadTokens = nonNegativeTokenDifference(u.CacheReadTokens, other.CacheReadTokens)
 	u.ReasoningTokens = nonNegativeTokenDifference(u.ReasoningTokens, other.ReasoningTokens)
 	u.LLMCalls = nonNegativeTokenDifference(u.LLMCalls, other.LLMCalls)
+	u.UsageMissingCalls = nonNegativeTokenDifference(
+		u.UsageMissingCalls, other.UsageMissingCalls,
+	)
 	u.setCacheHitRate()
 }
 
@@ -83,7 +88,8 @@ func (u lmeTokenUsage) IsZero() bool {
 		u.CacheCreationTokens == 0 &&
 		u.CacheReadTokens == 0 &&
 		u.ReasoningTokens == 0 &&
-		u.LLMCalls == 0
+		u.LLMCalls == 0 &&
+		u.UsageMissingCalls == 0
 }
 
 func tokenUsagePtr(u lmeTokenUsage) *lmeTokenUsage {
@@ -95,19 +101,22 @@ func tokenUsagePtr(u lmeTokenUsage) *lmeTokenUsage {
 }
 
 type lmeEmbeddingUsage struct {
-	PromptTokens int `json:"prompt_tokens"`
-	TotalTokens  int `json:"total_tokens"`
-	Calls        int `json:"calls"`
+	PromptTokens      int `json:"prompt_tokens"`
+	TotalTokens       int `json:"total_tokens"`
+	Calls             int `json:"calls"`
+	UsageMissingCalls int `json:"usage_missing_calls,omitempty"`
 }
 
 func (u *lmeEmbeddingUsage) Add(other lmeEmbeddingUsage) {
 	u.PromptTokens += other.PromptTokens
 	u.TotalTokens += other.TotalTokens
 	u.Calls += other.Calls
+	u.UsageMissingCalls += other.UsageMissingCalls
 }
 
 func (u lmeEmbeddingUsage) IsZero() bool {
-	return u.PromptTokens == 0 && u.TotalTokens == 0 && u.Calls == 0
+	return u.PromptTokens == 0 && u.TotalTokens == 0 && u.Calls == 0 &&
+		u.UsageMissingCalls == 0
 }
 
 func embeddingUsagePtr(u lmeEmbeddingUsage) *lmeEmbeddingUsage {

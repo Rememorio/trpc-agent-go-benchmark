@@ -1025,7 +1025,8 @@ func runLongMemEvalMemory(ctx context.Context) error {
 			"memory_snapshot": "pgvector and hosted mem0 read all memories; self-hosted mem0 OSS " +
 				"reads its 1000-item API cap and marks snapshot_truncated at the boundary",
 			"token_usage_scope": "LLM and embedding usage made in this process. Self-hosted mem0 internal " +
-				"usage is included when its server returns X-Mem0-Usage; provider_usage_reported marks coverage.",
+				"usage is included when its server returns X-Mem0-Usage; provider_usage_reported marks header " +
+				"coverage and usage_missing_calls marks provider responses without token usage.",
 		},
 		Cases: make([]*caseResult, 0, len(cases)),
 	}

@@ -876,8 +876,8 @@ func TestMem0UsageTransportRecordsHeader(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set(lmeMem0UsageHeader, `{
-  "llm":{"prompt_tokens":120,"completion_tokens":8,"total_tokens":128,"cached_tokens":32,"llm_calls":2},
-  "embedding":{"prompt_tokens":16,"total_tokens":16,"calls":3}
+  "llm":{"prompt_tokens":120,"completion_tokens":8,"total_tokens":128,"cached_tokens":32,"llm_calls":2,"usage_missing_calls":1},
+  "embedding":{"prompt_tokens":16,"total_tokens":16,"calls":3,"usage_missing_calls":2}
 }`)
 		w.WriteHeader(http.StatusNoContent)
 	}))
@@ -898,7 +898,8 @@ func TestMem0UsageTransportRecordsHeader(t *testing.T) {
 	if !usage.Reported || usage.LLM.TotalTokens != 128 || usage.LLM.CachedTokens != 32 {
 		t.Fatalf("unexpected LLM usage: %#v", usage)
 	}
-	if usage.Embedding.TotalTokens != 16 || usage.Embedding.Calls != 3 {
+	if usage.LLM.UsageMissingCalls != 1 || usage.Embedding.TotalTokens != 16 ||
+		usage.Embedding.Calls != 3 || usage.Embedding.UsageMissingCalls != 2 {
 		t.Fatalf("unexpected embedding usage: %#v", usage)
 	}
 }
