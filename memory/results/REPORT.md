@@ -117,11 +117,11 @@ retrieval pipeline:
    in the retrieval results.
 
 LongMemEval then exposed a different set of production-path reliability
-problems. The resulting changes preserve dated state transitions instead
-of collapsing historical and current states, retain concrete assistant
-answers and structured deliverables, and retry malformed structured
-extraction output. If extraction still produces no operation, qualifying
-long assistant output is stored through a conservative fallback.
+problems. The resulting changes retain concrete assistant answers and
+structured deliverables, carry observation times through extraction, and
+retry malformed structured extraction output. If extraction still produces
+no operation, qualifying long assistant output is stored through a
+conservative fallback.
 
 The final candidate keeps the second-pass structured-result recovery narrow:
 it receives the current dated user/assistant pair, while persistence still
@@ -139,8 +139,17 @@ Extraction context also retains cumulative observation times so that a later
 turn cannot erase when an earlier state was observed. Focused source passages
 preserve the concrete entity or list that triggered assistant-result recovery,
 and temporal retrieval keeps a bounded tail of dated events alongside hybrid
-search results. These mechanisms are opt-in for the candidate arm; the default
-reconciliation behavior remains compatible with upstream main.
+search results. These mechanisms are opt-in for the candidate arm; ordinary
+user-memory updates continue to use the compatible default reconciliation
+behavior.
+
+An earlier candidate exposed a separate history-preserving update policy for
+ordinary memories. A fresh LoCoMo policy ablation did not support it: default
+reconcile scored slightly higher overall and won two of three answer repeats.
+The final design therefore removes that public policy and its specialized
+state-recovery path. Strict preservation remains private to assistant-result
+memories, where rewriting a cited answer or structured deliverable would lose
+the evidence the feature is intended to retain.
 
 Automatic Add reconciliation now rewrites only high-confidence
 near-duplicates; related plans, recommendations, events, and entity lists
@@ -161,12 +170,16 @@ context. The answer model sees only searched memories, never the raw
 transcript.
 
 All arms use glm52 at temperature 0, `text-embedding-3-small`, and top-k 30
-retrieval. The three arms are upstream-main pgvector with default reconcile
-behavior, candidate pgvector with history-preserving updates and assistant
-result extraction, and a pinned self-hosted Mem0 OSS image backed by pgvector.
-The runner records extraction operations, memory diffs, retrieval hits,
-evidence provenance, errors, timings, LLM and embedding usage, cached tokens,
-build revisions, and sanitized Mem0 configuration.
+retrieval. The frozen three-arm baseline compared upstream-main pgvector with
+default reconcile, a then-current candidate with history-preserving updates
+and assistant-result extraction, and a pinned self-hosted Mem0 OSS image backed
+by pgvector. Component ablation reduced the final candidate to default
+reconcile plus assistant-result extraction. A fresh full regression of that
+configuration and a post-deletion exact-build smoke validate it separately.
+The runner records
+extraction operations, memory diffs, retrieval hits, evidence provenance,
+errors, timings, LLM and embedding usage, cached tokens, build revisions, and
+sanitized Mem0 configuration.
 
 The fixed development selection contains two answerable questions from each
 LongMemEval type plus four abstention questions, for 16 questions total and
@@ -393,11 +406,20 @@ independent answers; every answer received three semantic-judge votes.
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
 | pgvector main | default reconcile; assistant results off | 12/16 | 12/16 | 36/48 | 0 | 0 |
 | Mem0 OSS | pinned self-hosted OSS runtime | 14/16 | 14/16 | 41/48 | 1 | 0 |
-| pgvector candidate | history-preserving; assistant results on | **16/16** | **16/16** | **48/48** | **0** | **0** |
+| frozen pgvector candidate | history-preserving; assistant results on | **16/16** | **16/16** | **48/48** | **0** | **0** |
+| reconcile + assistant configuration | default reconcile; assistant results on | **16/16** | **16/16** | **48/48** | **0** | **0** |
+
+The first three rows are the preregistered simultaneous comparison. The final
+row is a later fresh run over the same fixed IDs with the simplified runtime
+configuration; it used new model responses and isolated storage rather than
+reusing or rewriting the frozen candidate result. That full run predates the
+code deletion but exercises the same ordinary-reconcile and private
+assistant-result persistence semantics. The exact post-deletion build is
+covered separately by the implementation smoke below.
 
 The result is not concentrated in one category:
 
-| LongMemEval type | Cases | pgvector main | Mem0 OSS | pgvector candidate |
+| LongMemEval type | Cases | pgvector main | Mem0 OSS | both candidate runs |
 | --- | ---: | ---: | ---: | ---: |
 | knowledge-update | 2 | 2 | 2 | 2 |
 | multi-session | 4 | 3 | 3 | **4** |
@@ -413,17 +435,22 @@ shared-cache dependent and reported separately in the raw artifacts:
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | pgvector main | 183 | 1,187,759 | 599,360 | 694 | 21,919 | 151 | 1,313s | 16.6s |
 | Mem0 OSS | 183 | 1,764,654 | 1,410,624 | 373 | 116,725 | 485 | 1,278s | 20.9s |
-| pgvector candidate | 207 | 1,790,001 | 968,960 | 619 | 35,922 | 416 | 2,301s | 20.3s |
+| frozen candidate | 207 | 1,790,001 | 968,960 | 619 | 35,922 | 416 | 2,301s | 20.3s |
+| compact history reference | 208 | 1,686,365 | 664,960 | 624 | 37,964 | 421 | 2,256s | - |
+| reconcile + assistant configuration | 215 | 1,639,589 | 612,032 | 815 | 44,243 | 291 | 2,576s | 25.8s |
 
-Against main, the final candidate uses 1.507x LLM tokens, 1.639x embedding
-tokens, and 2.755x as many final memories. These values pass the preregistered
-limits of 1.53x, 2.0x, and 3.0x. Against Mem0, it uses 1.4% more memory LLM
-tokens, 69.2% fewer embedding tokens, and 14.2% fewer final memories. Cached
-tokens stay separate because provider billing differs. Ingestion took 2,301s
-in this run, 31.3% longer than the parent candidate and 75.3% longer than main;
-two transient embedding-provider 500 responses recovered through retries, so
-wall-clock latency is reported as an observed outcome rather than attributed
-solely to the algorithm.
+The frozen candidate passed its preregistered limits at 1.507x main's LLM
+tokens, 1.639x embedding tokens, and 2.755x final memories. The simpler
+configuration preserves 48/48 quality while reducing LLM tokens by 2.77% and
+final memories by 30.88% relative to the compact history reference. Its embedding
+tokens rise 16.54%, embedding calls rise 30.61%, and ingestion is 14.2% longer,
+so the simplification is not a uniform cost win. Against main it uses 1.380x
+LLM tokens, 2.019x embedding tokens, and 1.927x final memories; against Mem0 it
+uses 7.09% fewer LLM tokens, 62.09% fewer embedding tokens, and 40.0% fewer
+final memories. Cached tokens remain separate because provider billing differs.
+The fresh simplification gate checked exact quality and artifact integrity but
+did not retroactively reuse the frozen promotion cost bounds; in particular,
+the final embedding-token ratio narrowly exceeds the old 2.0x limit.
 
 The compact-recovery ablation reused the fixed observed 16-question selection
 and retained 48/48 correct answer replicates with 144/144 correct judge votes.
@@ -453,11 +480,24 @@ assistant-result prompt constant is 59.85% shorter, unit and race tests pass,
 and the synthesis gate recommends integration into the development candidate,
 not blind promotion.
 
+The ordinary-update-policy ablation then compared history-preserving and
+default reconcile using fresh stores for 10 fixed, stratified LoCoMo questions
+and three answer repeats. Mean F1 was 0.6861 for history-preserving and 0.6912
+for reconcile; reconcile won two repeats, history-preserving won one, and the
+predeclared support rule failed. This removes evidence for a public
+history-preserving policy rather than merely preferring a shorter API. The
+fresh 16-case reconcile-plus-assistant configuration scored 16/16, 48/48, and
+144/144 valid votes with no pipeline errors. After deleting the policy and its
+state-transition recovery implementation, a separate exact-build four-case
+smoke exercised all 32 replay pairs and scored 4/4 with 12/12 valid votes and
+complete extraction/retrieval evidence.
+
 The saved traces distinguish memory failures from answer variance:
 
 - `38146c39`: main retains the latest muscovado decision and a generic sugar
-  preference, but loses the earlier turbinado preference and concrete pairing
-  advice. The candidate preserves both state history and assistant guidance.
+  preference, but loses the concrete turbinado pairing advice. The final
+  candidate recovers that relationship from assistant guidance under ordinary
+  reconcile; this case therefore does not justify a separate history policy.
 - `cc539528`: main stores only the user's front-end/back-end interest and cannot
   recover the recommended languages. The candidate stores the assistant's
   `Ruby, Python, PHP` list and answers it in all three replicates.
@@ -478,7 +518,9 @@ The frozen three-arm candidate baseline passes every preregistered development
 gate, including zero per-type deficit and complete provider usage. Its earlier
 three-repeat LoCoMo regression remains within tolerance (mean F1 delta `-0.0282`,
 required at least `-0.05`) but is not an improvement; the delta comes from two
-answer-recovery outcomes rather than a demonstrated memory miss.
+answer-recovery outcomes rather than a demonstrated memory miss. The later
+policy ablation is stronger evidence for the ordinary update decision because
+it compares the two policies directly with fresh isolated stores.
 
 The prompt compaction then received an independent LoCoMo check with fresh
 parent and compact stores on 10 fixed stratified questions. Extraction prompt
@@ -1002,9 +1044,10 @@ Agno                |====================                      | 0.267
 3. **The opt-in pgvector candidate leads both upstream main and self-hosted
    Mem0 on the fixed LongMemEval development regression.** Under protocol v2,
    it scores 16/16 and 48/48 correct answer replicates, versus main's 12/16
-   and 36/48 and Mem0's 14/16 and 41/48. Stage-level traces explain the
-   assistant-result and history-preservation gains, but no new unseen holdout
-   has been run under this protocol.
+   and 36/48 and Mem0's 14/16 and 41/48. Component ablation supports
+   assistant-result extraction but rejects a separate history-preserving
+   ordinary-update policy. No new unseen holdout has been run under this
+   protocol.
 
 4. **trpc-agent-go now surpasses dedicated memory systems by a wide
    margin.** Session Recall's 4-category weighted F1 of 0.531 is well
@@ -1046,11 +1089,11 @@ Agno                |====================                      | 0.267
 
 7. **The next target is unseen generalization, not more observed-set tuning.**
    The current candidate closes every observed LongMemEval development gap and
-   prompt compaction reduces observed memory tokens from 1.507x to 1.420x main,
-   with 2.788x as many final memories. Its formal prompt-compaction run remains
-   rejected on the exact-call gate even though direct token and duration gates,
-   repeated quality diagnostics, and cross-dataset checks pass. The next
-   promotion step is a preregistered unseen full-haystack holdout.
+   the reconcile-plus-assistant configuration uses 1.380x main's memory tokens
+   and 1.927x its final memories while retaining 48/48 correct replicates. Its
+   2.019x embedding-token ratio identifies the next generic cost target, but
+   further quality tuning on these observed IDs would risk overfitting. The
+   next promotion step is a preregistered unseen full-haystack holdout.
 
 ### Production Recommendations
 
@@ -1124,10 +1167,14 @@ The primary arm shape is:
 ```
 
 Candidate pgvector reuses the exact IDs and protocol with
-`-pgvector-update-policy history-preserving` and
-`-pgvector-assistant-result-extraction=true`. Two saved-retrieval re-answer
-runs use fresh, distinct answer ledgers; all three result sets use three judge
-votes per answer. The replicate manifest freezes the quality and cost gate.
+`-pgvector-update-policy reconcile` and
+`-pgvector-assistant-result-extraction=true`. The frozen three-arm baseline
+used the historical `history-preserving` policy and remains immutable. The
+reconcile-plus-assistant configuration was freshly ingested and answered, and
+the exact post-deletion build received a separate smoke. Two saved-retrieval
+re-answer runs use fresh, distinct answer ledgers; all result sets use three
+judge votes per answer. The original replicate manifest freezes its quality
+and cost gate.
 
 | Provenance item | Digest or revision |
 | --- | --- |
@@ -1136,8 +1183,10 @@ votes per answer. The replicate manifest freezes the quality and cost gate.
 | pgvector main | `0c7774187da9330144df2a038ef18ee89ef2ae1c` |
 | pgvector parent candidate | `0797067f40743fbe789eff65315d74b05b7c454c` |
 | pgvector three-arm candidate | `bd6b31f92a904023df0c77c6762fa95b5e359456` (evaluated tree: `eaf5f49f1fa47856ff919798bcc93a41be71f6ec`) |
-| pgvector current development candidate | `969fb16a918d6abae8bb06d52cb784490c8a2eb4` |
-| Current benchmark revision | `cd4ce12b0f920618af37e55c8355e6e4b6edd6cc` |
+| pgvector prompt-compaction candidate | `969fb16a918d6abae8bb06d52cb784490c8a2eb4` |
+| pgvector final reconcile candidate | `2432019572845c182d37a2872f056a6e7bee33c7` |
+| Full reconcile-configuration benchmark | `536b0979345e607bc06e6975040c7f51336a6abe` |
+| Simplification-run benchmark | `126a585b6a68530d5ec17d9c69eee33317adbf12` |
 | Dataset SHA-256 | `821a2034d219ab45846873dd14c14f12cfe7776e73527a483f9dac095d38620c` |
 | Selection SHA-256 | `b10651ad0caa76696a2d885da060969d0d24d2e1cdba4130308ef745f95621fb` |
 | Protocol SHA-256 | `9b001708920522d7ad2cd477824208b5692eb52bcd1c205e46fb9fbb5b57b9a4` |
@@ -1150,6 +1199,12 @@ votes per answer. The replicate manifest freezes the quality and cost gate.
 | Fresh LoCoMo prompt-pair audit SHA-256 | `64963ebd8b481873012631a85adb21fc1aa9d87b6491accb751a7b8d945a5d2c` |
 | Repeated fixed-memory LoCoMo audit SHA-256 | `4bb1d7606099029d2cbb8ed00600ef2a38570b0bbac89ccffe2bc540d9632fbf` |
 | Engineering synthesis audit SHA-256 | `7298a75fc436e90d84d6adcbf06cee779120fd7450ac8d10297b51b50d3423a5` |
+| Final reconcile dev16 audit SHA-256 | `92585f5c1dd67983ed241c9ae55c885183409163d276e58b33d267b6e5ab952c` |
+| Final reconcile dev16 checksum-manifest SHA-256 | `aadc7233009a05ea6d49bfca406b049d1b5a6e2b8556960df7fa6273f45558cb` |
+| LoCoMo update-policy audit SHA-256 | `15e16594cfe59cb30883c4d91911b81384d501e0389591fb0cf4806cc2cfbdd8` |
+| LoCoMo update-policy checksum-manifest SHA-256 | `292ff0a81b805978e7822ff5ee2b6a0bb5b22c10fdf52ee7c8976314d6017a61` |
+| Final implementation-smoke audit SHA-256 | `0415aa9bdb973f178aadd4d83cc8db0c3caaa157d395663627a56cca2d8765aa` |
+| Final implementation-smoke checksum-manifest SHA-256 | `7a3f0b0d5e31b2dfb4880769f98f10aea62673e6f0862e1882614040b5ce6a92` |
 | Mem0 | source `b05cce58`, runtime `9d027353`, image `81d80e337521` |
 
 The audit verifies exact builds, complete provider usage, zero errors, isolated

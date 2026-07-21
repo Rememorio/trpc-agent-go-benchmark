@@ -356,7 +356,7 @@ LME_AGENT_REPLACEMENT="trpc.group/trpc-go/trpc-agent-go@<candidate-pseudo-versio
   -lme-judge-runs 3 \
   -lme-answer=true \
   -lme-answer-cache "$LME_BLIND_ANSWER_CACHE" \
-  -pgvector-update-policy history-preserving \
+  -pgvector-update-policy reconcile \
   -pgvector-assistant-result-extraction=true \
   -vector-topk 30 \
   -table-suffix _lme_holdout_candidate \
@@ -400,7 +400,7 @@ LME_AGENT_PROFILE=upstream \
   -lme-abstention-count 4 \
   -lme-sample-seed 48 \
   -lme-implementation candidate-<commit> \
-  -pgvector-update-policy history-preserving \
+  -pgvector-update-policy reconcile \
   -pgvector-assistant-result-extraction=true \
   -lme-answer=true \
   -lme-answer-cache ../results/lme-answer-cache.json \
@@ -677,7 +677,7 @@ build provenance.
 | `-scenario`         | long_context           | Evaluation scenario (comma-separated)  |
 | `-memory-backend`   | inmemory               | Memory backend (comma-separated)       |
 | `-pgvector-dsn`     | (env)                  | PostgreSQL DSN for pgvector            |
-| `-pgvector-update-policy` | reconcile            | Auto-memory reconciliation policy      |
+| `-pgvector-update-policy` | reconcile            | `reconcile` or `add-only`               |
 | `-pgvector-assistant-result-extraction` | false | Retain concrete assistant results   |
 | `-mysql-dsn`        | (env)                  | MySQL DSN for mysql backend            |
 | `-embed-model`      | text-embedding-3-small | Embedding model for vector backends    |
