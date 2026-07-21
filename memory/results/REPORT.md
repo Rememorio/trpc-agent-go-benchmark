@@ -123,6 +123,12 @@ answers and structured deliverables, and retry malformed structured
 extraction output. If extraction still produces no operation, qualifying
 long assistant output is stored through a conservative fallback.
 
+The final candidate keeps the second-pass structured-result recovery narrow:
+it receives the current dated user/assistant pair, while persistence still
+uses the existing-memory snapshot for duplicate and conflict handling. This
+removes an unnecessary copy of all existing memories from the recovery prompt
+without weakening downstream reconciliation.
+
 Extraction context also retains cumulative observation times so that a later
 turn cannot erase when an earlier state was observed. Focused source passages
 preserve the concrete entity or list that triggered assistant-result recovery,
@@ -401,15 +407,26 @@ shared-cache dependent and reported separately in the raw artifacts:
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | pgvector main | 183 | 1,187,759 | 599,360 | 694 | 21,919 | 151 | 1,313s | 16.6s |
 | Mem0 OSS | 183 | 1,764,654 | 1,410,624 | 373 | 116,725 | 485 | 1,278s | 20.9s |
-| pgvector candidate | 210 | 1,838,020 | 998,272 | 612 | 36,862 | 410 | 1,753s | 14.9s |
+| pgvector candidate | 207 | 1,790,001 | 968,960 | 619 | 35,922 | 416 | 2,301s | 20.3s |
 
-Against main, the candidate uses 1.547x LLM tokens, 1.682x embedding tokens,
-and 2.715x as many final memories; ingestion is 33.5% slower. These values pass
-the preregistered limits of 1.55x, 2.0x, and 3.0x, but the LLM-token result is
-close to its boundary and should not be described as a cost improvement.
-Against Mem0, the candidate uses 4.2% more memory LLM tokens but 68.4% fewer
-embedding tokens and 15.5% fewer final memories. Cached tokens stay separate
-because provider billing differs.
+Against main, the final candidate uses 1.507x LLM tokens, 1.639x embedding
+tokens, and 2.755x as many final memories. These values pass the preregistered
+limits of 1.53x, 2.0x, and 3.0x. Against Mem0, it uses 1.4% more memory LLM
+tokens, 69.2% fewer embedding tokens, and 14.2% fewer final memories. Cached
+tokens stay separate because provider billing differs. Ingestion took 2,301s
+in this run, 31.3% longer than the parent candidate and 75.3% longer than main;
+two transient embedding-provider 500 responses recovered through retries, so
+wall-clock latency is reported as an observed outcome rather than attributed
+solely to the algorithm.
+
+The compact-recovery ablation reused the fixed observed 16-question selection
+and retained 48/48 correct answer replicates with 144/144 correct judge votes.
+Relative to the parent candidate, recovery calls fell from 27 to 24, memory
+LLM calls from 210 to 207, LLM tokens by 2.6%, and embedding tokens by 2.6%.
+Final memories increased from 410 to 416, so this is a small prompt-cost
+improvement rather than a storage or end-to-end latency improvement. Removing
+recovery entirely was rejected on the observed mechanism set: `e3fc4d6e`
+produced zero memories and all retrieval evidence was absent.
 
 The saved traces distinguish memory failures from answer variance:
 
@@ -987,11 +1004,11 @@ Agno                |====================                      | 0.267
 
 7. **The next target is generalization at a lower extraction cost.** The
    candidate closes every observed LongMemEval development gap, but uses
-   1.547x main's memory LLM tokens and 2.715x its final memories. LoCoMo's
+   1.507x main's memory LLM tokens and 2.755x its final memories. LoCoMo's
    three-repeat mean F1 delta is `-0.0282`, within the regression gate but not
-   an improvement. Further tuning should reduce recovery overhead only when a
-   mechanism-level ablation preserves assistant-only cases, then advance to a
-   preregistered unseen full-haystack holdout.
+   an improvement. Compact recovery reduced observed LLM-token overhead while
+   preserving assistant-only cases; the next promotion step is a preregistered
+   unseen full-haystack holdout, not further tuning on these 16 questions.
 
 ### Production Recommendations
 
@@ -1072,15 +1089,18 @@ votes per answer. The replicate manifest freezes the quality and cost gate.
 
 | Provenance item | Digest or revision |
 | --- | --- |
-| Benchmark | `f7cf9370057daa382db925ca67500b9f66f173da` |
+| Formal three-arm benchmark | `f7cf9370057daa382db925ca67500b9f66f173da` |
+| Compact-ablation benchmark | `8eb0bac316ee67938ab6ecb6052ff227f94363e0` |
 | pgvector main | `0c7774187da9330144df2a038ef18ee89ef2ae1c` |
-| pgvector candidate | `0797067f40743fbe789eff65315d74b05b7c454c` |
+| pgvector parent candidate | `0797067f40743fbe789eff65315d74b05b7c454c` |
+| pgvector final candidate | `bd6b31f92a904023df0c77c6762fa95b5e359456` (evaluated tree: `eaf5f49f1fa47856ff919798bcc93a41be71f6ec`) |
 | Dataset SHA-256 | `821a2034d219ab45846873dd14c14f12cfe7776e73527a483f9dac095d38620c` |
 | Selection SHA-256 | `b10651ad0caa76696a2d885da060969d0d24d2e1cdba4130308ef745f95621fb` |
 | Protocol SHA-256 | `9b001708920522d7ad2cd477824208b5692eb52bcd1c205e46fb9fbb5b57b9a4` |
 | Replicate manifest SHA-256 | `7baecdce61be140d5cbe3163519b8ee5503eaafdca842f37c087417e297871d2` |
 | Aggregate SHA-256 | `fb5e37a2327d00802055e388c2125f564c402ccbb1261fbfffc486f8f7819974` |
 | Audit SHA-256 | `17ae45dc27ffc3d89f8f1c244ac420ba73c1b9aa741fbe52c7a45cb71e2e158b` |
+| Compact-ablation audit SHA-256 | `d48ae6d6731c45ae05bc52c753df331cf204a38150896b748d7d1ac0db071981` |
 | Mem0 | source `b05cce58`, runtime `9d027353`, image `81d80e337521` |
 
 The audit verifies exact builds, complete provider usage, zero errors, isolated

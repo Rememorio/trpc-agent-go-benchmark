@@ -11,11 +11,17 @@ This directory stores memory benchmark evaluation results.
 
 ## LongMemEval Memory Evaluation Summary
 
-The production-style LongMemEval Oracle evaluation uses one 16-question
-development subset and one zero-overlap 16-question holdout. Pgvector scores
-13/16 versus mem0 at 11/16 on development after identical-answer judge-drift
-normalization, then scores 15/16 versus 14/16 on the unseen holdout. See the
-unified reports for replay design, token usage, bad cases, and limitations.
+The current production-style LongMemEval Oracle evaluation uses one fixed,
+already-observed 16-question development regression spanning all six types.
+Every arm replays all 183 selected user/assistant pairs, generates three
+independent answers per question, and judges every answer three times.
+Pgvector main scores 12/16 (36/48 answer replicates), self-hosted Mem0 OSS
+scores 14/16 (41/48), and the final pgvector candidate scores 16/16 (48/48).
+A compact-recovery ablation reduces candidate memory LLM tokens from 1,838,020
+to 1,790,001 while retaining quality, but does not reduce final memory count or
+wall-clock ingestion time. No unseen protocol-v2 holdout has been selected or
+run. See the unified reports for replay design, usage, bad cases, provenance,
+and limitations.
 
 ## LoCoMo Benchmark Evaluation Summary
 

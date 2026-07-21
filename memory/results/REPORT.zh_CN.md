@@ -103,6 +103,11 @@ LongMemEval 进一步暴露了生产路径上的另一组可靠性问题。相�
 提取结果格式错误时重试。如果重试后仍没有 operation，符合条件的
 长 assistant 输出会通过保守 fallback 保存。
 
+最终 candidate 进一步收窄了第二遍结构化结果 recovery 的上下文：模型只
+接收当前带日期的 user/assistant pair，而 persistence 仍使用既有 memory
+snapshot 进行重复与冲突处理。这样可以从 recovery prompt 中移除整份既有
+memory，同时不削弱后续 reconciliation。
+
 提取上下文还会累积 observation time，避免后续 turn 擦除早期状态的
 观察时间；focused source passage 在 recovery 时保留触发它的具体实体
 或列表；temporal retrieval 在混合检索之外保留一个有界的日期事件尾部。
@@ -361,14 +366,22 @@ answer 与 judge 调用；后者在原始制品中单独记录：
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | pgvector main | 183 | 1,187,759 | 599,360 | 694 | 21,919 | 151 | 1,313s | 16.6s |
 | Mem0 OSS | 183 | 1,764,654 | 1,410,624 | 373 | 116,725 | 485 | 1,278s | 20.9s |
-| pgvector candidate | 210 | 1,838,020 | 998,272 | 612 | 36,862 | 410 | 1,753s | 14.9s |
+| pgvector candidate | 207 | 1,790,001 | 968,960 | 619 | 35,922 | 416 | 2,301s | 20.3s |
 
-相对 main，candidate 使用 1.547 倍 LLM token、1.682 倍 embedding token
-和 2.715 倍最终 memory，入库慢 33.5%。它通过了预注册的 1.55、2.0、
-3.0 倍上限，但 LLM token 很接近边界，不能描述为成本改善。相对 Mem0，
-candidate 多使用 4.2% 的 memory LLM token，但少使用 68.4% 的 embedding
-token 和 15.5% 的最终 memory。Cached token 单列，因为 provider 计费
-方式不同。
+相对 main，最终 candidate 使用 1.507 倍 LLM token、1.639 倍 embedding
+token 和 2.755 倍最终 memory，通过了预注册的 1.53、2.0、3.0 倍上限。
+相对 Mem0，它多使用 1.4% 的 memory LLM token，但少使用 69.2% 的
+embedding token 和 14.2% 的最终 memory。Cached token 单列，因为 provider
+计费方式不同。本轮入库耗时 2,301 秒，比 parent candidate 多 31.3%，比
+main 多 75.3%；期间两次 embedding provider 500 均通过重试恢复，因此这里只
+报告 wall-clock 观测结果，不把延迟变化完全归因于算法。
+
+compact-recovery 消融复用了固定的已观察 16 题选择，仍达到 48/48 个正确
+answer replicate 和 144/144 个正确 judge vote。相对 parent candidate，
+recovery 调用从 27 降到 24，memory LLM 调用从 210 降到 207，LLM token
+和 embedding token 均下降约 2.6%。最终 memory 从 410 增至 416，因此这是
+小幅 prompt 成本改善，不是存储量或端到端延迟改善。完全移除 recovery 的
+方案已在机制集上被否决：`e3fc4d6e` 产生 0 条 memory，召回证据也完全缺失。
 
 保存的 trace 可以把 memory failure 与 answer variance 分开：
 
@@ -880,10 +893,10 @@ Agno                |====================                      | 0.267
 
 7. **下一步重点是在降低提取成本的同时验证泛化。** candidate 已修复
    所有已观察 LongMemEval 开发 gap，但 memory LLM token 是 main 的
-   1.547 倍，最终 memory 是 2.715 倍。LoCoMo 三次回归的平均 F1 delta
+   1.507 倍，最终 memory 是 2.755 倍。LoCoMo 三次回归的平均 F1 delta
    为 `-0.0282`，在 gate 内但不是改善。只有机制消融能保持 assistant-only
-   case 时才应削减 recovery 开销，随后再进入预注册的未见 full-haystack
-   holdout。
+   case 时才应削减 recovery 开销；compact recovery 已满足这一条件，下一步
+   应进入预注册的未见 full-haystack holdout，而不是继续针对这 16 题调参。
 
 ### 生产建议
 
@@ -964,15 +977,18 @@ judge。Replicate manifest 在运行前冻结质量和成本 gate。
 
 | Provenance 项 | Digest 或 revision |
 | --- | --- |
-| Benchmark | `f7cf9370057daa382db925ca67500b9f66f173da` |
+| 正式三臂 benchmark | `f7cf9370057daa382db925ca67500b9f66f173da` |
+| Compact 消融 benchmark | `8eb0bac316ee67938ab6ecb6052ff227f94363e0` |
 | pgvector main | `0c7774187da9330144df2a038ef18ee89ef2ae1c` |
-| pgvector candidate | `0797067f40743fbe789eff65315d74b05b7c454c` |
+| pgvector parent candidate | `0797067f40743fbe789eff65315d74b05b7c454c` |
+| pgvector 最终 candidate | `bd6b31f92a904023df0c77c6762fa95b5e359456`（评测 tree：`eaf5f49f1fa47856ff919798bcc93a41be71f6ec`） |
 | Dataset SHA-256 | `821a2034d219ab45846873dd14c14f12cfe7776e73527a483f9dac095d38620c` |
 | Selection SHA-256 | `b10651ad0caa76696a2d885da060969d0d24d2e1cdba4130308ef745f95621fb` |
 | Protocol SHA-256 | `9b001708920522d7ad2cd477824208b5692eb52bcd1c205e46fb9fbb5b57b9a4` |
 | Replicate manifest SHA-256 | `7baecdce61be140d5cbe3163519b8ee5503eaafdca842f37c087417e297871d2` |
 | Aggregate SHA-256 | `fb5e37a2327d00802055e388c2125f564c402ccbb1261fbfffc486f8f7819974` |
 | Audit SHA-256 | `17ae45dc27ffc3d89f8f1c244ac420ba73c1b9aa741fbe52c7a45cb71e2e158b` |
+| Compact 消融 Audit SHA-256 | `d48ae6d6731c45ae05bc52c753df331cf204a38150896b748d7d1ac0db071981` |
 | Mem0 | source `b05cce58`、runtime `9d027353`、image `81d80e337521` |
 
 Audit 校验精确 build、完整 provider usage、零错误、隔离 store、每个实验臂

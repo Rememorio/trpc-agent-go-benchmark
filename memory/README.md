@@ -59,15 +59,18 @@ Based on:
 |-----|--------:|---------:|-------------------:|------------------:|---------------:|
 | pgvector main | 12/16 | 12/16 | 36/48 | 1,187,759 | 151 |
 | Mem0 OSS | 14/16 | 14/16 | 41/48 | 1,764,654 | 485 |
-| pgvector candidate | **16/16** | **16/16** | **48/48** | 1,838,020 | 410 |
+| pgvector candidate | **16/16** | **16/16** | **48/48** | 1,790,001 | 416 |
 
 LongMemEval replays 183 user/assistant pairs per arm through the production
 auto-memory path, then generates three independent answers with three judge
 votes each. The candidate passes the preregistered quality, category, usage,
-and cost gates, but this fixed 16-question set was already observed during
-development. It is not unseen evidence or a full-dataset significance claim;
-see the full English or Chinese report for provenance, stage-level bad cases,
-LoCoMo regression, and limitations.
+and cost gates. A compact-recovery ablation preserved 48/48 correct answers
+while reducing memory LLM tokens by 2.6% relative to its parent candidate;
+final memory count and wall-clock ingestion time did not improve. This fixed
+16-question set was already observed during development. It is not unseen
+evidence or a full-dataset significance claim; see the full English or Chinese
+report for provenance, stage-level bad cases, LoCoMo regression, and
+limitations.
 
 ## SQLite vs SQLiteVec (Subset)
 
