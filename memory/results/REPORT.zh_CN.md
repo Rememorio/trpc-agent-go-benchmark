@@ -19,10 +19,10 @@ LoCoMo 评估涵盖一个 long-context 上界和三种 memory 策略：
 - **Session Recall**：在查询时检索已持久化的原始 session event
 
 以上方案与四个 Python Agent 框架（AutoGen、Agno、ADK、
-CrewAI）和十个外部记忆系统（Mem0、Zep 等）进行对比。
-LongMemEval 则使用两个受控的 16 题子集：一个用于开发，另一个
-作为未见盲测。其目标是提供可诊断的证据，而不是声称代表完整
-500 题数据集。
+CrewAI）和十个外部记忆系统（Mem0、Zep 等）进行对比。当前
+LongMemEval protocol v2 评估使用一个固定、已经观察过的 16 题开发集，
+每个实验臂生成三次独立答案。它用于回归与机制分析，不是未见证据，
+也不代表完整 500 题数据集。
 
 ## 2. 实验设置
 
@@ -31,12 +31,13 @@ LongMemEval 则使用两个受控的 16 题子集：一个用于开发，另一�
 | 基准 | 范围 | 类别 | 模型 | Embedding |
 | --- | --- | --- | --- | --- |
 | LoCoMo-10 | 10 个对话，1,986 个 QA | single-hop (282), multi-hop (321), temporal (96), open-domain (841), adversarial (446) | GPT-4o-mini（推理 + 评判） | text-embedding-3-small |
-| LongMemEval Oracle | 从 500 题中抽取两个 16 题分层子集 | knowledge-update、multi-session、single-session-assistant、single-session-preference、single-session-user、temporal-reasoning；其中 30 题为 abstention | glm52（memory、回答与评判） | text-embedding-3-small |
+| LongMemEval Oracle | 从 500 题中固定的 16 题已观察开发回归集 | knowledge-update、multi-session、single-session-assistant、single-session-preference、single-session-user、temporal-reasoning；所选问题中 4 题为 abstention | glm52（memory、回答与评判） | text-embedding-3-small |
 
 LoCoMo 用于广泛质量评估与跨系统比较。LongMemEval Oracle 去掉了
 大量无关 session 的 haystack，使失败更容易归因到 memory 提取、
 持久化、召回或回答阶段，但它不能替代未来在嘈杂长历史上的
-LongMemEval-M 评测。
+LongMemEval-M 评测。早期 protocol v1 子集仍可用于诊断，但不同后端的
+日期传递方式不一致，因此不再支撑正式的跨后端结论。
 
 ### 2.2 LoCoMo 评估场景
 
@@ -102,6 +103,12 @@ LongMemEval 进一步暴露了生产路径上的另一组可靠性问题。相�
 提取结果格式错误时重试。如果重试后仍没有 operation，符合条件的
 长 assistant 输出会通过保守 fallback 保存。
 
+提取上下文还会累积 observation time，避免后续 turn 擦除早期状态的
+观察时间；focused source passage 在 recovery 时保留触发它的具体实体
+或列表；temporal retrieval 在混合检索之外保留一个有界的日期事件尾部。
+这些机制只在 candidate 实验臂显式开启，upstream main 的默认 reconcile
+行为保持兼容。
+
 自动 Add reconcile 现在只改写高置信近重复内容，相关但不同的计划、
 推荐、事件和实体列表会分别保留。异步任务中的 Add、Update、Delete
 和 Clear 错误会向上传播并写入 session state，失败任务不再推进提取
@@ -117,21 +124,24 @@ mem0 通过公开 API 接收同一个原始 pair。源 session 日期不写入�
 正文，而是独立传递并填入各后端的 observation-date context。回答模型
 只看到搜索出的 memories，不会看到原始对话。
 
-两个后端都使用 temperature 0 的 glm52、`text-embedding-3-small`
-和 top-k 50。Self-hosted mem0 v1.1 使用 pgvector 作为 vector store。
-Runner 会记录提取 operation、memory diff、retrieval hit、证据来源、
-错误、耗时、LLM/embedding usage、cached tokens、构建 revision 和
-脱敏后的 mem0 配置。
+三个实验臂都使用 temperature 0 的 glm52、`text-embedding-3-small`
+和 top-k 30。它们分别是采用默认 reconcile 的 upstream-main pgvector、
+采用 history-preserving update 并提取 assistant result 的 candidate
+pgvector，以及固定镜像的 self-hosted Mem0 OSS（pgvector 后端）。Runner
+记录 extraction operation、memory diff、retrieval hit、证据来源、错误、
+耗时、LLM/embedding usage、cached tokens、构建 revision 和脱敏 Mem0 配置。
 
-抽样过程是确定性的，并将可回答问题与 abstention 问题分开。每个
-子集从 LongMemEval 的每种类型抽取 2 个非 abstention 问题，再从全部
-abstention 问题中抽取 4 个，共 16 题。Seed48 是开发集；seed137 是
-未见盲测，与修改 memory service 时使用过的 50 个开发、定向验证和
-早期 holdout question ID 零重叠。
+固定开发集从每种 LongMemEval 类型抽取 2 个可回答问题，再加入 4 个
+abstention，共 16 题；每个实验臂重放 183 个 user/assistant pair。每个臂
+基于保存的 top-k 独立回答三次，每次答案再接受三个独立 semantic-judge
+投票。同一 replicate 内各臂共享一个空的 content-addressed answer/judge
+ledger，不同 replicate 使用不同 ledger。Exact Match、F1 和 BLEU 仅作
+辅助诊断。
 
-严格语义 judge 对保存的原始答案进行评分，Exact Match、F1 和 BLEU
-作为辅助诊断保留。若两次运行的归一化问题、参考答案和模型答案完全
-相同，则冲突的语义 verdict 会被报告为 judge drift，而不是行为变化。
+比较前会校验 dataset、selection、protocol、prompt、model、build 和 Mem0
+runtime digest。运行前冻结的晋级 gate 同时覆盖多数正确率、正确 replicate
+总数、类别回退、provider usage、backend error、token、embedding 和 memory
+数量。本轮没有选择或运行新的 blind holdout。
 
 ## 3. 结果
 
@@ -318,58 +328,70 @@ Long-Context 将完整对话历史放入单次 LLM 调用，在短单 session
 
 ### 3.4 LongMemEval：pgvector vs Self-Hosted mem0
 
-> **协议修正：** 本节结果保留用于 bad-case 诊断，但不再视为正式的
-> 跨后端 baseline。该轮 Mem0 replay 在消息正文前加入了 observation-date
-> 指令，而 pgvector 通过 extraction context 接收日期。修正后的 runner
-> 保持两个后端的 user/assistant 正文逐字一致，并通过 metadata 独立传递
-> 日期；全部评测臂按新协议重跑后会替换下表。
+> **证据范围：** 本节是固定、已经观察过的 16 题开发回归，协议为
+> `lme-memory-turn-pair-v2`。它验证 protocol 和 candidate 机制，但不是
+> 未见 holdout。早期 protocol v1 seed48/seed137 结果只保留为历史诊断。
 
-LongMemEval 比较评估的是生产 auto-memory 路径，而不是前文的 LoCoMo
-检索变体。两个后端重放相同的对话 pair，并使用相同的回答协议。
-seed48 用于开发，seed137 是独立盲测。
+Protocol v2 比较评估的是生产 auto-memory 路径，而不是前文的 LoCoMo
+检索变体。三个实验臂重放相同的 183 个 user/assistant pair，消息正文
+逐字一致，日期只通过 metadata 传递，Top-K 均为 30，store 相互隔离。
+每个实验臂独立回答三次，每次答案接受三个 semantic-judge 投票。
 
-| 子集 | 角色 | 后端 | Judge | EM | 平均 F1 |
-| --- | --- | --- | ---: | ---: | ---: |
-| seed48 | 开发集 | mem0 | 11/16 | 3/16 | 0.300 |
-| seed48 | 开发集 | fallback 前 pgvector | 11/16 | 2/16 | 0.192 |
-| seed48 | 开发集 | 最终 pgvector，raw judge | 12/16 | 3/16 | 0.282 |
-| seed48 | 开发集 | 最终 pgvector，drift-normalized | **13/16** | 3/16 | 0.282 |
-| seed137 | 未见盲测 | mem0 | 14/16 | 5/16 | 0.453 |
-| seed137 | 未见盲测 | 最终 pgvector | **15/16** | **7/16** | **0.553** |
+| 实验臂 | Memory 策略 | Primary | Majority | 正确 replicate | 不稳定 case | 错误 |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| pgvector main | 默认 reconcile；不提取 assistant result | 12/16 | 12/16 | 36/48 | 0 | 0 |
+| Mem0 OSS | 固定的 self-hosted OSS runtime | 14/16 | 14/16 | 41/48 | 1 | 0 |
+| pgvector candidate | history-preserving；提取 assistant result | **16/16** | **16/16** | **48/48** | **0** | **0** |
 
-seed48 有一个问题在归一化问题、参考答案和模型答案完全相同时得到
-冲突的 semantic-judge verdict。将该问题视为未变化后，pgvector 有
-两个改善且没有行为回退。两个子集合计，raw judge 正确数为 pgvector
-27/32、mem0 25/32；应用相同答案规则后 pgvector 为 28/32。
+收益没有集中在单一类别：
 
-seed137 每个后端重放了 144 个 user/assistant pair。该盲测的
-provider-reported usage 如下：
+| LongMemEval 类型 | 题数 | pgvector main | Mem0 OSS | pgvector candidate |
+| --- | ---: | ---: | ---: | ---: |
+| knowledge-update | 2 | 2 | 2 | 2 |
+| multi-session | 4 | 3 | 3 | **4** |
+| single-session-assistant | 2 | 0 | **2** | **2** |
+| single-session-preference | 2 | 1 | **2** | **2** |
+| single-session-user | 3 | 3 | 3 | 3 |
+| temporal-reasoning | 3 | **3** | 2 | **3** |
 
-| 后端 | LLM 调用 | LLM Tokens | Cached Tokens | Embedding 调用 | Embedding Tokens |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| mem0 | 160 | 1,446,726 | 1,107,264 | 297 | 112,771 |
-| pgvector | 161 | 1,322,812 | 688,384 | 873 | 54,882 |
-| semantic judge | 32 | 8,324 | 832 | 0 | 0 |
+下表为 provider 上报的 memory-layer 成本，不含会受共享 cache 影响的
+answer 与 judge 调用；后者在原始制品中单独记录：
 
-pgvector 在 seed137 上少使用 8.6% 的 LLM token 和 51.3% 的
-embedding token，但进行了更多次、更短的 embedding 请求。Cached
-tokens 单独报告，因为不同 provider 的计费方式可能不同。
+| 实验臂 | Memory LLM 调用 | Memory LLM Tokens | Cached Tokens | Embedding 调用 | Embedding Tokens | 最终 memories | 入库耗时 | 搜索耗时 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| pgvector main | 183 | 1,187,759 | 599,360 | 694 | 21,919 | 151 | 1,313s | 16.6s |
+| Mem0 OSS | 183 | 1,764,654 | 1,410,624 | 373 | 116,725 | 485 | 1,278s | 20.9s |
+| pgvector candidate | 210 | 1,838,020 | 998,272 | 612 | 36,862 | 410 | 1,753s | 14.9s |
 
-保存的 trace 可以把剩余分歧归因到具体阶段：
+相对 main，candidate 使用 1.547 倍 LLM token、1.682 倍 embedding token
+和 2.715 倍最终 memory，入库慢 33.5%。它通过了预注册的 1.55、2.0、
+3.0 倍上限，但 LLM token 很接近边界，不能描述为成本改善。相对 Mem0，
+candidate 多使用 4.2% 的 memory LLM token，但少使用 68.4% 的 embedding
+token 和 15.5% 的最终 memory。Cached token 单列，因为 provider 计费
+方式不同。
 
-- `e3fc4d6e` 原本是长 assistant 实体列表的 pgvector extraction miss。
-  Structured-output fallback 保留列表后，答案从 `I don't know` 变为
-  exact match `Dr. Arati Prabhakar`。
-- `8a2466db` 是唯一的 pgvector-only 盲测失败。源 assistant 给出了
-  Adobe Premiere Pro 学习资源，但 pgvector 只保留了用户对高级设置
-  的兴趣。这是部分 assistant-output extraction miss，不是排序失败；
-  看到该盲测问题后没有继续修改实现。
-- mem0 的两个盲测独有失败 `09ba9854` 和 `51b23612` 已召回相关
-  memories，但在回答阶段分别遗漏 `$50` 和 `Nu, pogodi!`。
+保存的 trace 可以把 memory failure 与 answer variance 分开：
 
-两个受控子集上的一致优势和 stage-level trace 支持当前改动，但 32 题
-不足以得出统计显著结论。后续仍需更大的未见 Oracle 子集和
-LongMemEval-M 作为确认性评测。
+- `38146c39`：main 只保留了最新的 muscovado 决定和泛化 sugar 偏好，
+  丢失早期 turbinado 偏好与具体搭配建议；candidate 同时保留状态历史和
+  assistant guidance。
+- `cc539528`：main 只保存用户对前后端开发的兴趣，无法恢复推荐语言；
+  candidate 保存 `Ruby, Python, PHP` 列表，三次均答对。
+- `e3fc4d6e`：main 对一段长 assistant 文章没有生成 memory；candidate
+  的保守 recovery 保存实体，三次均回答 `Dr. Arati Prabhakar`。
+- `d682f1a2`：main 已经保存并召回 Fresh Fusion、Domino's 和 Uber Eats，
+  但三次均回答 `2`；candidate 回答 `3`。这是 answer-context effect，
+  不是 extraction 或 retrieval miss，因此不用于支持定向 memory 规则。
+- Mem0 的 `09ba9854_abs` 把 assistant 建议的 bus/taxi 价格当成用户事实，
+  错答本应 abstain 的问题。`gpt4_7abb270c` 的 Top-30 覆盖全部六个 source
+  session，但被 recommendation memory 挤占且 event metadata 不一致，
+  三次均 abstain。`830ce83f` 是唯一不稳定的 Mem0 case，正确率为 2/3。
+
+candidate 因而通过全部预注册开发 gate，包括六类零退化、完整 provider
+usage 和零错误。独立的 LoCoMo 固定快照三次回归仍在容忍范围内（平均
+F1 delta 为 `-0.0282`，要求不低于 `-0.05`），但没有体现广泛 LoCoMo
+提升。要主张泛化，仍需经过授权、预注册的未见 full-haystack holdout
+以及更大的 LongMemEval-M 评测。
 
 ---
 
@@ -820,11 +842,11 @@ Agno                |====================                      | 0.267
    和 adversarial 上仍更强；Long-Context 则仍可作为短单 session
    场景下的上界参考。
 
-3. **生产 pgvector memory 路径在受控 LongMemEval 重放中也领先
-   self-hosted mem0。** seed48 在相同答案 judge 归一化后从 11/16
-   提升到 13/16；未见 seed137 盲测达到 15/16，mem0 为 14/16。
-   样本规模有意控制得较小，但零重叠盲测和保存的 stage-level trace
-   降低了收益来自 benchmark 特定回答策略的风险。
+3. **Opt-in pgvector candidate 在固定 LongMemEval 开发回归中领先
+   upstream main 和 self-hosted Mem0。** Protocol v2 下，candidate
+   达到 16/16、48/48 个正确 answer replicate；main 为 12/16、36/48，
+   Mem0 为 14/16、41/48。Stage-level trace 能解释 assistant-result
+   与 history-preserving 的收益，但本协议尚未运行新的未见 holdout。
 
 4. **trpc-agent-go 已明显超越专用记忆系统。** Session Recall 的
    4 类加权 F1 达到 0.531，显著高于 Mem0g（0.422）、Mem0
@@ -856,11 +878,12 @@ Agno                |====================                      | 0.267
    平衡，而优化版则提供了基于抽取式持久化 memory 的第二种
    路线。
 
-7. **temporal 与结构化 assistant 输出完整性仍是下一步重点。** 优化版在
-   temporal 上达到 0.247，但 Session Recall 目前仍是 0.174。
-   LongMemEval 还剩一个只提取了部分 assistant 推荐内容的盲测问题。
-   时间感知检索、temporal query rewrite、更强的 rerank 和通用的
-   structured-output 完整性规则仍是后续优先方向。
+7. **下一步重点是在降低提取成本的同时验证泛化。** candidate 已修复
+   所有已观察 LongMemEval 开发 gap，但 memory LLM token 是 main 的
+   1.547 倍，最终 memory 是 2.715 倍。LoCoMo 三次回归的平均 F1 delta
+   为 `-0.0282`，在 gate 内但不是改善。只有机制消融能保持 assistant-only
+   case 时才应削减 recovery 开销，随后再进入预注册的未见 full-haystack
+   holdout。
 
 ### 生产建议
 
@@ -870,7 +893,8 @@ Agno                |====================                      | 0.267
 | 跨 session QA / 以准确率优先 | Session Recall |
 | 需要持久化抽取 memory 的长期运行 Agent | 优化版 pgvector auto memory |
 | 历史超出上下文窗口限制 | Session Recall 或优化版 |
-| Memory 回归开发 | 分层 Oracle 子集 + 新的未见 seed |
+| Memory 回归开发 | 固定已观察 Oracle 集 + 保存的 stage-level trace |
+| Candidate 晋级 | 预注册未见 full-haystack holdout + LoCoMo 回归 gate |
 
 ---
 
@@ -884,8 +908,8 @@ Agno                |====================                      | 0.267
 | 模型 | GPT-4o-mini（LoCoMo）；glm52（LongMemEval） |
 | Embedding | text-embedding-3-small |
 | PostgreSQL | 15+ with pgvector extension |
-| 数据集 | LoCoMo-10（10 样本，1,986 QA）；LongMemEval Oracle（两个 16 题子集） |
-| 对比后端 | Self-hosted mem0 v1.1 + pgvector（LongMemEval） |
+| 数据集 | LoCoMo-10（10 样本，1,986 QA）；LongMemEval Oracle（固定已观察 16 题开发回归集） |
+| 对比后端 | 固定 self-hosted Mem0 OSS runtime + pgvector（LongMemEval） |
 
 ### B. 完整类别详情（F1 / BLEU / LLM）
 
@@ -911,29 +935,49 @@ Agno                |====================                      | 0.267
 
 ### D. LongMemEval 复现与 Provenance
 
-本次评估的子集形状可通过以下命令复现：
+精确 question ID 固定在 run manifest 中，不会在重跑时重新抽样。Primary
+实验臂的命令形状如下：
 
 ```bash
-go run . \
+./run-longmemeval.sh \
   -dataset-format longmemeval \
   -dataset ../../summary/data/longmemeval-cleaned/longmemeval_oracle.json \
+  -lme-question-ids "$FROZEN_QUESTION_IDS" \
   -memory-backend pgvector,mem0 \
-  -lme-per-type 2 \
-  -lme-abstention-count 4 \
-  -lme-sample-seed 137 \
+  -pgvector-update-policy reconcile \
+  -pgvector-assistant-result-extraction=false \
   -mem0-llm-temperature 0 \
-  -vector-topk 50 \
-  -debug-dump-memories \
-  -debug-qa-limit 16 \
-  -output ../results/lme-seed137
+  -model glm52 \
+  -eval-model glm52 \
+  -embed-model text-embedding-3-small \
+  -lme-judge-runs 3 \
+  -lme-answer=true \
+  -vector-topk 30 \
+  -output ../results/lme-observed-dev16-main-mem0
 ```
 
-seed137 重放使用 benchmark revision
-`fc0469392299248e281cb9dfc48bd023b54f369f` 和 trpc-agent-go revision
-`ce3dd3b76ca0`。该 benchmark revision 在 temperature flag 保持默认值时
-还不会自动记录 mem0 配置，因此脱敏配置是在重放后读回并且只补充到
-result metadata 中；audit record 验证了 canonical case payload hash
-没有发生变化。当前 runner 会为每个选中的 mem0 运行自动记录配置。
+Candidate pgvector 复用完全相同的 ID 与 protocol，并设置
+`-pgvector-update-policy history-preserving` 和
+`-pgvector-assistant-result-extraction=true`。另外两次基于保存 retrieval
+的 re-answer 使用新的独立 answer ledger；三组结果都对每个答案执行三票
+judge。Replicate manifest 在运行前冻结质量和成本 gate。
+
+| Provenance 项 | Digest 或 revision |
+| --- | --- |
+| Benchmark | `f7cf9370057daa382db925ca67500b9f66f173da` |
+| pgvector main | `0c7774187da9330144df2a038ef18ee89ef2ae1c` |
+| pgvector candidate | `0797067f40743fbe789eff65315d74b05b7c454c` |
+| Dataset SHA-256 | `821a2034d219ab45846873dd14c14f12cfe7776e73527a483f9dac095d38620c` |
+| Selection SHA-256 | `b10651ad0caa76696a2d885da060969d0d24d2e1cdba4130308ef745f95621fb` |
+| Protocol SHA-256 | `9b001708920522d7ad2cd477824208b5692eb52bcd1c205e46fb9fbb5b57b9a4` |
+| Replicate manifest SHA-256 | `7baecdce61be140d5cbe3163519b8ee5503eaafdca842f37c087417e297871d2` |
+| Aggregate SHA-256 | `fb5e37a2327d00802055e388c2125f564c402ccbb1261fbfffc486f8f7819974` |
+| Audit SHA-256 | `17ae45dc27ffc3d89f8f1c244ac420ba73c1b9aa741fbe52c7a45cb71e2e158b` |
+| Mem0 | source `b05cce58`、runtime `9d027353`、image `81d80e337521` |
+
+Audit 校验精确 build、完整 provider usage、零错误、隔离 store、每个实验臂
+16 个 case 和 183 个 pair，并记录 `blind_holdout_authorized=false`。原始
+model trace 与 store 保留为本地评测制品，报告只包含聚合数据和阶段诊断。
 
 ---
 

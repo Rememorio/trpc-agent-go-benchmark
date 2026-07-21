@@ -26,10 +26,10 @@ strategies:
 
 These approaches are compared against four Python agent frameworks
 (AutoGen, Agno, ADK, CrewAI) and ten external memory systems
-(Mem0, Zep, etc.). The LongMemEval evaluation uses two controlled
-16-question subsets: one for development and one unseen holdout.
-It is designed for diagnostic confidence rather than as a claim
-about the complete 500-question dataset.
+(Mem0, Zep, etc.). The current LongMemEval protocol-v2 evaluation uses
+one fixed, already-observed 16-question development set with three
+independent answers per arm. It is a regression and mechanism study,
+not unseen evidence or a claim about the complete 500-question dataset.
 
 ## 2. Experimental Setup
 
@@ -38,13 +38,15 @@ about the complete 500-question dataset.
 | Benchmark | Scope | Categories | Model | Embedding |
 | --- | --- | --- | --- | --- |
 | LoCoMo-10 | 10 conversations, 1,986 QA | single-hop (282), multi-hop (321), temporal (96), open-domain (841), adversarial (446) | GPT-4o-mini (inference + judge) | text-embedding-3-small |
-| LongMemEval Oracle | Two stratified 16-question subsets from 500 questions | knowledge-update, multi-session, single-session-assistant, single-session-preference, single-session-user, temporal-reasoning; 30 abstention questions | glm52 (memory, answer, and judge) | text-embedding-3-small |
+| LongMemEval Oracle | Fixed observed 16-question development regression from 500 questions | knowledge-update, multi-session, single-session-assistant, single-session-preference, single-session-user, temporal-reasoning; four selected abstention questions | glm52 (memory, answer, and judge) | text-embedding-3-small |
 
 LoCoMo is the broad quality and cross-system benchmark. LongMemEval
 Oracle removes the large irrelevant-session haystack so that failures can
 be attributed more precisely to memory extraction, persistence, retrieval,
 or answer generation. The latter does not substitute for a future
-LongMemEval-M evaluation under noisy long histories.
+LongMemEval-M evaluation under noisy long histories. Earlier protocol-v1
+subsets remain useful for diagnosis, but their date transport differed
+between backends and they no longer support the formal cross-backend claim.
 
 ### 2.2 LoCoMo Scenarios
 
@@ -121,6 +123,13 @@ answers and structured deliverables, and retry malformed structured
 extraction output. If extraction still produces no operation, qualifying
 long assistant output is stored through a conservative fallback.
 
+Extraction context also retains cumulative observation times so that a later
+turn cannot erase when an earlier state was observed. Focused source passages
+preserve the concrete entity or list that triggered assistant-result recovery,
+and temporal retrieval keeps a bounded tail of dated events alongside hybrid
+search results. These mechanisms are opt-in for the candidate arm; the default
+reconciliation behavior remains compatible with upstream main.
+
 Automatic Add reconciliation now rewrites only high-confidence
 near-duplicates; related plans, recommendations, events, and entity lists
 remain distinct. Add, Update, Delete, and Clear failures are propagated
@@ -139,23 +148,27 @@ transported outside message content and fills each backend's observation-date
 context. The answer model sees only searched memories, never the raw
 transcript.
 
-Both backends use glm52 at temperature 0, `text-embedding-3-small`, and
-top-k 50 retrieval. Self-hosted mem0 v1.1 uses pgvector as its vector store.
+All arms use glm52 at temperature 0, `text-embedding-3-small`, and top-k 30
+retrieval. The three arms are upstream-main pgvector with default reconcile
+behavior, candidate pgvector with history-preserving updates and assistant
+result extraction, and a pinned self-hosted Mem0 OSS image backed by pgvector.
 The runner records extraction operations, memory diffs, retrieval hits,
-evidence provenance, errors, timings, LLM and embedding usage, cached
-tokens, build revisions, and sanitized mem0 configuration.
+evidence provenance, errors, timings, LLM and embedding usage, cached tokens,
+build revisions, and sanitized Mem0 configuration.
 
-Sampling is deterministic and separates answerable and abstention cases.
-Each subset contains two non-abstention questions from every LongMemEval
-type plus four abstention questions, for 16 questions total. Seed48 is the
-development subset. Seed137 is an unseen holdout with no question-ID overlap
-with the 50 development, targeted-validation, and earlier holdout IDs used
-while changing the memory service.
+The fixed development selection contains two answerable questions from each
+LongMemEval type plus four abstention questions, for 16 questions total and
+183 replayed user/assistant pairs per arm. Every arm answers from its saved
+top-k three times. Each answer receives three independent semantic-judge votes.
+An empty content-addressed answer and judge ledger is shared across arms within
+each replicate, while different replicates use distinct ledgers. Exact match,
+F1, and BLEU remain secondary diagnostics.
 
-A strict semantic judge scores the saved raw answers. Exact match, F1, and
-BLEU are retained as secondary diagnostics. When normalized question,
-reference, and answer are identical across two runs, a conflicting semantic
-verdict is reported as judge drift rather than a behavioral change.
+Dataset, selection, protocol, prompt, model, build, and Mem0 runtime digests
+are checked before comparison. The promotion gate was frozen before execution
+and covers majority quality, total correct replicates, category regressions,
+provider usage, backend errors, token cost, embedding cost, and memory count.
+No new blind holdout was selected or run in this evaluation.
 
 ## 3. Results
 
@@ -353,64 +366,78 @@ We also rerun the same configuration on another representative sample.
 
 ### 3.4 LongMemEval: pgvector vs Self-Hosted mem0
 
-> **Protocol correction:** The results in this subsection are retained for
-> bad-case diagnosis, but are not the final cross-backend baseline. Their Mem0
-> replay prefixed observation-date instructions to message content, while
-> pgvector received the date through extraction context. The corrected runner
-> preserves byte-identical user/assistant content and transports the date as
-> metadata; the table will be replaced after all arms are rerun under that
-> protocol.
+> **Evidence scope:** This is a fixed, already-observed development regression
+> under `lme-memory-turn-pair-v2`. It validates protocol correctness and the
+> candidate mechanisms, but it is not an unseen holdout result. Earlier
+> protocol-v1 seed48/seed137 runs are retained only as historical diagnostics.
 
-The LongMemEval comparison measures the production auto-memory path rather
-than the LoCoMo retrieval variants above. Both backends replay the same
-conversation pairs and use the same answer protocol. The seed48 subset is
-used for development; seed137 is the independent holdout.
+The protocol-v2 comparison measures the production auto-memory path rather
+than the LoCoMo retrieval variants above. All three arms replayed the same 183
+user/assistant pairs with byte-identical message content, metadata-only
+observation dates, top-k 30, and isolated stores. Each arm produced three
+independent answers; every answer received three semantic-judge votes.
 
-| Subset | Role | Backend | Judge | EM | Avg F1 |
-| --- | --- | --- | ---: | ---: | ---: |
-| seed48 | development | mem0 | 11/16 | 3/16 | 0.300 |
-| seed48 | development | pgvector before fallback | 11/16 | 2/16 | 0.192 |
-| seed48 | development | pgvector final, raw judge | 12/16 | 3/16 | 0.282 |
-| seed48 | development | pgvector final, drift-normalized | **13/16** | 3/16 | 0.282 |
-| seed137 | unseen holdout | mem0 | 14/16 | 5/16 | 0.453 |
-| seed137 | unseen holdout | pgvector final | **15/16** | **7/16** | **0.553** |
+| Arm | Memory policy | Primary | Majority | Correct replicates | Unstable | Errors |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| pgvector main | default reconcile; assistant results off | 12/16 | 12/16 | 36/48 | 0 | 0 |
+| Mem0 OSS | pinned self-hosted OSS runtime | 14/16 | 14/16 | 41/48 | 1 | 0 |
+| pgvector candidate | history-preserving; assistant results on | **16/16** | **16/16** | **48/48** | **0** | **0** |
 
-Seed48 contains one conflicting semantic-judge verdict for identical
-normalized question, reference, and answer. Treating that pair as unchanged
-leaves two pgvector improvements and no behavioral regressions. Across both
-subsets, raw judge correctness is 27/32 for pgvector and 25/32 for mem0;
-applying the identical-answer rule gives pgvector 28/32.
+The result is not concentrated in one category:
 
-Seed137 replayed 144 user/assistant pairs per backend. Provider-reported
-usage for that holdout is:
+| LongMemEval type | Cases | pgvector main | Mem0 OSS | pgvector candidate |
+| --- | ---: | ---: | ---: | ---: |
+| knowledge-update | 2 | 2 | 2 | 2 |
+| multi-session | 4 | 3 | 3 | **4** |
+| single-session-assistant | 2 | 0 | **2** | **2** |
+| single-session-preference | 2 | 1 | **2** | **2** |
+| single-session-user | 3 | 3 | 3 | 3 |
+| temporal-reasoning | 3 | **3** | 2 | **3** |
 
-| Backend | LLM Calls | LLM Tokens | Cached Tokens | Embedding Calls | Embedding Tokens |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| mem0 | 160 | 1,446,726 | 1,107,264 | 297 | 112,771 |
-| pgvector | 161 | 1,322,812 | 688,384 | 873 | 54,882 |
-| semantic judge | 32 | 8,324 | 832 | 0 | 0 |
+Provider-reported memory-layer cost excludes answer and judge calls, which are
+shared-cache dependent and reported separately in the raw artifacts:
 
-Pgvector uses 8.6% fewer total LLM tokens and 51.3% fewer embedding tokens
-on seed137, although it makes more, shorter embedding requests. Cached tokens
-remain separate because billing treatment varies by provider.
+| Arm | Memory LLM calls | Memory LLM tokens | Cached tokens | Embedding calls | Embedding tokens | Final memories | Ingest time | Search time |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| pgvector main | 183 | 1,187,759 | 599,360 | 694 | 21,919 | 151 | 1,313s | 16.6s |
+| Mem0 OSS | 183 | 1,764,654 | 1,410,624 | 373 | 116,725 | 485 | 1,278s | 20.9s |
+| pgvector candidate | 210 | 1,838,020 | 998,272 | 612 | 36,862 | 410 | 1,753s | 14.9s |
 
-The traces make the remaining disagreements attributable:
+Against main, the candidate uses 1.547x LLM tokens, 1.682x embedding tokens,
+and 2.715x as many final memories; ingestion is 33.5% slower. These values pass
+the preregistered limits of 1.55x, 2.0x, and 3.0x, but the LLM-token result is
+close to its boundary and should not be described as a cost improvement.
+Against Mem0, the candidate uses 4.2% more memory LLM tokens but 68.4% fewer
+embedding tokens and 15.5% fewer final memories. Cached tokens stay separate
+because provider billing differs.
 
-- `e3fc4d6e` was a pgvector extraction miss on a long assistant entity
-  list. The structured-output fallback preserves the list and changes the
-  answer from `I don't know` to the exact `Dr. Arati Prabhakar`.
-- `8a2466db` is the only pgvector-only holdout failure. The source assistant
-  listed Adobe Premiere Pro learning resources, but pgvector retained only
-  the user's interest in advanced settings. This is a partial assistant-output
-  extraction miss, not a ranking failure. No change was made after observing
-  the holdout case.
-- mem0's two holdout-only failures, `09ba9854` and `51b23612`, have relevant
-  memories in retrieval but miss `$50` and `Nu, pogodi!` at answer generation.
+The saved traces distinguish memory failures from answer variance:
 
-The result shows a consistent advantage on two controlled subsets and gives
-stage-level evidence for the change, but 32 questions are too few for a claim
-of statistical significance. A larger unseen Oracle sample and LongMemEval-M
-remain necessary confirmatory evaluations.
+- `38146c39`: main retains the latest muscovado decision and a generic sugar
+  preference, but loses the earlier turbinado preference and concrete pairing
+  advice. The candidate preserves both state history and assistant guidance.
+- `cc539528`: main stores only the user's front-end/back-end interest and cannot
+  recover the recommended languages. The candidate stores the assistant's
+  `Ruby, Python, PHP` list and answers it in all three replicates.
+- `e3fc4d6e`: main produces no memory from a single long assistant article. The
+  candidate's conservative recovery stores the named entity and returns
+  `Dr. Arati Prabhakar` in all three replicates.
+- `d682f1a2`: main already stores and retrieves Fresh Fusion, Domino's, and
+  Uber Eats, yet answers `2` in all three replicates; the candidate answers
+  `3`. This is an answer-context effect, not evidence of an extraction or
+  retrieval miss, so it is not used to justify a targeted memory rule.
+- Mem0's `09ba9854_abs` failure comes from treating assistant-suggested bus and
+  taxi prices as user-grounded facts and answering an abstention question.
+  Its `gpt4_7abb270c` top-30 contains all six source sessions but is crowded by
+  recommendation memories and lacks consistent event metadata; all three
+  answers abstain. `830ce83f` is the only unstable Mem0 case at 2/3.
+
+The candidate therefore passes every preregistered development gate, including
+zero per-type deficit and complete provider usage. A three-repeat LoCoMo fixed
+snapshot regression remains within its separate tolerance (mean F1 delta
+`-0.0282`, required at least `-0.05`), but it does not show a broad LoCoMo gain.
+An authorized, preregistered unseen full-haystack holdout and a larger
+LongMemEval-M run remain necessary before making a generalization claim.
 
 ---
 
@@ -913,13 +940,12 @@ Agno                |====================                      | 0.267
    robustness, while Long-Context still serves as a useful upper
    bound for short single-session histories.
 
-3. **The production pgvector memory path also leads self-hosted mem0
-   on controlled LongMemEval replay.** It improves from 11/16 to 13/16
-   on seed48 after identical-answer judge normalization, then scores
-   15/16 versus mem0's 14/16 on the unseen seed137 holdout. The sample
-   is intentionally small, but the zero-overlap holdout and saved
-   stage-level traces reduce the risk that the gain is a benchmark-specific
-   answer-policy artifact.
+3. **The opt-in pgvector candidate leads both upstream main and self-hosted
+   Mem0 on the fixed LongMemEval development regression.** Under protocol v2,
+   it scores 16/16 and 48/48 correct answer replicates, versus main's 12/16
+   and 36/48 and Mem0's 14/16 and 41/48. Stage-level traces explain the
+   assistant-result and history-preservation gains, but no new unseen holdout
+   has been run under this protocol.
 
 4. **trpc-agent-go now surpasses dedicated memory systems by a wide
    margin.** Session Recall's 4-category weighted F1 of 0.531 is well
@@ -959,13 +985,13 @@ Agno                |====================                      | 0.267
    while the optimized version provides a second memory strategy built on
    extracted persistent memories.
 
-7. **Temporal reasoning and structured assistant-output completeness
-   remain the next optimization targets.** The optimized version reaches
-   0.247 in temporal, but Session Recall is
-   still at 0.174. LongMemEval additionally leaves one holdout case where
-   only part of an assistant recommendation was extracted. Time-aware
-   retrieval, temporal query rewriting, richer reranking, and a general
-   structured-output completeness rule remain the main next steps.
+7. **The next target is generalization at a lower extraction cost.** The
+   candidate closes every observed LongMemEval development gap, but uses
+   1.547x main's memory LLM tokens and 2.715x its final memories. LoCoMo's
+   three-repeat mean F1 delta is `-0.0282`, within the regression gate but not
+   an improvement. Further tuning should reduce recovery overhead only when a
+   mechanism-level ablation preserves assistant-only cases, then advance to a
+   preregistered unseen full-haystack holdout.
 
 ### Production Recommendations
 
@@ -975,7 +1001,8 @@ Agno                |====================                      | 0.267
 | Cross-session QA / best accuracy | Session Recall |
 | Long-running agents with durable extracted memory | Optimized pgvector auto memory |
 | History exceeding context window | Session Recall or optimized |
-| Memory regression development | Stratified Oracle subset plus a new unseen seed |
+| Memory regression development | Fixed observed Oracle set with saved stage-level traces |
+| Candidate promotion | Preregistered unseen full-haystack holdout plus LoCoMo regression gate |
 
 ---
 
@@ -989,8 +1016,8 @@ Agno                |====================                      | 0.267
 | Models | GPT-4o-mini (LoCoMo); glm52 (LongMemEval) |
 | Embedding | text-embedding-3-small |
 | PostgreSQL | 15+ with pgvector extension |
-| Datasets | LoCoMo-10 (10 samples, 1,986 QA); LongMemEval Oracle (two 16-question subsets) |
-| Comparison backend | Self-hosted mem0 v1.1 with pgvector (LongMemEval) |
+| Datasets | LoCoMo-10 (10 samples, 1,986 QA); LongMemEval Oracle (fixed observed 16-question development regression) |
+| Comparison backend | Pinned self-hosted Mem0 OSS runtime with pgvector (LongMemEval) |
 
 ### B. Full Category Breakdown (F1 / BLEU / LLM)
 
@@ -1016,31 +1043,50 @@ Agno                |====================                      | 0.267
 
 ### D. LongMemEval Reproduction and Provenance
 
-The evaluated subset shape can be reproduced with:
+The exact question IDs are frozen in the run manifest rather than resampled.
+The primary arm shape is:
 
 ```bash
-go run . \
+./run-longmemeval.sh \
   -dataset-format longmemeval \
   -dataset ../../summary/data/longmemeval-cleaned/longmemeval_oracle.json \
+  -lme-question-ids "$FROZEN_QUESTION_IDS" \
   -memory-backend pgvector,mem0 \
-  -lme-per-type 2 \
-  -lme-abstention-count 4 \
-  -lme-sample-seed 137 \
+  -pgvector-update-policy reconcile \
+  -pgvector-assistant-result-extraction=false \
   -mem0-llm-temperature 0 \
-  -vector-topk 50 \
-  -debug-dump-memories \
-  -debug-qa-limit 16 \
-  -output ../results/lme-seed137
+  -model glm52 \
+  -eval-model glm52 \
+  -embed-model text-embedding-3-small \
+  -lme-judge-runs 3 \
+  -lme-answer=true \
+  -vector-topk 30 \
+  -output ../results/lme-observed-dev16-main-mem0
 ```
 
-The seed137 replay used benchmark revision
-`fc0469392299248e281cb9dfc48bd023b54f369f` and trpc-agent-go revision
-`ce3dd3b76ca0`. That benchmark revision did not yet capture mem0
-configuration when the temperature flag remained at its default. The
-sanitized configuration was read back after replay and added only to result
-metadata; its audit record verifies that the canonical case payload hash did
-not change. The current runner records the configuration for every selected
-mem0 run.
+Candidate pgvector reuses the exact IDs and protocol with
+`-pgvector-update-policy history-preserving` and
+`-pgvector-assistant-result-extraction=true`. Two saved-retrieval re-answer
+runs use fresh, distinct answer ledgers; all three result sets use three judge
+votes per answer. The replicate manifest freezes the quality and cost gate.
+
+| Provenance item | Digest or revision |
+| --- | --- |
+| Benchmark | `f7cf9370057daa382db925ca67500b9f66f173da` |
+| pgvector main | `0c7774187da9330144df2a038ef18ee89ef2ae1c` |
+| pgvector candidate | `0797067f40743fbe789eff65315d74b05b7c454c` |
+| Dataset SHA-256 | `821a2034d219ab45846873dd14c14f12cfe7776e73527a483f9dac095d38620c` |
+| Selection SHA-256 | `b10651ad0caa76696a2d885da060969d0d24d2e1cdba4130308ef745f95621fb` |
+| Protocol SHA-256 | `9b001708920522d7ad2cd477824208b5692eb52bcd1c205e46fb9fbb5b57b9a4` |
+| Replicate manifest SHA-256 | `7baecdce61be140d5cbe3163519b8ee5503eaafdca842f37c087417e297871d2` |
+| Aggregate SHA-256 | `fb5e37a2327d00802055e388c2125f564c402ccbb1261fbfffc486f8f7819974` |
+| Audit SHA-256 | `17ae45dc27ffc3d89f8f1c244ac420ba73c1b9aa741fbe52c7a45cb71e2e158b` |
+| Mem0 | source `b05cce58`, runtime `9d027353`, image `81d80e337521` |
+
+The audit verifies exact builds, complete provider usage, zero errors, isolated
+stores, all 16 cases and 183 pairs per arm, and `blind_holdout_authorized=false`.
+Raw model traces and stores remain local evaluation artifacts; the report
+contains only aggregate and stage-level diagnostic evidence.
 
 ---
 
