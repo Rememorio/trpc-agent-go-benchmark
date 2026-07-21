@@ -403,8 +403,14 @@ recovery 调用从 27 降到 24，memory LLM 调用从 210 降到 207，LLM toke
 candidate 因而通过全部预注册开发 gate，包括六类零退化、完整 provider
 usage 和零错误。独立的 LoCoMo 固定快照三次回归仍在容忍范围内（平均
 F1 delta 为 `-0.0282`，要求不低于 `-0.05`），但没有体现广泛 LoCoMo
-提升。要主张泛化，仍需经过授权、预注册的未见 full-haystack holdout
-以及更大的 LongMemEval-M 评测。
+提升。全部差值集中在固定 10 题中的两题，其余 8 题的三次均分完全一致。
+`locomo10_1_q_100` 中，两臂都把完整支持 memory 排在第一位，但 candidate
+的 answer recovery 每次都在压缩时漏掉了“咨询改善生活”这一子句；
+`locomo10_1_q_33` 中，candidate 已召回相关事件，但三次 answer recovery
+有两次耗尽 token 且未调用 `submit_answer`，最终回退为拒答。这是 answer
+层的不稳定性，而不是继续添加定向 memory 规则的证据，因此将它保留为
+回归风险，不作为调参输入。要主张泛化，仍需经过授权、预注册的未见
+full-haystack holdout 以及更大的 LongMemEval-M 评测。
 
 ---
 
@@ -894,9 +900,11 @@ Agno                |====================                      | 0.267
 7. **下一步重点是在降低提取成本的同时验证泛化。** candidate 已修复
    所有已观察 LongMemEval 开发 gap，但 memory LLM token 是 main 的
    1.507 倍，最终 memory 是 2.755 倍。LoCoMo 三次回归的平均 F1 delta
-   为 `-0.0282`，在 gate 内但不是改善。只有机制消融能保持 assistant-only
-   case 时才应削减 recovery 开销；compact recovery 已满足这一条件，下一步
-   应进入预注册的未见 full-haystack holdout，而不是继续针对这 16 题调参。
+   为 `-0.0282`，在 gate 内但不是改善；全部差值来自两题的 answer-layer
+   recovery 结果，并未证明存在 memory miss。只有机制消融能保持
+   assistant-only case 时才应削减 recovery 开销；compact recovery 已满足
+   这一条件，下一步应进入预注册的未见 full-haystack holdout，而不是继续
+   针对这些已观察题调参。
 
 ### 生产建议
 

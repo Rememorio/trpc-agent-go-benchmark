@@ -453,6 +453,14 @@ The candidate therefore passes every preregistered development gate, including
 zero per-type deficit and complete provider usage. A three-repeat LoCoMo fixed
 snapshot regression remains within its separate tolerance (mean F1 delta
 `-0.0282`, required at least `-0.05`), but it does not show a broad LoCoMo gain.
+The entire delta is concentrated in two of the ten fixed questions; the other
+eight have identical three-repeat means. For `locomo10_1_q_100`, both arms rank
+the complete supporting memory first, but candidate answer recovery consistently
+compresses away the counseling-improvement clause. For `locomo10_1_q_33`, the
+candidate retrieves relevant events, but two of three answer-recovery calls end
+at the token limit without calling `submit_answer` and fall back to abstention.
+This is answer-layer instability rather than evidence for another targeted
+memory rule, so it is retained as regression risk instead of tuning input.
 An authorized, preregistered unseen full-haystack holdout and a larger
 LongMemEval-M run remain necessary before making a generalization claim.
 
@@ -1006,9 +1014,11 @@ Agno                |====================                      | 0.267
    candidate closes every observed LongMemEval development gap, but uses
    1.507x main's memory LLM tokens and 2.755x its final memories. LoCoMo's
    three-repeat mean F1 delta is `-0.0282`, within the regression gate but not
-   an improvement. Compact recovery reduced observed LLM-token overhead while
-   preserving assistant-only cases; the next promotion step is a preregistered
-   unseen full-haystack holdout, not further tuning on these 16 questions.
+   an improvement; all of that difference is attributable to two answer-layer
+   recovery outcomes rather than a demonstrated memory miss. Compact recovery
+   reduced observed LLM-token overhead while preserving assistant-only cases;
+   the next promotion step is a preregistered unseen full-haystack holdout, not
+   further tuning on these observed questions.
 
 ### Production Recommendations
 
