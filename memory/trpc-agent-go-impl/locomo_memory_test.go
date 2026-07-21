@@ -328,6 +328,10 @@ func TestBuildEvaluationResultAggregatesAutoPhaseUsage(t *testing.T) {
 	if result.Metadata.ReplayProtocol != locomoAutoReplayProtocol {
 		t.Fatalf("replay protocol = %q", result.Metadata.ReplayProtocol)
 	}
+	if result.Metadata.ReplayProtocol !=
+		"chronological-session-sequential-auto-v3" {
+		t.Fatalf("unexpected replay protocol: %q", result.Metadata.ReplayProtocol)
+	}
 	if result.Metadata.RoleMapping != locomoRoleMapping {
 		t.Fatalf("role mapping = %q", result.Metadata.RoleMapping)
 	}
