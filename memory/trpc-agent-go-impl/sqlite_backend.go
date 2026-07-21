@@ -68,7 +68,7 @@ func createSQLiteService(
 			svcOpts,
 			memorysqlite.WithAsyncMemoryNum(autoMemoryAsyncWorkers),
 			memorysqlite.WithMemoryQueueSize(autoMemoryQueueSize),
-			memorysqlite.WithMemoryJobTimeout(autoMemoryJobTimeout),
+			memorysqlite.WithMemoryJobTimeout(opts.memoryJobTimeout),
 		)
 	}
 
@@ -120,7 +120,7 @@ func createSQLiteVecService(
 			svcOpts,
 			memorysqlitevec.WithAsyncMemoryNum(autoMemoryAsyncWorkers),
 			memorysqlitevec.WithMemoryQueueSize(autoMemoryQueueSize),
-			memorysqlitevec.WithMemoryJobTimeout(autoMemoryJobTimeout),
+			memorysqlitevec.WithMemoryJobTimeout(opts.memoryJobTimeout),
 		)
 	}
 

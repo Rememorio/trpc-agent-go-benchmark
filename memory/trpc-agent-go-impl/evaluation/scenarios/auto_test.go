@@ -111,6 +111,82 @@ func TestWaitForAutoExtractionTimesOut(t *testing.T) {
 	}
 }
 
+func TestEnqueueAutoExtractionsSequentiallyWaitsBeforeNext(t *testing.T) {
+	first := autoExtractionTestSession("first", time.Now().UTC())
+	second := autoExtractionTestSession(
+		"second", time.Now().UTC().Add(time.Second),
+	)
+	releaseFirst := make(chan struct{})
+	service := &controlledAutoExtractionEnqueuer{
+		enqueued:     make(chan string, 2),
+		firstSession: first.ID,
+		releaseFirst: releaseFirst,
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- enqueueAutoExtractionsSequentially(
+			context.Background(), service,
+			[]autoExtractionSeed{
+				{ctx: context.Background(), session: first},
+				{ctx: context.Background(), session: second},
+			},
+			testWaitTimeout,
+		)
+	}()
+
+	if got := receiveEnqueuedSession(t, service.enqueued); got != first.ID {
+		t.Fatalf("first enqueue = %q, want %q", got, first.ID)
+	}
+	select {
+	case got := <-service.enqueued:
+		t.Fatalf("enqueued %q before first extraction completed", got)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(releaseFirst)
+	if got := receiveEnqueuedSession(t, service.enqueued); got != second.ID {
+		t.Fatalf("second enqueue = %q, want %q", got, second.ID)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("enqueue sequentially: %v", err)
+		}
+	case <-time.After(testWaitTimeout):
+		t.Fatal("timed out waiting for sequential extraction")
+	}
+}
+
+func TestEnqueueAutoExtractionsSequentiallyStopsAfterError(t *testing.T) {
+	first := autoExtractionTestSession("first", time.Now().UTC())
+	second := autoExtractionTestSession(
+		"second", time.Now().UTC().Add(time.Second),
+	)
+	service := &controlledAutoExtractionEnqueuer{
+		enqueued:     make(chan string, 2),
+		firstSession: first.ID,
+		failFirst:    true,
+	}
+	err := enqueueAutoExtractionsSequentially(
+		context.Background(), service,
+		[]autoExtractionSeed{
+			{ctx: context.Background(), session: first},
+			{ctx: context.Background(), session: second},
+		},
+		testWaitTimeout,
+	)
+	if err == nil || !strings.Contains(err.Error(), "injected failure") {
+		t.Fatalf("error = %v, want injected failure", err)
+	}
+	if got := receiveEnqueuedSession(t, service.enqueued); got != first.ID {
+		t.Fatalf("first enqueue = %q, want %q", got, first.ID)
+	}
+	select {
+	case got := <-service.enqueued:
+		t.Fatalf("enqueued %q after first extraction failed", got)
+	default:
+	}
+}
+
 func TestLatestAutoExtractionTimestamp(t *testing.T) {
 	sess := session.NewSession(autoAppName, "user", "session")
 	earlier := time.Now().UTC()
@@ -132,4 +208,54 @@ func autoExtractionTestSession(
 	sess := session.NewSession(autoAppName, "user", id)
 	sess.Events = []event.Event{{Timestamp: timestamp}}
 	return sess
+}
+
+const testWaitTimeout = 2 * time.Second
+
+func receiveEnqueuedSession(t *testing.T, enqueued <-chan string) string {
+	t.Helper()
+	select {
+	case sessionID := <-enqueued:
+		return sessionID
+	case <-time.After(testWaitTimeout):
+		t.Fatal("timed out waiting for session enqueue")
+		return ""
+	}
+}
+
+type controlledAutoExtractionEnqueuer struct {
+	enqueued     chan string
+	firstSession string
+	releaseFirst <-chan struct{}
+	failFirst    bool
+}
+
+func (s *controlledAutoExtractionEnqueuer) EnqueueAutoMemoryJob(
+	_ context.Context,
+	sess *session.Session,
+) error {
+	s.enqueued <- sess.ID
+	if sess.ID == s.firstSession && s.failFirst {
+		sess.SetState(
+			autoMemoryLastErrorStateKey,
+			[]byte("injected failure"),
+		)
+		return nil
+	}
+	complete := func() {
+		want := latestAutoExtractionTimestamp(sess)
+		sess.SetState(
+			memory.SessionStateKeyAutoMemoryLastExtractAt,
+			[]byte(want.Format(time.RFC3339Nano)),
+		)
+	}
+	if sess.ID == s.firstSession && s.releaseFirst != nil {
+		go func() {
+			<-s.releaseFirst
+			complete()
+		}()
+		return nil
+	}
+	complete()
+	return nil
 }

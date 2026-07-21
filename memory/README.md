@@ -652,6 +652,12 @@ If that one call still fails validation, the evaluator records the failure and
 uses the standard unavailable answer as a deterministic fallback. Terminal
 empty responses are not retried, and their call, finish reason, prompt-cache,
 reasoning-token, and total-token usage remain in the QA trace.
+During fresh auto-memory replay, LoCoMo waits for each session's extraction
+completion marker before enqueueing the next session. This preserves session
+order and prevents later queued jobs from mutating an isolated experiment table
+after an earlier extraction has failed. `-auto-extraction-timeout` bounds the
+whole sample replay, while `-auto-memory-job-timeout` bounds each session's
+extraction; both effective values are recorded in result metadata.
 `-locomo-reuse-memories` skips only the auto
 extraction phase and requires an explicit `-table-suffix`; it fails when the
 selected table has no memories for the sample. The QA searches and answers are
@@ -678,6 +684,8 @@ build provenance.
 | `-vector-topk`      | 30                     | Top-k results for vector backends      |
 | `-qa-history-turns` | 0                      | Inject N conversation turns as context |
 | `-qa-search-passes` | 2                      | memory_search calls per QA             |
+| `-auto-extraction-timeout` | derived from session count | Total auto-memory replay timeout |
+| `-auto-memory-job-timeout` | 2m              | Per-session auto-memory job timeout    |
 | `-locomo-reuse-memories` | false             | Run QA against an explicit existing table |
 | `-sample-id`        |                        | Filter by sample ID                    |
 | `-max-tasks`        | 0                      | Maximum tasks (0=all)                  |

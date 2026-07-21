@@ -242,7 +242,7 @@ func (e *AutoEvaluator) seedMemories(
 	)
 	defer seedRunner.Close()
 
-	seedSessions := make([]*session.Session, 0, len(sample.Conversation))
+	seeds := make([]autoExtractionSeed, 0, len(sample.Conversation))
 	for _, sess := range sample.Conversation {
 		sessionID := fmt.Sprintf("seed-%s", sess.SessionID)
 		msgs := sessionMessages(sess)
@@ -272,22 +272,71 @@ func (e *AutoEvaluator) seedMemories(
 		if seededSession == nil {
 			return fmt.Errorf("get seed session %s: not found", sess.SessionID)
 		}
-		if err := e.memoryService.EnqueueAutoMemoryJob(
-			seedCtx, seededSession,
-		); err != nil {
-			return fmt.Errorf("enqueue seed session %s: %w", sess.SessionID, err)
-		}
-		seedSessions = append(seedSessions, seededSession)
+		seeds = append(seeds, autoExtractionSeed{
+			ctx:     seedCtx,
+			session: seededSession,
+		})
 	}
 
-	if err := waitForAutoExtraction(
+	if err := enqueueAutoExtractionsSequentially(
 		ctx,
-		seedSessions,
+		e.memoryService,
+		seeds,
 		autoExtractionWaitTimeout(
-			len(seedSessions), e.config.AutoExtractionTimeout,
+			len(seeds), e.config.AutoExtractionTimeout,
 		),
 	); err != nil {
-		return fmt.Errorf("wait for auto extraction: %w", err)
+		return err
+	}
+	return nil
+}
+
+type autoExtractionSeed struct {
+	ctx     context.Context
+	session *session.Session
+}
+
+type autoExtractionEnqueuer interface {
+	EnqueueAutoMemoryJob(context.Context, *session.Session) error
+}
+
+func enqueueAutoExtractionsSequentially(
+	ctx context.Context,
+	service autoExtractionEnqueuer,
+	seeds []autoExtractionSeed,
+	timeout time.Duration,
+) error {
+	if len(seeds) == 0 {
+		return nil
+	}
+	if timeout <= 0 {
+		timeout = autoExtractionWaitTimeout(len(seeds), 0)
+	}
+	deadline := time.Now().Add(timeout)
+	for index, seed := range seeds {
+		if seed.session == nil {
+			return fmt.Errorf("seed session %d is nil", index)
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return fmt.Errorf("auto extraction timeout after %s", timeout)
+		}
+		seedCtx := seed.ctx
+		if seedCtx == nil {
+			seedCtx = ctx
+		}
+		if err := service.EnqueueAutoMemoryJob(
+			seedCtx, seed.session,
+		); err != nil {
+			return fmt.Errorf(
+				"enqueue seed session %s: %w", seed.session.ID, err,
+			)
+		}
+		if err := waitForAutoExtraction(
+			ctx, []*session.Session{seed.session}, remaining,
+		); err != nil {
+			return fmt.Errorf("wait for auto extraction: %w", err)
+		}
 	}
 	return nil
 }

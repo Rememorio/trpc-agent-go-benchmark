@@ -103,6 +103,11 @@ var (
 		0,
 		"Total wait timeout for LoCoMo auto extraction (0=derive from session count)",
 	)
+	flagAutoMemoryJobTimeout = flag.Duration(
+		"auto-memory-job-timeout",
+		defaultAutoMemoryJobTimeout,
+		"Timeout for each LoCoMo auto-memory extraction job",
+	)
 	flagLLMJudge = flag.Bool("llm-judge", false, "Enable LLM-as-Judge evaluation")
 	flagVerbose  = flag.Bool("verbose", false, "Verbose output")
 
@@ -367,6 +372,12 @@ func validateFlags() {
 		log.Fatalf(
 			"Invalid auto-extraction-timeout: %s",
 			*flagAutoExtractionTimeout,
+		)
+	}
+	if *flagAutoMemoryJobTimeout <= 0 {
+		log.Fatalf(
+			"Invalid auto-memory-job-timeout: %s",
+			*flagAutoMemoryJobTimeout,
 		)
 	}
 

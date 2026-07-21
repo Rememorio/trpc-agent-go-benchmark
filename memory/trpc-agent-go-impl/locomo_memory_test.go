@@ -140,6 +140,11 @@ func TestBuildEvaluationResultRecordsModelVariant(t *testing.T) {
 }
 
 func TestBuildEvaluationResultRecordsAutoExtractionTimeout(t *testing.T) {
+	previousJobTimeout := *flagAutoMemoryJobTimeout
+	*flagAutoMemoryJobTimeout = 5 * time.Minute
+	t.Cleanup(func() {
+		*flagAutoMemoryJobTimeout = previousJobTimeout
+	})
 	configured := buildEvaluationResult(
 		scenarios.Config{
 			Scenario:              scenarios.ScenarioAuto,
@@ -154,6 +159,9 @@ func TestBuildEvaluationResultRecordsAutoExtractionTimeout(t *testing.T) {
 	)
 	if got := configured.Metadata.AutoExtractionTimeout; got != "20m0s" {
 		t.Fatalf("configured extraction timeout = %q, want 20m0s", got)
+	}
+	if got := configured.Metadata.AutoMemoryJobTimeout; got != "5m0s" {
+		t.Fatalf("memory job timeout = %q, want 5m0s", got)
 	}
 
 	derived := buildEvaluationResult(

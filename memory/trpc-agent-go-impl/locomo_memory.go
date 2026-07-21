@@ -47,9 +47,9 @@ const (
 	sqliteVecTableAutoBase    = "memory_eval_auto_sqlitevec"
 	sessionRecallTableBase    = "session_eval_recall"
 
-	autoMemoryAsyncWorkers = 3
-	autoMemoryQueueSize    = 200
-	autoMemoryJobTimeout   = 2 * time.Minute
+	autoMemoryAsyncWorkers      = 3
+	autoMemoryQueueSize         = 200
+	defaultAutoMemoryJobTimeout = 2 * time.Minute
 )
 
 const (
@@ -111,6 +111,7 @@ type EvalMetadata struct {
 	EmbeddingUsageScope   string                    `json:"embedding_usage_scope,omitempty"`
 	ReuseMemories         bool                      `json:"reuse_memories"`
 	AutoExtractionTimeout string                    `json:"auto_extraction_timeout,omitempty"`
+	AutoMemoryJobTimeout  string                    `json:"auto_memory_job_timeout,omitempty"`
 	TableSuffix           string                    `json:"table_suffix,omitempty"`
 	PGVectorExtraction    *pgvectorExtractionConfig `json:"pgvector_extraction,omitempty"`
 	Build                 lmeBuildProvenance        `json:"build"`
@@ -626,7 +627,10 @@ func buildMemoryServiceOptions(
 	cfg memoryConfig,
 	extractorModel model.Model,
 ) (memoryServiceOptions, error) {
-	opts := memoryServiceOptions{vectorTopK: *flagVectorTopK}
+	opts := memoryServiceOptions{
+		vectorTopK:       *flagVectorTopK,
+		memoryJobTimeout: *flagAutoMemoryJobTimeout,
+	}
 	if cfg.mode != memoryModeAuto {
 		return opts, nil
 	}
@@ -652,6 +656,7 @@ type memoryServiceOptions struct {
 	extractorCallbacks *model.Callbacks
 	embeddingTracker   *lmeTrackingEmbedder
 	vectorTopK         int
+	memoryJobTimeout   time.Duration
 	pgvectorExtraction pgvectorExtractionConfig
 }
 
@@ -748,7 +753,7 @@ func createPGVectorService(
 		svcOpts = append(svcOpts,
 			memorypgvector.WithAsyncMemoryNum(autoMemoryAsyncWorkers),
 			memorypgvector.WithMemoryQueueSize(autoMemoryQueueSize),
-			memorypgvector.WithMemoryJobTimeout(autoMemoryJobTimeout),
+			memorypgvector.WithMemoryJobTimeout(opts.memoryJobTimeout),
 		)
 	}
 	return memorypgvector.NewService(svcOpts...)
@@ -783,7 +788,7 @@ func createMySQLService(
 		svcOpts = append(svcOpts,
 			memorymysql.WithAsyncMemoryNum(autoMemoryAsyncWorkers),
 			memorymysql.WithMemoryQueueSize(autoMemoryQueueSize),
-			memorymysql.WithMemoryJobTimeout(autoMemoryJobTimeout),
+			memorymysql.WithMemoryJobTimeout(opts.memoryJobTimeout),
 		)
 	}
 	return memorymysql.NewService(svcOpts...)
@@ -797,7 +802,7 @@ func createInMemoryService(opts memoryServiceOptions) memory.Service {
 			inmemory.WithExtractor(ext),
 			inmemory.WithAsyncMemoryNum(autoMemoryAsyncWorkers),
 			inmemory.WithMemoryQueueSize(autoMemoryQueueSize),
-			inmemory.WithMemoryJobTimeout(autoMemoryJobTimeout),
+			inmemory.WithMemoryJobTimeout(opts.memoryJobTimeout),
 		)
 	}
 	return inmemory.NewMemoryService()
@@ -1083,6 +1088,7 @@ func buildEvaluationResult(
 	if config.Scenario == scenarios.ScenarioAuto {
 		metadata.ReplayProtocol = locomoAutoReplayProtocol
 		metadata.RoleMapping = locomoRoleMapping
+		metadata.AutoMemoryJobTimeout = flagAutoMemoryJobTimeout.String()
 		metadata.TokenUsageScope = "extractor and QA LLM calls; " +
 			"optional LLM judge excluded"
 		if config.AutoExtractionTimeout > 0 {
