@@ -19,9 +19,14 @@ Pgvector main scores 12/16 (36/48 answer replicates), self-hosted Mem0 OSS
 scores 14/16 (41/48), and the final pgvector candidate scores 16/16 (48/48).
 A compact-recovery ablation reduces candidate memory LLM tokens from 1,838,020
 to 1,790,001 while retaining quality, but does not reduce final memory count or
-wall-clock ingestion time. No unseen protocol-v2 holdout has been selected or
-run. See the unified reports for replay design, usage, bad cases, provenance,
-and limitations.
+wall-clock ingestion time. A later private assistant-result prompt/schema
+compaction reduces memory tokens again to 1,686,365 (-5.79% versus its parent)
+and retains 48/48 answers in a non-promotional diagnostic. Its original formal
+promotion remains rejected because model calls were 208 versus the exact bound
+of 207. Independent fresh and fixed-memory LoCoMo checks pass, so the change is
+integrated as a development cost improvement, not a blind promotion. No unseen
+protocol-v2 holdout has been selected or run. See the unified reports for
+replay design, usage, bad cases, provenance, and limitations.
 
 ## LoCoMo Benchmark Evaluation Summary
 

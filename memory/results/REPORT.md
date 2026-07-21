@@ -129,6 +129,12 @@ uses the existing-memory snapshot for duplicate and conflict handling. This
 removes an unnecessary copy of all existing memories from the recovery prompt
 without weakening downstream reconciliation.
 
+The current candidate additionally compacts the assistant-result extraction
+instructions and gives the private assistant-result tool a focused schema with
+required `memory` and optional `topics` fields. This does not add public API or
+change the opt-in boundary. It reduces repeated prompt text while retaining the
+rules for source attribution, exact values, and cohesive structured results.
+
 Extraction context also retains cumulative observation times so that a later
 turn cannot erase when an earlier state was observed. Focused source passages
 preserve the concrete entity or list that triggered assistant-result recovery,
@@ -428,6 +434,25 @@ improvement rather than a storage or end-to-end latency improvement. Removing
 recovery entirely was rejected on the observed mechanism set: `e3fc4d6e`
 produced zero memories and all retrieval evidence was absent.
 
+The next assistant-result prompt compaction was evaluated against that fixed
+parent with fresh, isolated ingestion. On the same observed dev16 conversations,
+memory-layer tokens fell from 1,790,001 to 1,686,365 (-5.79%) and ingest time
+fell from 2,301s to 2,256s (-1.97%). Embedding tokens rose from 35,922 to 37,964
+(+5.68%), final memories rose from 416 to 421, and assistant-result memories
+were preserved at 146 versus 147. The preregistered formal promotion remains
+**rejected** because model calls were 208 versus the exact parent bound of 207;
+that result was not rewritten after inspection. A separate post-hoc quality
+diagnostic, explicitly marked non-promotional, produced 48/48 correct answers
+and 144/144 valid judge votes.
+
+For the engineering integration decision, direct resource outcomes were gated
+by provider tokens, embedding usage, ingest duration, persisted-memory bounds,
+and cross-dataset quality; stochastic recovery call count remained a reported
+metric. The original formal rejection is still part of the evidence. The
+assistant-result prompt constant is 59.85% shorter, unit and race tests pass,
+and the synthesis gate recommends integration into the development candidate,
+not blind promotion.
+
 The saved traces distinguish memory failures from answer variance:
 
 - `38146c39`: main retains the latest muscovado decision and a generic sugar
@@ -449,18 +474,27 @@ The saved traces distinguish memory failures from answer variance:
   recommendation memories and lacks consistent event metadata; all three
   answers abstain. `830ce83f` is the only unstable Mem0 case at 2/3.
 
-The candidate therefore passes every preregistered development gate, including
-zero per-type deficit and complete provider usage. A three-repeat LoCoMo fixed
-snapshot regression remains within its separate tolerance (mean F1 delta
-`-0.0282`, required at least `-0.05`), but it does not show a broad LoCoMo gain.
-The entire delta is concentrated in two of the ten fixed questions; the other
-eight have identical three-repeat means. For `locomo10_1_q_100`, both arms rank
-the complete supporting memory first, but candidate answer recovery consistently
-compresses away the counseling-improvement clause. For `locomo10_1_q_33`, the
-candidate retrieves relevant events, but two of three answer-recovery calls end
-at the token limit without calling `submit_answer` and fall back to abstention.
-This is answer-layer instability rather than evidence for another targeted
-memory rule, so it is retained as regression risk instead of tuning input.
+The frozen three-arm candidate baseline passes every preregistered development
+gate, including zero per-type deficit and complete provider usage. Its earlier
+three-repeat LoCoMo regression remains within tolerance (mean F1 delta `-0.0282`,
+required at least `-0.05`) but is not an improvement; the delta comes from two
+answer-recovery outcomes rather than a demonstrated memory miss.
+
+The prompt compaction then received an independent LoCoMo check with fresh
+parent and compact stores on 10 fixed stratified questions. Extraction prompt
+tokens fell 5.90%, total extraction tokens fell 4.17%, embedding tokens rose
+0.88%, and memories rose 5.17%. Reusing those immutable stores for three QA
+replicates gave mean F1 0.6100 for the parent and 0.7320 for compact, while QA
+tokens fell 1.69%. The gain is mechanistically visible on `locomo10_1_q_12`:
+both stores mention Sweden, but compact preserves the complete relation
+"moved from Sweden approximately 4 years ago" and ranks it second for the
+refined query, whereas the parent ranks a generic "home country" variant and
+abstains. Conversely, both arms retrieve the causal counseling evidence for
+`locomo10_1_q_15` and still abstain on its counterfactual; that is an answer-layer
+failure and does not justify another memory rule. LoCoMo maps one human speaker
+per session to the assistant role, so this is cross-dataset cost and regression
+evidence, not a real assistant-output claim.
+
 An authorized, preregistered unseen full-haystack holdout and a larger
 LongMemEval-M run remain necessary before making a generalization claim.
 
@@ -1010,15 +1044,13 @@ Agno                |====================                      | 0.267
    while the optimized version provides a second memory strategy built on
    extracted persistent memories.
 
-7. **The next target is generalization at a lower extraction cost.** The
-   candidate closes every observed LongMemEval development gap, but uses
-   1.507x main's memory LLM tokens and 2.755x its final memories. LoCoMo's
-   three-repeat mean F1 delta is `-0.0282`, within the regression gate but not
-   an improvement; all of that difference is attributable to two answer-layer
-   recovery outcomes rather than a demonstrated memory miss. Compact recovery
-   reduced observed LLM-token overhead while preserving assistant-only cases;
-   the next promotion step is a preregistered unseen full-haystack holdout, not
-   further tuning on these observed questions.
+7. **The next target is unseen generalization, not more observed-set tuning.**
+   The current candidate closes every observed LongMemEval development gap and
+   prompt compaction reduces observed memory tokens from 1.507x to 1.420x main,
+   with 2.788x as many final memories. Its formal prompt-compaction run remains
+   rejected on the exact-call gate even though direct token and duration gates,
+   repeated quality diagnostics, and cross-dataset checks pass. The next
+   promotion step is a preregistered unseen full-haystack holdout.
 
 ### Production Recommendations
 
@@ -1103,7 +1135,9 @@ votes per answer. The replicate manifest freezes the quality and cost gate.
 | Compact-ablation benchmark | `8eb0bac316ee67938ab6ecb6052ff227f94363e0` |
 | pgvector main | `0c7774187da9330144df2a038ef18ee89ef2ae1c` |
 | pgvector parent candidate | `0797067f40743fbe789eff65315d74b05b7c454c` |
-| pgvector final candidate | `bd6b31f92a904023df0c77c6762fa95b5e359456` (evaluated tree: `eaf5f49f1fa47856ff919798bcc93a41be71f6ec`) |
+| pgvector three-arm candidate | `bd6b31f92a904023df0c77c6762fa95b5e359456` (evaluated tree: `eaf5f49f1fa47856ff919798bcc93a41be71f6ec`) |
+| pgvector current development candidate | `969fb16a918d6abae8bb06d52cb784490c8a2eb4` |
+| Current benchmark revision | `cd4ce12b0f920618af37e55c8355e6e4b6edd6cc` |
 | Dataset SHA-256 | `821a2034d219ab45846873dd14c14f12cfe7776e73527a483f9dac095d38620c` |
 | Selection SHA-256 | `b10651ad0caa76696a2d885da060969d0d24d2e1cdba4130308ef745f95621fb` |
 | Protocol SHA-256 | `9b001708920522d7ad2cd477824208b5692eb52bcd1c205e46fb9fbb5b57b9a4` |
@@ -1111,6 +1145,11 @@ votes per answer. The replicate manifest freezes the quality and cost gate.
 | Aggregate SHA-256 | `fb5e37a2327d00802055e388c2125f564c402ccbb1261fbfffc486f8f7819974` |
 | Audit SHA-256 | `17ae45dc27ffc3d89f8f1c244ac420ba73c1b9aa741fbe52c7a45cb71e2e158b` |
 | Compact-ablation audit SHA-256 | `d48ae6d6731c45ae05bc52c753df331cf204a38150896b748d7d1ac0db071981` |
+| Assistant-prompt formal gate SHA-256 | `f82f35299d319e64a30a32a24b022aceef7e90a308f687275dffd679c9d8f335` |
+| Assistant-prompt quality diagnostic SHA-256 | `902629cfdf1a924282c58300e93afacdda7a9c3c044afdc342762de5384755fa` |
+| Fresh LoCoMo prompt-pair audit SHA-256 | `64963ebd8b481873012631a85adb21fc1aa9d87b6491accb751a7b8d945a5d2c` |
+| Repeated fixed-memory LoCoMo audit SHA-256 | `4bb1d7606099029d2cbb8ed00600ef2a38570b0bbac89ccffe2bc540d9632fbf` |
+| Engineering synthesis audit SHA-256 | `7298a75fc436e90d84d6adcbf06cee779120fd7450ac8d10297b51b50d3423a5` |
 | Mem0 | source `b05cce58`, runtime `9d027353`, image `81d80e337521` |
 
 The audit verifies exact builds, complete provider usage, zero errors, isolated

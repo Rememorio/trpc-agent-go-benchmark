@@ -108,6 +108,11 @@ LongMemEval 进一步暴露了生产路径上的另一组可靠性问题。相�
 snapshot 进行重复与冲突处理。这样可以从 recovery prompt 中移除整份既有
 memory，同时不削弱后续 reconciliation。
 
+当前 candidate 还压缩了 assistant-result 提取说明，并将私有
+assistant-result tool 的 schema 收窄为必填 `memory`、可选 `topics`。
+该改动没有新增公共 API，也没有改变 opt-in 边界；它减少每次提取重复发送的
+prompt 文本，同时保留来源标记、精确数值和结构化结果整体性等约束。
+
 提取上下文还会累积 observation time，避免后续 turn 擦除早期状态的
 观察时间；focused source passage 在 recovery 时保留触发它的具体实体
 或列表；temporal retrieval 在混合检索之外保留一个有界的日期事件尾部。
@@ -383,6 +388,20 @@ recovery 调用从 27 降到 24，memory LLM 调用从 210 降到 207，LLM toke
 小幅 prompt 成本改善，不是存储量或端到端延迟改善。完全移除 recovery 的
 方案已在机制集上被否决：`e3fc4d6e` 产生 0 条 memory，召回证据也完全缺失。
 
+后续 assistant-result prompt compaction 使用新鲜、隔离的 store，与上述固定
+parent 做配对评估。在同一个已观察 dev16 对话集上，memory-layer token 从
+1,790,001 降至 1,686,365（-5.79%），入库时间从 2,301 秒降至 2,256 秒
+（-1.97%）。Embedding token 从 35,922 增至 37,964（+5.68%），最终 memory
+从 416 增至 421，assistant-result memory 保持为 146 对 147。预注册的正式
+晋级结论仍是**拒绝**，因为模型调用是 208，而 parent 的精确上限是 207；
+检查结果后没有回写或放宽原 gate。另一个明确标记为 post-hoc、不可晋级的
+质量诊断得到 48/48 个正确答案和 144/144 个有效 judge vote。
+
+工程集成判断使用 provider token、embedding、入库耗时、持久化 memory 边界
+和跨数据集质量作为直接资源与回归 gate；随机 recovery 调用数只保留为报告项，
+原正式拒绝仍是证据的一部分。Assistant-result prompt 常量缩短 59.85%，单测
+与 race 测试通过，综合 gate 建议集成到开发 candidate，而不是 blind 晋级。
+
 保存的 trace 可以把 memory failure 与 answer variance 分开：
 
 - `38146c39`：main 只保留了最新的 muscovado 决定和泛化 sugar 偏好，
@@ -400,17 +419,25 @@ recovery 调用从 27 降到 24，memory LLM 调用从 210 降到 207，LLM toke
   session，但被 recommendation memory 挤占且 event metadata 不一致，
   三次均 abstain。`830ce83f` 是唯一不稳定的 Mem0 case，正确率为 2/3。
 
-candidate 因而通过全部预注册开发 gate，包括六类零退化、完整 provider
-usage 和零错误。独立的 LoCoMo 固定快照三次回归仍在容忍范围内（平均
-F1 delta 为 `-0.0282`，要求不低于 `-0.05`），但没有体现广泛 LoCoMo
-提升。全部差值集中在固定 10 题中的两题，其余 8 题的三次均分完全一致。
-`locomo10_1_q_100` 中，两臂都把完整支持 memory 排在第一位，但 candidate
-的 answer recovery 每次都在压缩时漏掉了“咨询改善生活”这一子句；
-`locomo10_1_q_33` 中，candidate 已召回相关事件，但三次 answer recovery
-有两次耗尽 token 且未调用 `submit_answer`，最终回退为拒答。这是 answer
-层的不稳定性，而不是继续添加定向 memory 规则的证据，因此将它保留为
-回归风险，不作为调参输入。要主张泛化，仍需经过授权、预注册的未见
-full-haystack holdout 以及更大的 LongMemEval-M 评测。
+冻结的三臂 candidate baseline 通过全部预注册开发 gate，包括六类零退化、
+完整 provider usage 和零错误。它此前的 LoCoMo 固定快照三次回归仍在容忍
+范围内（平均 F1 delta 为 `-0.0282`，要求不低于 `-0.05`），但不是改善；
+差值来自两题的 answer-recovery 结果，并未证明存在 memory miss。
+
+Prompt compaction 随后在 LoCoMo 上使用新鲜 parent/compact store 和固定的
+10 道分层问题做独立检查。Extraction prompt token 下降 5.90%，总 extraction
+token 下降 4.17%，embedding token 增加 0.88%，memory 数量增加 5.17%。
+固定 store 重复回答三次后，parent 平均 F1 为 0.6100，compact 为 0.7320，
+同时 QA token 下降 1.69%。`locomo10_1_q_12` 可以直接解释该收益：两张 store
+都提到 Sweden，但 compact 保留了完整的“约四年前从 Sweden 搬来”关系，并在
+第二次查询排到第 2；parent 排在前面的版本只写“home country”，最终拒答。
+另一方面，`locomo10_1_q_15` 的两臂都召回 counseling 与成长支持之间的因果
+证据，但对反事实问题仍选择拒答；这是 answer-layer failure，不支持继续添加
+memory 规则。LoCoMo 会把每个 session 的一位人类说话者映射为 assistant，
+所以这组结果是跨数据集成本与回归证据，不是现实 assistant-output 结论。
+
+要主张泛化，仍需经过授权、预注册的未见 full-haystack holdout 以及更大的
+LongMemEval-M 评测。
 
 ---
 
@@ -897,14 +924,12 @@ Agno                |====================                      | 0.267
    平衡，而优化版则提供了基于抽取式持久化 memory 的第二种
    路线。
 
-7. **下一步重点是在降低提取成本的同时验证泛化。** candidate 已修复
-   所有已观察 LongMemEval 开发 gap，但 memory LLM token 是 main 的
-   1.507 倍，最终 memory 是 2.755 倍。LoCoMo 三次回归的平均 F1 delta
-   为 `-0.0282`，在 gate 内但不是改善；全部差值来自两题的 answer-layer
-   recovery 结果，并未证明存在 memory miss。只有机制消融能保持
-   assistant-only case 时才应削减 recovery 开销；compact recovery 已满足
-   这一条件，下一步应进入预注册的未见 full-haystack holdout，而不是继续
-   针对这些已观察题调参。
+7. **下一步重点是未见泛化，而不是继续调整已观察集合。** 当前 candidate
+   已修复所有已观察 LongMemEval 开发 gap，prompt compaction 将相对 main 的
+   memory token 从 1.507 倍降到 1.420 倍，最终 memory 为 2.788 倍。它的
+   正式 prompt-compaction 运行仍因精确调用数 gate 被拒绝，但直接 token、
+   耗时、重复质量诊断和跨数据集检查均通过。下一步应进入预注册的未见
+   full-haystack holdout。
 
 ### 生产建议
 
@@ -989,7 +1014,9 @@ judge。Replicate manifest 在运行前冻结质量和成本 gate。
 | Compact 消融 benchmark | `8eb0bac316ee67938ab6ecb6052ff227f94363e0` |
 | pgvector main | `0c7774187da9330144df2a038ef18ee89ef2ae1c` |
 | pgvector parent candidate | `0797067f40743fbe789eff65315d74b05b7c454c` |
-| pgvector 最终 candidate | `bd6b31f92a904023df0c77c6762fa95b5e359456`（评测 tree：`eaf5f49f1fa47856ff919798bcc93a41be71f6ec`） |
+| pgvector 三臂 candidate | `bd6b31f92a904023df0c77c6762fa95b5e359456`（评测 tree：`eaf5f49f1fa47856ff919798bcc93a41be71f6ec`） |
+| pgvector 当前开发 candidate | `969fb16a918d6abae8bb06d52cb784490c8a2eb4` |
+| 当前 benchmark revision | `cd4ce12b0f920618af37e55c8355e6e4b6edd6cc` |
 | Dataset SHA-256 | `821a2034d219ab45846873dd14c14f12cfe7776e73527a483f9dac095d38620c` |
 | Selection SHA-256 | `b10651ad0caa76696a2d885da060969d0d24d2e1cdba4130308ef745f95621fb` |
 | Protocol SHA-256 | `9b001708920522d7ad2cd477824208b5692eb52bcd1c205e46fb9fbb5b57b9a4` |
@@ -997,6 +1024,11 @@ judge。Replicate manifest 在运行前冻结质量和成本 gate。
 | Aggregate SHA-256 | `fb5e37a2327d00802055e388c2125f564c402ccbb1261fbfffc486f8f7819974` |
 | Audit SHA-256 | `17ae45dc27ffc3d89f8f1c244ac420ba73c1b9aa741fbe52c7a45cb71e2e158b` |
 | Compact 消融 Audit SHA-256 | `d48ae6d6731c45ae05bc52c753df331cf204a38150896b748d7d1ac0db071981` |
+| Assistant-prompt 正式 gate SHA-256 | `f82f35299d319e64a30a32a24b022aceef7e90a308f687275dffd679c9d8f335` |
+| Assistant-prompt 质量诊断 SHA-256 | `902629cfdf1a924282c58300e93afacdda7a9c3c044afdc342762de5384755fa` |
+| 新鲜 LoCoMo prompt 配对 audit SHA-256 | `64963ebd8b481873012631a85adb21fc1aa9d87b6491accb751a7b8d945a5d2c` |
+| 固定 memory LoCoMo 重复 audit SHA-256 | `4bb1d7606099029d2cbb8ed00600ef2a38570b0bbac89ccffe2bc540d9632fbf` |
+| 工程综合 audit SHA-256 | `7298a75fc436e90d84d6adcbf06cee779120fd7450ac8d10297b51b50d3423a5` |
 | Mem0 | source `b05cce58`、runtime `9d027353`、image `81d80e337521` |
 
 Audit 校验精确 build、完整 provider usage、零错误、隔离 store、每个实验臂
