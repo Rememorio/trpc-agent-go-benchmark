@@ -2966,7 +2966,9 @@ func TestAnswerFromMemoriesRetriesTruncatedResponse(t *testing.T) {
 	if len(llm.requests[1].Messages) != 4 ||
 		llm.requests[1].Messages[0].Role != model.RoleSystem ||
 		!strings.Contains(llm.requests[1].Messages[0].Content,
-			"draft, not additional evidence") ||
+			"not additional evidence or an authoritative conclusion") ||
+		!strings.Contains(llm.requests[1].Messages[0].Content,
+			"independently check and correct") ||
 		llm.requests[1].Messages[1].Role != model.RoleUser ||
 		!strings.Contains(llm.requests[1].Messages[1].Content,
 			"How many tanks?") ||
@@ -2975,7 +2977,11 @@ func TestAnswerFromMemoriesRetriesTruncatedResponse(t *testing.T) {
 			"reasoning without a final answer" ||
 		llm.requests[1].Messages[3].Role != model.RoleUser ||
 		!strings.Contains(llm.requests[1].Messages[3].Content,
-			"Preserve an already-grounded") ||
+			"correct a mistaken inference") ||
+		!strings.Contains(llm.requests[1].Messages[3].Content,
+			"unnecessary abstention") ||
+		!strings.Contains(llm.requests[1].Messages[3].Content,
+			"only when a required value is absent") ||
 		!strings.Contains(llm.requests[1].Messages[3].Content,
 			"at most 128 words") {
 		t.Fatalf("retry prompt does not enforce a concise final answer: %+v",

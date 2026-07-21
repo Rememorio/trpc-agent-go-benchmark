@@ -2434,19 +2434,22 @@ func newLongMemEvalAnswerRetryRequest(
 	req.MaxTokens = &maxTokens
 	req.Messages = []model.Message{
 		model.NewSystemMessage(
-			"Complete the truncated answer while following the original evidence policy. " +
-				"The previous assistant response is a draft, not additional evidence. " +
+			"Revise the truncated draft into a final answer while following the original evidence policy. " +
+				"The draft is work in progress, not additional evidence or an authoritative conclusion. " +
+				"Retain correctly identified evidence, but independently check and correct its conclusion. " +
 				"Output only the requested final answer and never reveal reasoning.",
 		),
 		model.NewUserMessage(prompt),
 		model.NewAssistantMessage(previousResponse),
 		model.NewUserMessage(`The previous response exceeded the token limit. Return
-the final answer now in at most 128 words. Preserve an already-grounded
-conclusion from the draft when it is consistent with the original evidence
-policy, but do not introduce a new premise or treat the draft as evidence. For
-a scalar, date, name, count, or list, return only the requested value or values.
-Do not include analysis, reasoning, a preamble, uncertainty discussion, or
-markdown.`),
+the final answer now in at most 128 words. Review the draft against the original
+memories: keep useful evidence it identified, but correct a mistaken inference
+or unnecessary abstention. Do not introduce a new premise or treat the draft as
+evidence. If the original evidence supports the requested value or values,
+return them; answer "I don't know" only when a required value is absent under
+the original evidence policy. For a scalar, date, name, count, or list, return
+only the requested value or values. Do not include analysis, reasoning, a
+preamble, uncertainty discussion, or markdown.`),
 	}
 	return req
 }
