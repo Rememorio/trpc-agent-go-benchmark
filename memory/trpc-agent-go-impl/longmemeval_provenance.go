@@ -29,7 +29,7 @@ const (
 	lmeAgentModulePath    = "trpc.group/trpc-go/trpc-agent-go"
 	lmePGVectorModulePath = "trpc.group/trpc-go/trpc-agent-go/memory/pgvector"
 
-	lmeAnswerPrimaryMaxTokens = 512
+	lmeAnswerPrimaryMaxTokens = 1024
 	lmeAnswerRetryMaxTokens   = 1024
 	lmeAnswerMaxAttempts      = 2
 	lmeJudgePrimaryMaxTokens  = 1024
@@ -38,7 +38,7 @@ const (
 	// These versions are part of the experiment contract. Bump the relevant
 	// version whenever replay, prompting, or judging semantics change.
 	lmeProtocolVersion          = "lme-memory-turn-pair-v2"
-	lmeAnswerPromptVersion      = "lme-memory-answer-v7"
+	lmeAnswerPromptVersion      = "lme-memory-answer-v10"
 	lmeJudgePromptVersion       = "lme-official-superset-judge-v3"
 	lmeJudgeProtocolVersion     = "lme-content-addressed-verdict-v1"
 	lmeJudgeCacheFormatVersion  = "lme-judge-cache-v1"
@@ -133,7 +133,7 @@ func currentLongMemEvalAnswerGeneration() lmeAnswerGenerationProvenance {
 		PrimaryMaxTokens:   lmeAnswerPrimaryMaxTokens,
 		RetryMaxTokens:     lmeAnswerRetryMaxTokens,
 		MaxAttempts:        lmeAnswerMaxAttempts,
-		RetryFinishReasons: []string{"length", "max_tokens"},
+		RetryFinishReasons: []string{},
 		RetryEmptyResponse: true,
 		Temperature:        0,
 		ReasoningEffort:    "low",

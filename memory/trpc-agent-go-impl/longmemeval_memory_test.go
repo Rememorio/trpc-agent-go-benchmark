@@ -2928,19 +2928,14 @@ func TestNewLongMemEvalAnswerRequestDisablesThinking(t *testing.T) {
 	}
 }
 
-func TestAnswerFromMemoriesRetriesTruncatedResponse(t *testing.T) {
+func TestAnswerFromMemoriesRejectsTruncatedResponse(t *testing.T) {
 	t.Parallel()
 
 	length := "length"
-	stop := "stop"
 	llm := &queuedAnswerModel{responses: []*model.Response{
 		{Choices: []model.Choice{{
 			Message:      model.NewAssistantMessage("reasoning without a final answer"),
 			FinishReason: &length,
-		}}},
-		{Choices: []model.Choice{{
-			Message:      model.NewAssistantMessage("3"),
-			FinishReason: &stop,
 		}}},
 	}}
 	answer, err := answerFromMemories(
@@ -2949,30 +2944,15 @@ func TestAnswerFromMemoriesRetriesTruncatedResponse(t *testing.T) {
 		&lmeInstance{Question: "How many tanks?"},
 		[]memoryHit{{Memory: "There are three tanks."}},
 	)
-	if err != nil || answer != "3" {
+	if err == nil || answer != "reasoning without a final answer" {
 		t.Fatalf("answer = %q, err = %v", answer, err)
 	}
-	if len(llm.requests) != 2 {
-		t.Fatalf("requests = %d, want 2", len(llm.requests))
+	if len(llm.requests) != 1 {
+		t.Fatalf("requests = %d, want 1", len(llm.requests))
 	}
 	if llm.requests[0].MaxTokens == nil ||
 		*llm.requests[0].MaxTokens != lmeAnswerPrimaryMaxTokens {
 		t.Fatalf("primary max tokens = %v", llm.requests[0].MaxTokens)
-	}
-	if llm.requests[1].MaxTokens == nil ||
-		*llm.requests[1].MaxTokens != lmeAnswerRetryMaxTokens {
-		t.Fatalf("retry max tokens = %v", llm.requests[1].MaxTokens)
-	}
-	if len(llm.requests[1].Messages) != 2 ||
-		llm.requests[1].Messages[0].Role != model.RoleSystem ||
-		!strings.Contains(llm.requests[1].Messages[0].Content,
-			"Never reveal analysis or reasoning") ||
-		!strings.Contains(llm.requests[1].Messages[1].Content,
-			"RETRY REQUIREMENT") ||
-		!strings.Contains(llm.requests[1].Messages[1].Content,
-			"at most 128 words") {
-		t.Fatalf("retry prompt does not enforce a concise final answer: %+v",
-			llm.requests[1].Messages)
 	}
 }
 
