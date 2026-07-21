@@ -1654,10 +1654,18 @@ func reanswerLongMemEvalResults(ctx context.Context, path, outputDir string) err
 	if err != nil {
 		return err
 	}
-	if err := validateLongMemEvalResultProtocol(
-		result.Metadata, currentLongMemEvalProtocol(),
-	); err != nil {
+	protocol := currentLongMemEvalProtocol()
+	sourceProtocolDigest, err := validateLongMemEvalReanswerSourceProtocol(
+		result.Metadata, protocol,
+	)
+	if err != nil {
 		return fmt.Errorf("validate LongMemEval re-answer protocol: %w", err)
+	}
+	result.Metadata["reanswer_source_protocol_sha256"] = sourceProtocolDigest
+	if _, err := replaceLongMemEvalResultProtocol(
+		result.Metadata, protocol,
+	); err != nil {
+		return fmt.Errorf("replace LongMemEval re-answer protocol: %w", err)
 	}
 	modelName := getModelName()
 	modelVariant := getModelVariant()

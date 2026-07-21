@@ -245,43 +245,9 @@ func validateLongMemEvalResultProtocol(
 	metadata map[string]any,
 	current lmeProtocolProvenance,
 ) error {
-	if metadata == nil {
-		return errors.New("LongMemEval result metadata is missing")
-	}
-	value, ok := metadata["protocol"]
-	if !ok {
-		return errors.New("LongMemEval result protocol is missing")
-	}
-	data, err := json.Marshal(value)
+	_, recordedDigest, err := recordedLongMemEvalResultProtocol(metadata)
 	if err != nil {
-		return fmt.Errorf("marshal LongMemEval result protocol: %w", err)
-	}
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	var recorded lmeProtocolProvenance
-	if err := decoder.Decode(&recorded); err != nil {
-		return fmt.Errorf("decode LongMemEval result protocol: %w", err)
-	}
-	if err := validateLongMemEvalProtocol(recorded); err != nil {
-		return fmt.Errorf("invalid recorded LongMemEval protocol: %w", err)
-	}
-	declaredVersion, ok := metadata["protocol_version"].(string)
-	if !ok || declaredVersion != recorded.Version {
-		return fmt.Errorf(
-			"LongMemEval result protocol version is %q, payload version is %q",
-			declaredVersion, recorded.Version,
-		)
-	}
-	recordedDigest, err := longMemEvalJSONSHA256(recorded)
-	if err != nil {
-		return fmt.Errorf("hash recorded LongMemEval protocol: %w", err)
-	}
-	declaredDigest, ok := metadata["protocol_sha256"].(string)
-	if !ok || declaredDigest != recordedDigest {
-		return fmt.Errorf(
-			"LongMemEval result protocol digest is %q, payload digest is %q",
-			declaredDigest, recordedDigest,
-		)
+		return err
 	}
 	if err := validateLongMemEvalProtocol(current); err != nil {
 		return fmt.Errorf("invalid current LongMemEval protocol: %w", err)
@@ -297,6 +263,125 @@ func validateLongMemEvalResultProtocol(
 		)
 	}
 	return nil
+}
+
+func recordedLongMemEvalResultProtocol(
+	metadata map[string]any,
+) (lmeProtocolProvenance, string, error) {
+	var recorded lmeProtocolProvenance
+	if metadata == nil {
+		return recorded, "", errors.New(
+			"LongMemEval result metadata is missing",
+		)
+	}
+	value, ok := metadata["protocol"]
+	if !ok {
+		return recorded, "", errors.New(
+			"LongMemEval result protocol is missing",
+		)
+	}
+	data, err := json.Marshal(value)
+	if err != nil {
+		return recorded, "", fmt.Errorf(
+			"marshal LongMemEval result protocol: %w", err,
+		)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&recorded); err != nil {
+		return recorded, "", fmt.Errorf(
+			"decode LongMemEval result protocol: %w", err,
+		)
+	}
+	if err := validateLongMemEvalProtocol(recorded); err != nil {
+		return recorded, "", fmt.Errorf(
+			"invalid recorded LongMemEval protocol: %w", err,
+		)
+	}
+	declaredVersion, ok := metadata["protocol_version"].(string)
+	if !ok || declaredVersion != recorded.Version {
+		return recorded, "", fmt.Errorf(
+			"LongMemEval result protocol version is %q, payload version is %q",
+			declaredVersion, recorded.Version,
+		)
+	}
+	recordedDigest, err := longMemEvalJSONSHA256(recorded)
+	if err != nil {
+		return recorded, "", fmt.Errorf(
+			"hash recorded LongMemEval protocol: %w", err,
+		)
+	}
+	declaredDigest, ok := metadata["protocol_sha256"].(string)
+	if !ok || declaredDigest != recordedDigest {
+		return recorded, "", fmt.Errorf(
+			"LongMemEval result protocol digest is %q, payload digest is %q",
+			declaredDigest, recordedDigest,
+		)
+	}
+	return recorded, recordedDigest, nil
+}
+
+func validateLongMemEvalReanswerSourceProtocol(
+	metadata map[string]any,
+	current lmeProtocolProvenance,
+) (string, error) {
+	recorded, recordedDigest, err := recordedLongMemEvalResultProtocol(metadata)
+	if err != nil {
+		return "", err
+	}
+	if err := validateLongMemEvalProtocol(current); err != nil {
+		return "", fmt.Errorf(
+			"invalid current LongMemEval protocol: %w", err,
+		)
+	}
+
+	// Re-answering intentionally replaces answer and judge behavior while
+	// preserving the replay, retrieval, model, and selection boundaries that
+	// produced the saved ranked hits.
+	expected := current
+	expected.ModelTemperature = recorded.ModelTemperature
+	expected.AnswerPromptVersion = recorded.AnswerPromptVersion
+	expected.AnswerGeneration = recorded.AnswerGeneration
+	expected.JudgeModel = recorded.JudgeModel
+	expected.JudgeModelVariant = recorded.JudgeModelVariant
+	expected.JudgeRuns = recorded.JudgeRuns
+	expected.JudgePromptVersion = recorded.JudgePromptVersion
+	expected.JudgeProtocolVersion = recorded.JudgeProtocolVersion
+	expected.JudgeGeneration = recorded.JudgeGeneration
+	expected.ModelCallTimeout = recorded.ModelCallTimeout
+	expectedDigest, err := longMemEvalJSONSHA256(expected)
+	if err != nil {
+		return "", fmt.Errorf(
+			"hash compatible LongMemEval re-answer protocol: %w", err,
+		)
+	}
+	if expectedDigest != recordedDigest {
+		return "", fmt.Errorf(
+			"LongMemEval re-answer source differs outside the answer/judge contract: compatible digest is %q, source requires %q",
+			expectedDigest, recordedDigest,
+		)
+	}
+	return recordedDigest, nil
+}
+
+func replaceLongMemEvalResultProtocol(
+	metadata map[string]any,
+	protocol lmeProtocolProvenance,
+) (string, error) {
+	if metadata == nil {
+		return "", errors.New("LongMemEval result metadata is missing")
+	}
+	if err := validateLongMemEvalProtocol(protocol); err != nil {
+		return "", fmt.Errorf("invalid replacement LongMemEval protocol: %w", err)
+	}
+	digest, err := longMemEvalJSONSHA256(protocol)
+	if err != nil {
+		return "", fmt.Errorf("hash replacement LongMemEval protocol: %w", err)
+	}
+	metadata["protocol"] = protocol
+	metadata["protocol_version"] = protocol.Version
+	metadata["protocol_sha256"] = digest
+	return digest, nil
 }
 
 func longMemEvalImplementation() string {
