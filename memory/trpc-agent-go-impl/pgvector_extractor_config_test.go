@@ -21,17 +21,12 @@ func TestAssistantResultUpdatePolicy(t *testing.T) {
 	}
 	if got := assistantResultUpdatePolicy(
 		pgvectorUpdatePolicyReconcile, true,
-	); got != pgvectorUpdatePolicyHistoryPreserving {
+	); got != assistantResultPolicyPreserving {
 		t.Fatalf("reconcile result policy = %q", got)
 	}
 	if got := assistantResultUpdatePolicy(
-		pgvectorUpdatePolicyHistoryPreserving, true,
-	); got != pgvectorUpdatePolicyHistoryPreserving {
-		t.Fatalf("history result policy = %q", got)
-	}
-	if got := assistantResultUpdatePolicy(
 		pgvectorUpdatePolicyAddOnly, true,
-	); got != pgvectorUpdatePolicyAddOnly {
+	); got != string(pgvectorUpdatePolicyAddOnly) {
 		t.Fatalf("add-only result policy = %q", got)
 	}
 }
@@ -50,7 +45,6 @@ func TestCurrentPGVectorExtractionConfig(t *testing.T) {
 	}{
 		{input: "", want: pgvectorUpdatePolicyReconcile},
 		{input: " RECONCILE ", want: pgvectorUpdatePolicyReconcile},
-		{input: "history-preserving", want: pgvectorUpdatePolicyHistoryPreserving},
 		{input: "ADD-ONLY", want: pgvectorUpdatePolicyAddOnly},
 	} {
 		*flagPGVectorUpdatePolicy = test.input
@@ -82,7 +76,7 @@ func TestBuildMemoryServiceOptionsAppliesPGVectorExtractionConfig(t *testing.T) 
 		*flagPGVectorAssistantResultExtraction = oldAssistantResults
 	}()
 
-	*flagPGVectorUpdatePolicy = "history-preserving"
+	*flagPGVectorUpdatePolicy = "reconcile"
 	*flagPGVectorAssistantResultExtraction = true
 	opts, err := buildMemoryServiceOptions(memoryConfig{
 		backend: "pgvector",
@@ -93,7 +87,7 @@ func TestBuildMemoryServiceOptionsAppliesPGVectorExtractionConfig(t *testing.T) 
 	}
 	if !opts.enableExtractor ||
 		opts.pgvectorExtraction.UpdatePolicy !=
-			pgvectorUpdatePolicyHistoryPreserving ||
+			pgvectorUpdatePolicyReconcile ||
 		!opts.pgvectorExtraction.AssistantResultExtraction {
 		t.Fatalf("unexpected pgvector extraction options: %#v", opts)
 	}

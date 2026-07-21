@@ -17,15 +17,16 @@ import (
 type pgvectorUpdatePolicy string
 
 const (
-	pgvectorUpdatePolicyReconcile         pgvectorUpdatePolicy = "reconcile"
-	pgvectorUpdatePolicyHistoryPreserving pgvectorUpdatePolicy = "history-preserving"
-	pgvectorUpdatePolicyAddOnly           pgvectorUpdatePolicy = "add-only"
+	pgvectorUpdatePolicyReconcile pgvectorUpdatePolicy = "reconcile"
+	pgvectorUpdatePolicyAddOnly   pgvectorUpdatePolicy = "add-only"
+
+	assistantResultPolicyPreserving = "assistant-result-preserving"
 )
 
 type pgvectorExtractionConfig struct {
 	UpdatePolicy                pgvectorUpdatePolicy `json:"update_policy"`
 	AssistantResultExtraction   bool                 `json:"assistant_result_extraction"`
-	AssistantResultUpdatePolicy pgvectorUpdatePolicy `json:"assistant_result_update_policy,omitempty"`
+	AssistantResultUpdatePolicy string               `json:"assistant_result_update_policy,omitempty"`
 }
 
 func currentPGVectorExtractionConfig() (
@@ -36,13 +37,11 @@ func currentPGVectorExtractionConfig() (
 	switch strings.ToLower(strings.TrimSpace(*flagPGVectorUpdatePolicy)) {
 	case "", string(pgvectorUpdatePolicyReconcile):
 		policy = pgvectorUpdatePolicyReconcile
-	case string(pgvectorUpdatePolicyHistoryPreserving):
-		policy = pgvectorUpdatePolicyHistoryPreserving
 	case string(pgvectorUpdatePolicyAddOnly):
 		policy = pgvectorUpdatePolicyAddOnly
 	default:
 		return pgvectorExtractionConfig{}, fmt.Errorf(
-			"unsupported pgvector-update-policy %q: expected reconcile, history-preserving, or add-only",
+			"unsupported pgvector-update-policy %q: expected reconcile or add-only",
 			*flagPGVectorUpdatePolicy,
 		)
 	}
@@ -58,12 +57,12 @@ func currentPGVectorExtractionConfig() (
 func assistantResultUpdatePolicy(
 	policy pgvectorUpdatePolicy,
 	enabled bool,
-) pgvectorUpdatePolicy {
+) string {
 	if !enabled {
 		return ""
 	}
 	if policy == pgvectorUpdatePolicyAddOnly {
-		return pgvectorUpdatePolicyAddOnly
+		return string(pgvectorUpdatePolicyAddOnly)
 	}
-	return pgvectorUpdatePolicyHistoryPreserving
+	return assistantResultPolicyPreserving
 }

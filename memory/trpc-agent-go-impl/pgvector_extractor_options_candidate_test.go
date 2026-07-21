@@ -20,14 +20,14 @@ import (
 func TestLongMemEvalExtractorOptionsCandidate(t *testing.T) {
 	t.Parallel()
 	options, err := pgvectorExtractorOptions(pgvectorExtractionConfig{
-		UpdatePolicy:              pgvectorUpdatePolicyHistoryPreserving,
+		UpdatePolicy:              pgvectorUpdatePolicyReconcile,
 		AssistantResultExtraction: true,
 	})
 	if err != nil {
 		t.Fatalf("candidate options: %v", err)
 	}
 	metadata := extractor.NewExtractor(nil, options...).Metadata()
-	if got := metadata["update_policy"]; got != "history-preserving" {
+	if got := metadata["update_policy"]; got != "reconcile" {
 		t.Fatalf("update policy metadata = %v", got)
 	}
 	if got := metadata["assistant_result_extraction"]; got != true {

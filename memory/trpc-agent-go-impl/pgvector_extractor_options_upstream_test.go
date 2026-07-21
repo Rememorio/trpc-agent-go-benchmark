@@ -32,7 +32,7 @@ func TestLongMemEvalExtractorOptionsUpstream(t *testing.T) {
 		{
 			name: "policy",
 			config: pgvectorExtractionConfig{
-				UpdatePolicy: pgvectorUpdatePolicyHistoryPreserving,
+				UpdatePolicy: pgvectorUpdatePolicyAddOnly,
 			},
 			want: "only supports update policy",
 		},
