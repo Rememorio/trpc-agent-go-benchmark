@@ -307,6 +307,8 @@ func TestValidateLongMemEvalComparisonRequiresSharedModelResponseLedger(t *testi
 		metadata["model_response_cache_shared"] = true
 		metadata["model_response_cache_ledger_id"] = "shared-model-ledger"
 		metadata["model_response_cache_errors"] = 0
+		metadata["user_scope"] = "paired-ablation"
+		metadata["user_scope_explicit"] = true
 		return &runResult{Metadata: metadata}
 	}
 	for _, test := range []struct {
@@ -342,6 +344,20 @@ func TestValidateLongMemEvalComparisonRequiresSharedModelResponseLedger(t *testi
 			},
 			wantError: "model_response_cache_errors",
 		},
+		{
+			name: "different user scope",
+			mutate: func(metadata map[string]any) {
+				metadata["user_scope"] = "different-scope"
+			},
+			wantError: "user_scope",
+		},
+		{
+			name: "implicit user scope",
+			mutate: func(metadata map[string]any) {
+				metadata["user_scope_explicit"] = false
+			},
+			wantError: "user_scope_explicit",
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			baseline := newResult("upstream-main")
@@ -370,6 +386,15 @@ func TestValidateLongMemEvalComparisonRequiresSharedModelResponseLedger(t *testi
 	err = validateLongMemEvalComparison(baseline, candidate)
 	if err == nil || !strings.Contains(err.Error(), "requires zero") {
 		t.Fatalf("non-zero model response cache error = %v", err)
+	}
+
+	baseline = newResult("upstream-main")
+	candidate = newResult("candidate-2196")
+	baseline.Metadata["user_scope_explicit"] = false
+	candidate.Metadata["user_scope_explicit"] = false
+	err = validateLongMemEvalComparison(baseline, candidate)
+	if err == nil || !strings.Contains(err.Error(), "explicit shared user scope") {
+		t.Fatalf("implicit user scope error = %v", err)
 	}
 }
 

@@ -909,6 +909,9 @@ func runLongMemEvalMemory(ctx context.Context) error {
 	if err := validateLongMemEvalProtocol(protocol); err != nil {
 		return err
 	}
+	if err := validateConfiguredLongMemEvalModelResponseCacheScope(protocol); err != nil {
+		return err
+	}
 	datasetDigest, selectionDigest, protocolDigest, err := longMemEvalExperimentDigests(
 		datasetPath,
 		cases,
@@ -985,6 +988,11 @@ func runLongMemEvalMemory(ctx context.Context) error {
 		return err
 	}
 	runID := time.Now().UTC().Format("20060102T150405Z")
+	userScope := protocol.UserScope
+	userScopeExplicit := userScope != ""
+	if !userScopeExplicit {
+		userScope = runID
+	}
 	results := &runResult{
 		Metadata: map[string]any{
 			"benchmark":                    "longmemeval-memory",
@@ -1012,6 +1020,8 @@ func runLongMemEvalMemory(ctx context.Context) error {
 			"table_suffix":                 *flagTableSuffix,
 			"answer_enabled":               *flagLMEAnswer,
 			"run_id":                       runID,
+			"user_scope":                   userScope,
+			"user_scope_explicit":          userScopeExplicit,
 			"started_at":                   time.Now().UTC().Format(time.RFC3339),
 			"max_sessions":                 *flagLMEMaxSessions,
 			"max_pairs":                    *flagLMEMaxPairs,
@@ -1104,7 +1114,7 @@ func runLongMemEvalMemory(ctx context.Context) error {
 			}
 			tracker.Snapshot()
 			br := runCaseBackend(
-				ctx, llm, tracker, backend, inst, runID,
+				ctx, llm, tracker, backend, inst, runID, userScope,
 				modelName, modelVariant, answerCache,
 			)
 			cr.BackendResults[backendName] = br
@@ -1190,12 +1200,13 @@ func runCaseBackend(
 	backend memoryBackend,
 	inst *lmeInstance,
 	runID string,
+	userScope string,
 	modelName string,
 	modelVariant string,
 	answerCache *longMemEvalAnswerCache,
 ) *backendResult {
 	start := time.Now()
-	userID := fmt.Sprintf("%s-%s-%s", backend.Name(), inst.QuestionID, runID)
+	userID := fmt.Sprintf("%s-%s-%s", backend.Name(), inst.QuestionID, userScope)
 	sessionID := fmt.Sprintf("%s-%s", backend.Name(), inst.QuestionID)
 	userKey := memory.UserKey{AppName: lmeAppName, UserID: userID}
 	sess := session.NewSession(lmeAppName, userID, sessionID)

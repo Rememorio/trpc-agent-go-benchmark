@@ -93,6 +93,7 @@ type lmeProtocolProvenance struct {
 	TopK                 int                           `json:"top_k"`
 	MaxSessions          int                           `json:"max_sessions"`
 	MaxPairs             int                           `json:"max_pairs"`
+	UserScope            string                        `json:"user_scope,omitempty"`
 	IngestWait           string                        `json:"ingest_wait"`
 	ModelCallTimeout     string                        `json:"model_call_timeout"`
 	AnswerEnabled        bool                          `json:"answer_enabled"`
@@ -187,6 +188,7 @@ func currentLongMemEvalProtocol() lmeProtocolProvenance {
 		TopK:                 *flagVectorTopK,
 		MaxSessions:          *flagLMEMaxSessions,
 		MaxPairs:             *flagLMEMaxPairs,
+		UserScope:            configuredLongMemEvalUserScope(),
 		IngestWait:           flagLMEIngestWait.String(),
 		ModelCallTimeout:     flagLMEModelCallTimeout.String(),
 		AnswerEnabled:        *flagLMEAnswer,
@@ -229,6 +231,9 @@ func validateLongMemEvalProtocol(protocol lmeProtocolProvenance) error {
 			"LongMemEval protocol session and pair limits must not be negative",
 		)
 	}
+	if err := validateLongMemEvalUserScope(protocol.UserScope); err != nil {
+		return err
+	}
 	if protocol.AnswerGeneration.PrimaryMaxTokens <= 0 ||
 		protocol.AnswerGeneration.RetryMaxTokens <= 0 ||
 		protocol.AnswerGeneration.MaxAttempts <= 0 {
@@ -239,6 +244,47 @@ func validateLongMemEvalProtocol(protocol lmeProtocolProvenance) error {
 		return errors.New("LongMemEval judge generation contract is invalid")
 	}
 	return nil
+}
+
+func configuredLongMemEvalUserScope() string {
+	return strings.TrimSpace(*flagLMEUserScope)
+}
+
+func validateLongMemEvalUserScope(scope string) error {
+	if scope == "" {
+		return nil
+	}
+	if len(scope) > 64 {
+		return fmt.Errorf(
+			"LongMemEval user scope must not exceed 64 bytes, got %d",
+			len(scope),
+		)
+	}
+	for _, char := range scope {
+		if char >= 'a' && char <= 'z' ||
+			char >= 'A' && char <= 'Z' ||
+			char >= '0' && char <= '9' ||
+			char == '-' || char == '_' || char == '.' {
+			continue
+		}
+		return fmt.Errorf(
+			"LongMemEval user scope %q contains unsupported character %q; use ASCII letters, digits, '.', '_' or '-'",
+			scope, char,
+		)
+	}
+	return nil
+}
+
+func validateConfiguredLongMemEvalModelResponseCacheScope(
+	protocol lmeProtocolProvenance,
+) error {
+	if strings.TrimSpace(*flagLMEModelResponseCache) == "" ||
+		protocol.UserScope != "" {
+		return nil
+	}
+	return errors.New(
+		"-lme-model-response-cache requires an explicit -lme-user-scope so paired runs produce identical memory identities",
+	)
 }
 
 func validateLongMemEvalResultProtocol(

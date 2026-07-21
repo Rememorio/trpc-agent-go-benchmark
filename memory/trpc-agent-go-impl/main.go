@@ -182,6 +182,11 @@ var (
 		0,
 		"Max LongMemEval user/assistant pairs to ingest per case (0=all)",
 	)
+	flagLMEUserScope = flag.String(
+		"lme-user-scope",
+		"",
+		"Stable memory user-ID scope for paired LongMemEval runs (empty=unique per run)",
+	)
 	flagLMEIngestWait = flag.Duration(
 		"lme-ingest-wait",
 		250*time.Millisecond,

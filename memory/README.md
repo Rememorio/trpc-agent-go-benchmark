@@ -576,13 +576,18 @@ For causal ablations of ingestion behavior, `-lme-model-response-cache` can
 share complete primary-run model response streams between sequential runs. Its
 key covers the deterministic request, tool declarations, model, and variant;
 the ledger stores only the request hash and responses, not request messages or
-headers. Run the control first to populate the ledger, then run the candidate
-with the same file, normally with `-lme-answer=false` so answer evaluation stays
-separate. Exact request matches replay with zero model calls and tokens, while
-requests changed by an earlier candidate state remain honest cache misses. A
-strict comparison rejects different or ephemeral model-response ledgers and
-any recorded cache error. This mode controls model-response variance for
-mechanism attribution; use an independent uncached run for production cost.
+headers. Both arms must also set the same explicit `-lme-user-scope`; otherwise
+run-specific user IDs change generated memory IDs embedded in later extraction
+prompts. The runner rejects a persistent model-response cache without that
+scope. Run the control first to populate the ledger, then run the candidate with
+the same cache and scope, normally with `-lme-answer=false` so answer evaluation
+stays separate. Use a fresh scope and isolated stores for each experiment.
+Exact request matches replay with zero model calls and tokens, while requests
+changed by an earlier candidate state remain honest cache misses. A strict
+comparison rejects different or implicit user scopes, different or ephemeral
+model-response ledgers, and any recorded cache error. This mode controls
+model-response variance for mechanism attribution; use an independent uncached
+run for production cost.
 
 The judge command checkpoints `judged_results.json` after each case. An odd
 `-lme-judge-runs` value greater than one records every independent vote and
@@ -710,6 +715,7 @@ LongMemEval-specific options:
 | `-lme-preregistered-selection` |   | Execute and verify an exact selection manifest |
 | `-lme-max-sessions`      | 0       | Max haystack sessions per case               |
 | `-lme-max-pairs`         | 0       | Max user/assistant pairs per case            |
+| `-lme-user-scope`        |         | Stable user-ID scope for paired primary runs |
 | `-lme-ingest-wait`       | 250ms   | Extra delay after completed pair ingestion   |
 | `-lme-model-call-timeout` | 5m      | Model timeout; mem0 OSS allows 1m overhead   |
 | `-lme-answer`            | true    | Generate answers from retrieved memories     |

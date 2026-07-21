@@ -304,6 +304,8 @@ func validateLongMemEvalComparison(baseline, candidate *runResult) error {
 			"model_response_cache_shared",
 			"model_response_cache_ledger_id",
 			"model_response_cache_errors",
+			"user_scope",
+			"user_scope_explicit",
 		} {
 			if err := compareLongMemEvalMetadataValue(
 				baseline.Metadata,
@@ -318,6 +320,12 @@ func validateLongMemEvalComparison(baseline, candidate *runResult) error {
 		if !ok || !baselineShared {
 			return errors.New(
 				"strict LongMemEval comparison requires a shared model response cache",
+			)
+		}
+		userScopeExplicit, ok := baseline.Metadata["user_scope_explicit"].(bool)
+		if !ok || !userScopeExplicit {
+			return errors.New(
+				"strict LongMemEval comparison with a model response cache requires an explicit shared user scope",
 			)
 		}
 		cacheErrors, ok := longMemEvalMetadataInt(

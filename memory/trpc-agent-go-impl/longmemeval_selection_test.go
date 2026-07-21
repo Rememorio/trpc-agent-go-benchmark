@@ -612,18 +612,21 @@ func TestCurrentLongMemEvalProtocolBindsEvaluationConfiguration(t *testing.T) {
 	originalEvalModel := *flagEvalModel
 	originalEmbedModel := *flagEmbedModel
 	originalJudgeRuns := *flagLMEJudgeRuns
+	originalUserScope := *flagLMEUserScope
 	t.Cleanup(func() {
 		*flagModel = originalModel
 		*flagModelVariant = originalVariant
 		*flagEvalModel = originalEvalModel
 		*flagEmbedModel = originalEmbedModel
 		*flagLMEJudgeRuns = originalJudgeRuns
+		*flagLMEUserScope = originalUserScope
 	})
 	*flagModel = "answer-model-v2"
 	*flagModelVariant = "glm"
 	*flagEvalModel = "judge-model-v2"
 	*flagEmbedModel = "embedding-model-v2"
 	*flagLMEJudgeRuns = 3
+	*flagLMEUserScope = "paired-ablation"
 
 	protocol := currentLongMemEvalProtocol()
 	if protocol.AnswerModel != *flagModel ||
@@ -632,6 +635,7 @@ func TestCurrentLongMemEvalProtocolBindsEvaluationConfiguration(t *testing.T) {
 		protocol.JudgeModel != *flagEvalModel ||
 		protocol.JudgeModelVariant != *flagModelVariant ||
 		protocol.JudgeRuns != *flagLMEJudgeRuns ||
+		protocol.UserScope != *flagLMEUserScope ||
 		protocol.AnswerPromptVersion != lmeAnswerPromptVersion ||
 		protocol.JudgePromptVersion != lmeJudgePromptVersion ||
 		protocol.JudgeProtocolVersion != lmeJudgeProtocolVersion ||
@@ -653,6 +657,7 @@ func TestCurrentLongMemEvalProtocolBindsEvaluationConfiguration(t *testing.T) {
 		"answer model":    func(p *lmeProtocolProvenance) { p.AnswerModel = "other" },
 		"embedding model": func(p *lmeProtocolProvenance) { p.EmbeddingModel = "other" },
 		"judge runs":      func(p *lmeProtocolProvenance) { p.JudgeRuns = 1 },
+		"user scope":      func(p *lmeProtocolProvenance) { p.UserScope = "other" },
 	} {
 		t.Run(name, func(t *testing.T) {
 			changed := protocol
@@ -665,6 +670,45 @@ func TestCurrentLongMemEvalProtocolBindsEvaluationConfiguration(t *testing.T) {
 				t.Fatalf("%s did not change protocol digest", name)
 			}
 		})
+	}
+}
+
+func TestValidateLongMemEvalUserScope(t *testing.T) {
+	t.Parallel()
+
+	for _, scope := range []string{"", "paired-ablation.v2_01"} {
+		if err := validateLongMemEvalUserScope(scope); err != nil {
+			t.Fatalf("validateLongMemEvalUserScope(%q) = %v", scope, err)
+		}
+	}
+	for _, scope := range []string{"contains/slash", strings.Repeat("a", 65)} {
+		if err := validateLongMemEvalUserScope(scope); err == nil {
+			t.Fatalf("validateLongMemEvalUserScope(%q) succeeded", scope)
+		}
+	}
+}
+
+func TestValidateConfiguredLongMemEvalModelResponseCacheScope(t *testing.T) {
+	originalCache := *flagLMEModelResponseCache
+	t.Cleanup(func() { *flagLMEModelResponseCache = originalCache })
+
+	*flagLMEModelResponseCache = ""
+	if err := validateConfiguredLongMemEvalModelResponseCacheScope(
+		lmeProtocolProvenance{},
+	); err != nil {
+		t.Fatalf("disabled cache: %v", err)
+	}
+
+	*flagLMEModelResponseCache = "model-responses.json"
+	if err := validateConfiguredLongMemEvalModelResponseCacheScope(
+		lmeProtocolProvenance{},
+	); err == nil || !strings.Contains(err.Error(), "-lme-user-scope") {
+		t.Fatalf("missing scope error = %v", err)
+	}
+	if err := validateConfiguredLongMemEvalModelResponseCacheScope(
+		lmeProtocolProvenance{UserScope: "paired-ablation"},
+	); err != nil {
+		t.Fatalf("explicit scope: %v", err)
 	}
 }
 

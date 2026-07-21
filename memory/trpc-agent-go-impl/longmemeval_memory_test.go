@@ -2795,11 +2795,14 @@ func TestRunCaseBackendKeepsAnswerProvenanceOnProducingPair(t *testing.T) {
 	backend := &lmePairProvenanceBackend{}
 	result := runCaseBackend(
 		context.Background(), nil, &lmeTokenTracker{}, backend,
-		instance, "run-1", "glm52", "glm", nil,
+		instance, "run-1", "paired-scope", "glm52", "glm", nil,
 	)
 
 	if result.Error != "" {
 		t.Fatalf("runCaseBackend() error = %q", result.Error)
+	}
+	if result.UserID != "pair-provenance-question-1-paired-scope" {
+		t.Fatalf("runCaseBackend() user ID = %q", result.UserID)
 	}
 	if len(result.IngestTraces) != 2 ||
 		len(result.IngestTraces[0].NewMemories) != 0 ||
