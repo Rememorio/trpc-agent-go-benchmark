@@ -1110,7 +1110,7 @@ func runLongMemEvalMemory(ctx context.Context) error {
 			cr.BackendResults[backendName] = br
 			_ = backend.Close()
 			log.Print(longMemEvalBackendProgress(backendName, br, *flagLMEBlindProgress))
-			saveCaseLog(*flagOutput, cr, br)
+			saveCaseLog(*flagOutput, cr, br, *flagLMEBlindProgress)
 		}
 		results.Cases = append(results.Cases, cr)
 		updateLongMemEvalAnswerCacheMetadata(results.Metadata, answerCache)
@@ -2816,8 +2816,17 @@ func writeLongMemEvalResults(path string, result *runResult) error {
 	return nil
 }
 
-func saveCaseLog(outputDir string, cr *caseResult, br *backendResult) {
+func saveCaseLog(
+	outputDir string,
+	cr *caseResult,
+	br *backendResult,
+	blindProgress bool,
+) {
 	path := filepath.Join(outputDir, fmt.Sprintf("%s_%s.log", cr.QuestionID, br.Backend))
+	if blindProgress {
+		saveBlindCaseLog(path, cr, br)
+		return
+	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "QuestionID: %s\nType: %s\nDate: %s\n", cr.QuestionID, cr.QuestionType, cr.QuestionDate)
 	fmt.Fprintf(&b, "Question: %s\nReference: %s\nAnswerSessions: %s\n\n",
@@ -2947,7 +2956,78 @@ func saveCaseLog(outputDir string, cr *caseResult, br *backendResult) {
 			br.AnswerUsage.LLMCalls,
 			br.AnswerUsage.CacheHitRate)
 	}
-	if err := os.WriteFile(path, []byte(b.String()), 0644); err != nil {
+	writeCaseLog(path, b.String())
+}
+
+func saveBlindCaseLog(path string, cr *caseResult, br *backendResult) {
+	var b strings.Builder
+	fmt.Fprintln(&b, "BlindProgress: true")
+	fmt.Fprintln(&b, "OutcomeContent: retained in results.json; keep sealed until all arms finish")
+	fmt.Fprintf(&b, "QuestionID: %s\nType: %s\n", cr.QuestionID, cr.QuestionType)
+	fmt.Fprintf(
+		&b,
+		"Backend: %s\nPairs: %d\nFinalMemories: %d\nRetrievalHits: %d\nSnapshotTruncated: %v\nErrorPresent: %v\nAnswerErrorPresent: %v\n\n",
+		br.Backend,
+		br.IngestedPairs,
+		len(br.FinalMemories),
+		len(br.Retrieval),
+		br.SnapshotTruncated,
+		br.Error != "",
+		br.AnswerError != "",
+	)
+	if br.TokenUsage != nil {
+		fmt.Fprintf(&b, "TokenUsage: prompt=%d completion=%d total=%d cached=%d calls=%d cache_hit=%.4f\n",
+			br.TokenUsage.PromptTokens,
+			br.TokenUsage.CompletionTokens,
+			br.TokenUsage.TotalTokens,
+			br.TokenUsage.CachedTokens,
+			br.TokenUsage.LLMCalls,
+			br.TokenUsage.CacheHitRate)
+	}
+	if br.EmbeddingUsage != nil {
+		fmt.Fprintf(&b, "EmbeddingUsage: prompt=%d total=%d calls=%d\n",
+			br.EmbeddingUsage.PromptTokens,
+			br.EmbeddingUsage.TotalTokens,
+			br.EmbeddingUsage.Calls)
+	}
+	fmt.Fprintf(&b, "ProviderUsage: reported=%v error_present=%v\n\n",
+		br.ProviderUsageReported, br.ProviderUsageError != "")
+	fmt.Fprintln(&b, "=== Ingestion Progress ===")
+	for _, tr := range br.IngestTraces {
+		fmt.Fprintf(&b, "[session_idx=%d pair=%d] duration=%dms new=%d total=%d snapshot_truncated=%v error_present=%v\n",
+			tr.SessionIndex,
+			tr.PairIndex,
+			tr.DurationMs,
+			len(tr.NewMemories),
+			tr.MemoryCount,
+			tr.SnapshotTruncated,
+			tr.Error != "",
+		)
+		if tr.TokenUsage != nil {
+			fmt.Fprintf(&b, "  token_usage: prompt=%d completion=%d total=%d cached=%d calls=%d cache_hit=%.4f\n",
+				tr.TokenUsage.PromptTokens,
+				tr.TokenUsage.CompletionTokens,
+				tr.TokenUsage.TotalTokens,
+				tr.TokenUsage.CachedTokens,
+				tr.TokenUsage.LLMCalls,
+				tr.TokenUsage.CacheHitRate)
+		}
+		if tr.EmbeddingUsage != nil {
+			fmt.Fprintf(&b, "  embedding_usage: prompt=%d total=%d calls=%d\n",
+				tr.EmbeddingUsage.PromptTokens,
+				tr.EmbeddingUsage.TotalTokens,
+				tr.EmbeddingUsage.Calls)
+		}
+		if tr.ProviderUsageReported || tr.ProviderUsageError != "" {
+			fmt.Fprintf(&b, "  provider_usage: reported=%v error_present=%v\n",
+				tr.ProviderUsageReported, tr.ProviderUsageError != "")
+		}
+	}
+	writeCaseLog(path, b.String())
+}
+
+func writeCaseLog(path, content string) {
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 		log.Printf("write case log: %v", err)
 	}
 }

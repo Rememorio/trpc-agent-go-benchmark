@@ -310,7 +310,9 @@ LME_AGENT_REPLACEMENT="trpc.group/trpc-go/trpc-agent-go@<candidate-pseudo-versio
 # set, case metadata, and benchmark revision must still match the manifest.
 # Additional case filters, resampling, max-tasks truncation, and model,
 # embedding, answer-generation, or judge drift are rejected before provider
-# initialization.
+# initialization. Use a fresh answer ledger for each replicate and share that
+# ledger across all three arms. The path must not exist before the first arm.
+LME_BLIND_ANSWER_CACHE=../results/lme-holdout-answer-replicate-1-cache.json
 LME_AGENT_PROFILE=upstream \
 LME_AGENT_REPLACEMENT="trpc.group/trpc-go/trpc-agent-go@<upstream-pseudo-version>" \
 ./run-longmemeval.sh \
@@ -321,15 +323,52 @@ LME_AGENT_REPLACEMENT="trpc.group/trpc-go/trpc-agent-go@<upstream-pseudo-version
   -lme-exclude-question-ids-file ../results/lme-observed-question-ids.txt \
   -lme-implementation upstream-holdout-<commit> \
   -lme-blind-progress=true \
+  -pgvector-update-policy reconcile \
+  -pgvector-assistant-result-extraction=false \
   -model "$LME_ANSWER_MODEL" \
   -eval-model "$LME_JUDGE_MODEL" \
   -model-variant "$LME_MODEL_VARIANT" \
   -embed-model "$LME_EMBED_MODEL" \
   -lme-judge-runs 3 \
   -lme-answer=true \
+  -lme-answer-cache "$LME_BLIND_ANSWER_CACHE" \
+  -mem0-llm-temperature 0 \
   -vector-topk 30 \
   -table-suffix _lme_holdout_upstream \
   -output ../results/lme-holdout-upstream
+
+# Run candidate pgvector against the same manifest and answer ledger. Mem0 is
+# already frozen in the upstream run and must not be rerun for this comparison.
+LME_AGENT_PROFILE=candidate \
+LME_AGENT_REPLACEMENT="trpc.group/trpc-go/trpc-agent-go@<candidate-pseudo-version>" \
+./run-longmemeval.sh \
+  -dataset-format longmemeval \
+  -dataset ../../summary/data/longmemeval-cleaned/longmemeval_oracle.json \
+  -memory-backend pgvector \
+  -lme-preregistered-selection ../results/lme-holdout-selection.json \
+  -lme-exclude-question-ids-file ../results/lme-observed-question-ids.txt \
+  -lme-implementation candidate-holdout-<commit> \
+  -lme-blind-progress=true \
+  -model "$LME_ANSWER_MODEL" \
+  -eval-model "$LME_JUDGE_MODEL" \
+  -model-variant "$LME_MODEL_VARIANT" \
+  -embed-model "$LME_EMBED_MODEL" \
+  -lme-judge-runs 3 \
+  -lme-answer=true \
+  -lme-answer-cache "$LME_BLIND_ANSWER_CACHE" \
+  -pgvector-update-policy history-preserving \
+  -pgvector-assistant-result-extraction=true \
+  -vector-topk 30 \
+  -table-suffix _lme_holdout_candidate \
+  -output ../results/lme-holdout-candidate
+
+# Blind progress hides outcome content from the console and per-case logs,
+# while retaining operational counts, latency, and usage. Raw results.json
+# files still contain questions, references, retrievals, answers, and metrics.
+# Keep them sealed until every arm in the replicate finishes. Then judge all
+# arm outputs with one new shared judge cache. Do not inspect results or run
+# adaptive retries between arms, and use fresh answer and judge ledgers for
+# each answer replicate.
 
 # Stratified 16-question development baseline plus a frozen Mem0 reference arm.
 LME_AGENT_REPLACEMENT="trpc.group/trpc-go/trpc-agent-go@<upstream-pseudo-version>" \
@@ -668,7 +707,7 @@ LongMemEval-specific options:
 | `-lme-answer`            | true    | Generate answers from retrieved memories     |
 | `-lme-answer-cache`      |         | Shared content-addressed answer cache         |
 | `-lme-model-response-cache` |      | Shared primary-run model response ledger      |
-| `-lme-blind-progress`    | false   | Hide answers and quality from progress logs  |
+| `-lme-blind-progress`    | false   | Hide outcome content from progress and case logs |
 | `-lme-implementation`    | (env)   | Reproducible implementation label            |
 | `-lme-reanswer-results`   |         | Re-answer using saved ranked retrieval hits  |
 | `-lme-reanswer-reuse-source-answers` | true | Seed cache from compatible source answers |

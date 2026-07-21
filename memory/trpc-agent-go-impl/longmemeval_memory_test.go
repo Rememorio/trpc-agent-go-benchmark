@@ -154,6 +154,109 @@ func TestLongMemEvalBlindProgressRedactsOutcomes(t *testing.T) {
 	}
 }
 
+func TestSaveCaseLogBlindProgressRedactsOutcomeContent(t *testing.T) {
+	t.Parallel()
+	outputDir := t.TempDir()
+	cr := &caseResult{
+		QuestionID:       "case-1",
+		QuestionType:     "knowledge-update",
+		QuestionDate:     "2026-07-21",
+		Question:         "question-secret",
+		Answer:           "reference-secret",
+		AnswerSessionIDs: []string{"answer-session-secret"},
+	}
+	br := &backendResult{
+		Backend:               "pgvector",
+		UserID:                "user-1",
+		IngestedPairs:         1,
+		SnapshotTruncated:     true,
+		ProviderUsageReported: true,
+		ProviderUsageError:    "provider-error-secret",
+		FailureStage:          "failure-stage-secret",
+		Answer:                "model-answer-secret",
+		AnswerError:           "answer-error-secret",
+		Error:                 "backend-error-secret",
+		TokenUsage: &lmeTokenUsage{
+			PromptTokens:     10,
+			CompletionTokens: 2,
+			TotalTokens:      12,
+			CachedTokens:     4,
+			LLMCalls:         1,
+		},
+		EmbeddingUsage: &lmeEmbeddingUsage{
+			PromptTokens: 3,
+			TotalTokens:  3,
+			Calls:        1,
+		},
+		IngestTraces: []ingestTrace{{
+			SessionIndex:      2,
+			SessionID:         "session-2",
+			Date:              "2026-07-20",
+			PairIndex:         3,
+			HasAnswer:         true,
+			Messages:          []traceMessage{{Role: "user", Content: "message-secret"}},
+			Extraction:        &extractionTrace{Error: "extraction-error-secret"},
+			NewMemories:       []memorySnapshot{{Memory: "new-memory-secret"}},
+			MemoryCount:       4,
+			SnapshotTruncated: true,
+			Error:             "trace-error-secret",
+			DurationMs:        25,
+		}},
+		FinalMemories: []memorySnapshot{{Memory: "final-memory-secret"}},
+		Retrieval:     []memoryHit{{Memory: "retrieval-secret"}},
+	}
+
+	saveCaseLog(outputDir, cr, br, true)
+	data, err := os.ReadFile(filepath.Join(outputDir, "case-1_pgvector.log"))
+	if err != nil {
+		t.Fatalf("read blind case log: %v", err)
+	}
+	logText := string(data)
+	for _, secret := range []string{
+		"question-secret",
+		"reference-secret",
+		"answer-session-secret",
+		"user-1",
+		"session-2",
+		"2026-07-20",
+		"model-answer-secret",
+		"failure-stage-secret",
+		"backend-error-secret",
+		"answer-error-secret",
+		"provider-error-secret",
+		"trace-error-secret",
+		"message-secret",
+		"extraction-error-secret",
+		"new-memory-secret",
+		"final-memory-secret",
+		"retrieval-secret",
+		"has_answer=",
+		"=== Answer ===",
+		"Evidence:",
+	} {
+		if strings.Contains(logText, secret) {
+			t.Fatalf("blind case log exposed %q:\n%s", secret, logText)
+		}
+	}
+	for _, operational := range []string{
+		"BlindProgress: true",
+		"QuestionID: case-1",
+		"Backend: pgvector",
+		"Pairs: 1",
+		"FinalMemories: 1",
+		"RetrievalHits: 1",
+		"ErrorPresent: true",
+		"TokenUsage: prompt=10 completion=2 total=12 cached=4 calls=1",
+		"EmbeddingUsage: prompt=3 total=3 calls=1",
+		"[session_idx=2 pair=3]",
+		"duration=25ms new=1 total=4 snapshot_truncated=true error_present=true",
+	} {
+		if !strings.Contains(logText, operational) {
+			t.Fatalf("blind case log omitted %q:\n%s", operational, logText)
+		}
+	}
+}
+
 func TestLongMemEvalBuildProvenance(t *testing.T) {
 	t.Parallel()
 	if current := currentLongMemEvalBuildProvenance(); current.GoVersion == "" {

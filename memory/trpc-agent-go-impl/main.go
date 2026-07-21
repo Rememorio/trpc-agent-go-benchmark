@@ -205,7 +205,7 @@ var (
 	flagLMEBlindProgress = flag.Bool(
 		"lme-blind-progress",
 		false,
-		"Redact LongMemEval answers and quality metrics from progress output",
+		"Redact LongMemEval outcome content from progress and per-case logs",
 	)
 	flagLMEImplementation = flag.String(
 		"lme-implementation",
