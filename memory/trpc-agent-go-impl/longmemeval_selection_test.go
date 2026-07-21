@@ -697,6 +697,7 @@ func TestValidateLongMemEvalResultProtocol(t *testing.T) {
 		t.Fatalf("validate matching result protocol: %v", err)
 	}
 	migrated := protocol
+	migrated.AnswerEnabled = !protocol.AnswerEnabled
 	migrated.AnswerPromptVersion = "new-answer-prompt"
 	migrated.AnswerGeneration.RetryMaxTokens++
 	migrated.JudgePromptVersion = "new-judge-prompt"

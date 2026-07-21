@@ -335,10 +335,11 @@ func validateLongMemEvalReanswerSourceProtocol(
 		)
 	}
 
-	// Re-answering intentionally replaces answer and judge behavior while
-	// preserving the replay, retrieval, model, and selection boundaries that
-	// produced the saved ranked hits.
+	// Re-answering intentionally enables and replaces answer and judge behavior
+	// while preserving the replay, retrieval, model, and selection boundaries
+	// that produced the saved ranked hits.
 	expected := current
+	expected.AnswerEnabled = recorded.AnswerEnabled
 	expected.ModelTemperature = recorded.ModelTemperature
 	expected.AnswerPromptVersion = recorded.AnswerPromptVersion
 	expected.AnswerGeneration = recorded.AnswerGeneration
