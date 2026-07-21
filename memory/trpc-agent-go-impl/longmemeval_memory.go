@@ -1587,10 +1587,13 @@ func waitForAutoMemory(
 func answerFromMemories(ctx context.Context, llm model.Model, inst *lmeInstance, hits []memoryHit) (string, error) {
 	prompt := buildLongMemEvalAnswerPrompt(inst, hits)
 	var lastErr error
+	var previousResponse string
 	for attempt := 0; attempt < lmeAnswerMaxAttempts; attempt++ {
 		req := newLongMemEvalAnswerRequest(prompt)
 		if attempt > 0 {
-			req = newLongMemEvalAnswerRetryRequest(prompt)
+			req = newLongMemEvalAnswerRetryRequest(
+				prompt, previousResponse,
+			)
 		}
 		respCh, err := llm.GenerateContent(ctx, req)
 		if err != nil {
@@ -1626,6 +1629,7 @@ func answerFromMemories(ctx context.Context, llm model.Model, inst *lmeInstance,
 		out = strings.TrimSpace(out)
 		if truncated && attempt+1 < lmeAnswerMaxAttempts {
 			lastErr = errors.New("model answer reached the completion token limit")
+			previousResponse = out
 			continue
 		}
 		if out != "" {
@@ -2409,20 +2413,33 @@ func newLongMemEvalAnswerRequest(prompt string) *model.Request {
 	}
 }
 
-func newLongMemEvalAnswerRetryRequest(prompt string) *model.Request {
-	req := newLongMemEvalAnswerRequest(prompt + `
-
-RETRY REQUIREMENT: The previous response exceeded the token limit. Return the
-final answer now in at most 128 words. For a scalar, date, name, count, or list,
-return only the requested value or values. Do not include analysis, reasoning,
-a preamble, uncertainty discussion, or markdown.`)
+func newLongMemEvalAnswerRetryRequest(
+	prompt string,
+	previousResponse string,
+) *model.Request {
+	previousResponse = strings.TrimSpace(previousResponse)
+	if previousResponse == "" {
+		previousResponse = "The previous response returned no text."
+	}
+	req := newLongMemEvalAnswerRequest(prompt)
 	maxTokens := lmeAnswerRetryMaxTokens
 	req.MaxTokens = &maxTokens
-	req.Messages = append([]model.Message{
+	req.Messages = []model.Message{
 		model.NewSystemMessage(
-			"Output only the requested final answer. Never reveal analysis or reasoning.",
+			"Complete the truncated answer while following the original evidence policy. " +
+				"The previous assistant response is a draft, not additional evidence. " +
+				"Output only the requested final answer and never reveal reasoning.",
 		),
-	}, req.Messages...)
+		model.NewUserMessage(prompt),
+		model.NewAssistantMessage(previousResponse),
+		model.NewUserMessage(`The previous response exceeded the token limit. Return
+the final answer now in at most 128 words. Preserve an already-grounded
+conclusion from the draft when it is consistent with the original evidence
+policy, but do not introduce a new premise or treat the draft as evidence. For
+a scalar, date, name, count, or list, return only the requested value or values.
+Do not include analysis, reasoning, a preamble, uncertainty discussion, or
+markdown.`),
+	}
 	return req
 }
 

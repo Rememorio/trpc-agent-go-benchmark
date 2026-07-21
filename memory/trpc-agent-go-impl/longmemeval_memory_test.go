@@ -2963,13 +2963,20 @@ func TestAnswerFromMemoriesRetriesTruncatedResponse(t *testing.T) {
 		*llm.requests[1].MaxTokens != lmeAnswerRetryMaxTokens {
 		t.Fatalf("retry max tokens = %v", llm.requests[1].MaxTokens)
 	}
-	if len(llm.requests[1].Messages) != 2 ||
+	if len(llm.requests[1].Messages) != 4 ||
 		llm.requests[1].Messages[0].Role != model.RoleSystem ||
 		!strings.Contains(llm.requests[1].Messages[0].Content,
-			"Never reveal analysis or reasoning") ||
+			"draft, not additional evidence") ||
+		llm.requests[1].Messages[1].Role != model.RoleUser ||
 		!strings.Contains(llm.requests[1].Messages[1].Content,
-			"RETRY REQUIREMENT") ||
-		!strings.Contains(llm.requests[1].Messages[1].Content,
+			"How many tanks?") ||
+		llm.requests[1].Messages[2].Role != model.RoleAssistant ||
+		llm.requests[1].Messages[2].Content !=
+			"reasoning without a final answer" ||
+		llm.requests[1].Messages[3].Role != model.RoleUser ||
+		!strings.Contains(llm.requests[1].Messages[3].Content,
+			"Preserve an already-grounded") ||
+		!strings.Contains(llm.requests[1].Messages[3].Content,
 			"at most 128 words") {
 		t.Fatalf("retry prompt does not enforce a concise final answer: %+v",
 			llm.requests[1].Messages)
