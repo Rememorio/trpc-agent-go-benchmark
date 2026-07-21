@@ -696,6 +696,38 @@ func TestValidateLongMemEvalResultProtocol(t *testing.T) {
 	); err != nil {
 		t.Fatalf("validate matching result protocol: %v", err)
 	}
+	migrated := protocol
+	migrated.AnswerPromptVersion = "new-answer-prompt"
+	migrated.AnswerGeneration.RetryMaxTokens++
+	migrated.JudgePromptVersion = "new-judge-prompt"
+	migrated.JudgeGeneration.RepairMaxTokens++
+	metadata := newMetadata(t)
+	sourceDigest, err := validateLongMemEvalReanswerSourceProtocol(
+		metadata, migrated,
+	)
+	if err != nil || sourceDigest != digest {
+		t.Fatalf(
+			"validate re-answer migration digest = %q, err = %v",
+			sourceDigest, err,
+		)
+	}
+	newDigest, err := replaceLongMemEvalResultProtocol(metadata, migrated)
+	if err != nil || newDigest == digest {
+		t.Fatalf(
+			"replace re-answer protocol digest = %q, err = %v",
+			newDigest, err,
+		)
+	}
+	if err := validateLongMemEvalResultProtocol(metadata, migrated); err != nil {
+		t.Fatalf("validate replaced re-answer protocol: %v", err)
+	}
+	drifted := migrated
+	drifted.TopK++
+	if _, err := validateLongMemEvalReanswerSourceProtocol(
+		newMetadata(t), drifted,
+	); err == nil || !strings.Contains(err.Error(), "outside the answer/judge contract") {
+		t.Fatalf("re-answer source drift error = %v", err)
+	}
 	if err := validateLongMemEvalResultProtocol(nil, protocol); err == nil ||
 		!strings.Contains(err.Error(), "metadata is missing") {
 		t.Fatalf("missing metadata error = %v", err)
