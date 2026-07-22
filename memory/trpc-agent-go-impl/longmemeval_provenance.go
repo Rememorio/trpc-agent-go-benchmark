@@ -41,7 +41,7 @@ const (
 	lmeProtocolVersion             = "lme-memory-turn-pair-v2"
 	lmeAnswerPromptVersion         = "lme-memory-answer-v7"
 	lmeJudgePromptVersion          = "lme-official-superset-judge-v3"
-	lmeJudgeProtocolVersion        = "lme-content-addressed-verdict-v2"
+	lmeJudgeProtocolVersion        = "lme-content-addressed-verdict-v1"
 	lmeJudgeCacheFormatVersion     = "lme-judge-cache-v1"
 	lmeAnswerCacheFormatVersion    = "lme-answer-cache-v1"
 	lmeModelCacheFormatVersion     = "lme-model-response-cache-v1"
@@ -146,10 +146,15 @@ func currentLongMemEvalAnswerGeneration() lmeAnswerGenerationProvenance {
 }
 
 func currentLongMemEvalJudgeGeneration() lmeJudgeGenerationProvenance {
+	generation := currentLongMemEvalProtocolJudgeGeneration()
+	generation.MaxExtraAttempts = lmeJudgeMaxExtraAttempts
+	return generation
+}
+
+func currentLongMemEvalProtocolJudgeGeneration() lmeJudgeGenerationProvenance {
 	return lmeJudgeGenerationProvenance{
 		PrimaryMaxTokens: lmeJudgePrimaryMaxTokens,
 		RepairMaxTokens:  lmeJudgeRepairMaxTokens,
-		MaxExtraAttempts: lmeJudgeMaxExtraAttempts,
 		Temperature:      0,
 		ReasoningEffort:  "low",
 		ThinkingEnabled:  false,
@@ -188,7 +193,7 @@ func currentLongMemEvalProtocol() lmeProtocolProvenance {
 		JudgeRuns:            *flagLMEJudgeRuns,
 		JudgePromptVersion:   lmeJudgePromptVersion,
 		JudgeProtocolVersion: lmeJudgeProtocolVersion,
-		JudgeGeneration:      currentLongMemEvalJudgeGeneration(),
+		JudgeGeneration:      currentLongMemEvalProtocolJudgeGeneration(),
 		TopK:                 *flagVectorTopK,
 		MaxSessions:          *flagLMEMaxSessions,
 		MaxPairs:             *flagLMEMaxPairs,

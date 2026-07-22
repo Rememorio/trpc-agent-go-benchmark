@@ -2729,6 +2729,24 @@ func TestJudgeLongMemEvalConsensusRetriesUntilRequestedValidVotes(t *testing.T) 
 	}
 }
 
+func TestJudgeRetryPolicyIsExecutionProvenance(t *testing.T) {
+	t.Parallel()
+
+	protocolGeneration := currentLongMemEvalProtocolJudgeGeneration()
+	executionGeneration := currentLongMemEvalJudgeGeneration()
+	if protocolGeneration.MaxExtraAttempts != 0 {
+		t.Fatalf("replay protocol records execution retry policy: %#v", protocolGeneration)
+	}
+	if executionGeneration.MaxExtraAttempts != lmeJudgeMaxExtraAttempts {
+		t.Fatalf("judge execution retry policy = %#v", executionGeneration)
+	}
+	protocolGeneration.MaxExtraAttempts = lmeJudgeMaxExtraAttempts
+	if protocolGeneration != executionGeneration {
+		t.Fatalf("judge generations differ beyond retry policy: protocol=%#v execution=%#v",
+			protocolGeneration, executionGeneration)
+	}
+}
+
 func TestLongMemEvalJudgeCorrectRequiresValidatedRaw(t *testing.T) {
 	t.Parallel()
 

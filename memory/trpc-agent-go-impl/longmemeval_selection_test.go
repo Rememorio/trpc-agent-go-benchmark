@@ -642,7 +642,7 @@ func TestCurrentLongMemEvalProtocolBindsEvaluationConfiguration(t *testing.T) {
 		!reflect.DeepEqual(protocol.AnswerGeneration,
 			currentLongMemEvalAnswerGeneration()) ||
 		!reflect.DeepEqual(protocol.JudgeGeneration,
-			currentLongMemEvalJudgeGeneration()) {
+			currentLongMemEvalProtocolJudgeGeneration()) {
 		t.Fatalf("protocol omitted evaluation configuration: %+v", protocol)
 	}
 	if err := validateLongMemEvalProtocol(protocol); err != nil {
