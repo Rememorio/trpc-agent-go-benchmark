@@ -63,8 +63,13 @@ func refreshLongMemEvalRetrievalResults(
 			return err
 		}
 	}
+	embeddingResponseCache, err :=
+		openConfiguredLongMemEvalEmbeddingResponseCache()
+	if err != nil {
+		return err
+	}
 	backend, err := newLongMemEvalPGVectorBackend(
-		nil, pgvectorExtractionConfig{}, true, nil,
+		nil, pgvectorExtractionConfig{}, true, embeddingResponseCache,
 	)
 	if err != nil {
 		return err
@@ -84,6 +89,7 @@ func refreshLongMemEvalRetrievalResults(
 		implementation,
 		sourceDigest,
 		filepath.Join(outputDir, lmeRetrievalRefreshOutput),
+		embeddingResponseCache,
 	)
 }
 
@@ -189,6 +195,7 @@ func refreshLongMemEvalRetrievalResult(
 	implementation string,
 	sourceDigest string,
 	outPath string,
+	embeddingResponseCache *longMemEvalEmbeddingResponseCache,
 ) error {
 	if result == nil {
 		return errors.New("retrieval refresh results are nil")
@@ -210,6 +217,9 @@ func refreshLongMemEvalRetrievalResult(
 	if result.Metadata == nil {
 		result.Metadata = make(map[string]any)
 	}
+	initializeLongMemEvalEmbeddingResponseCacheMetadata(
+		result.Metadata, embeddingResponseCache,
+	)
 	sourceImplementation, _ := lmeMetadataString(
 		result.Metadata, "implementation",
 	)
@@ -379,6 +389,9 @@ func refreshLongMemEvalRetrievalResult(
 		refresh["completed_cases"] = completed
 		refresh["embedding_usage"] = embeddingUsage
 		updateLongMemEvalAnswerCacheMetadata(result.Metadata, answerCache)
+		updateLongMemEvalEmbeddingResponseCacheMetadata(
+			result.Metadata, embeddingResponseCache,
+		)
 		result.Summary = buildLongMemEvalSummary(result.Cases)
 		if err := writeLongMemEvalResults(outPath, result); err != nil {
 			return fmt.Errorf("checkpoint retrieval refresh results: %w", err)
@@ -394,6 +407,9 @@ func refreshLongMemEvalRetrievalResult(
 	}
 	refresh["embedding_usage"] = embeddingUsage
 	updateLongMemEvalAnswerCacheMetadata(result.Metadata, answerCache)
+	updateLongMemEvalEmbeddingResponseCacheMetadata(
+		result.Metadata, embeddingResponseCache,
+	)
 	result.Summary = buildLongMemEvalSummary(result.Cases)
 	printLongMemEvalSummary(result)
 	log.Printf("LongMemEval retrieval-refreshed results written to %s", outPath)

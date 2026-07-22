@@ -172,7 +172,7 @@ func TestRefreshLongMemEvalRetrievalResult(t *testing.T) {
 	if err := refreshLongMemEvalRetrievalResult(
 		context.Background(), result, backend, llm,
 		"answer-model", "variant", true, "refreshed-implementation",
-		"source-digest", outPath,
+		"source-digest", outPath, nil,
 	); err != nil {
 		t.Fatalf("refresh retrieval result: %v", err)
 	}
@@ -240,9 +240,10 @@ func TestRefreshLongMemEvalRetrievalResultWithoutAnswers(t *testing.T) {
 	}
 	result := &runResult{
 		Metadata: map[string]any{
-			"implementation":               "source-implementation",
-			"reanswer_model":               "stale-model",
-			"answer_cache_initial_entries": 1,
+			"implementation":                           "source-implementation",
+			"reanswer_model":                           "stale-model",
+			"answer_cache_initial_entries":             1,
+			"embedding_response_cache_initial_entries": 1,
 		},
 		Cases: []*caseResult{{
 			QuestionID:       "q1",
@@ -276,7 +277,7 @@ func TestRefreshLongMemEvalRetrievalResultWithoutAnswers(t *testing.T) {
 	if err := refreshLongMemEvalRetrievalResult(
 		context.Background(), result, backend, nil,
 		"answer-model", "variant", false, "retrieval-only",
-		"source-digest", outPath,
+		"source-digest", outPath, nil,
 	); err != nil {
 		t.Fatalf("refresh retrieval result without answers: %v", err)
 	}
@@ -309,8 +310,77 @@ func TestRefreshLongMemEvalRetrievalResultWithoutAnswers(t *testing.T) {
 	if _, ok := result.Metadata["answer_cache_initial_entries"]; ok {
 		t.Fatalf("stale answer cache metadata retained: %#v", result.Metadata)
 	}
+	if _, ok := result.Metadata["embedding_response_cache_initial_entries"]; ok {
+		t.Fatalf("stale embedding cache metadata retained: %#v", result.Metadata)
+	}
 	if _, err := loadLongMemEvalResults(outPath); err != nil {
 		t.Fatalf("load retrieval-only refresh checkpoint: %v", err)
+	}
+}
+
+func TestRefreshLongMemEvalRetrievalResultRecordsEmbeddingCache(t *testing.T) {
+	restoreStringFlag(t, flagTableSuffix, "_refresh_cache_test")
+	restoreIntFlag(t, flagVectorTopK, 30)
+
+	cache, err := openLongMemEvalEmbeddingResponseCache(
+		filepath.Join(t.TempDir(), "embedding-cache.jsonl"),
+	)
+	if err != nil {
+		t.Fatalf("open embedding cache: %v", err)
+	}
+	identity, key, err := longMemEvalEmbeddingResponseCacheKey(
+		"Which museum did I visit?", "embedding-model", 2,
+	)
+	if err != nil {
+		t.Fatalf("build embedding cache key: %v", err)
+	}
+	if _, err := cache.Put(key, identity, []float64{0.25, 0.75}); err != nil {
+		t.Fatalf("seed embedding cache: %v", err)
+	}
+
+	persisted := memorySnapshot{ID: "memory-1", Memory: "Visited the Science Museum."}
+	backend := &refreshTestBackend{
+		hits:   []memoryHit{{ID: persisted.ID, Memory: persisted.Memory, Score: 0.9}},
+		stored: []memorySnapshot{persisted},
+		onSearch: func() {
+			if _, ok := cache.Lookup(key); !ok {
+				t.Error("seeded embedding cache entry was not found")
+			}
+		},
+	}
+	result := &runResult{
+		Metadata: map[string]any{
+			"implementation": "source-implementation",
+			"embedding_response_cache_initial_entries": 99,
+		},
+		Cases: []*caseResult{{
+			QuestionID: "q1",
+			Question:   "Which museum did I visit?",
+			BackendResults: map[string]*backendResult{
+				"pgvector": {
+					Backend:       "pgvector",
+					UserID:        "user-1",
+					FinalMemories: []memorySnapshot{persisted},
+				},
+			},
+		}},
+	}
+	if err := refreshLongMemEvalRetrievalResult(
+		context.Background(), result, backend, nil,
+		"answer-model", "variant", false, "retrieval-only-cache",
+		"source-digest", filepath.Join(t.TempDir(), "refreshed.json"), cache,
+	); err != nil {
+		t.Fatalf("refresh retrieval result with embedding cache: %v", err)
+	}
+
+	if result.Metadata["embedding_response_cache_shared"] != true ||
+		result.Metadata["embedding_response_cache_ledger_id"] != cache.LedgerID() ||
+		result.Metadata["embedding_response_cache_initial_entries"] != 1 ||
+		result.Metadata["embedding_response_cache_final_entries"] != 1 ||
+		result.Metadata["embedding_response_cache_hits"] != 1 ||
+		result.Metadata["embedding_response_cache_misses"] != 0 ||
+		result.Metadata["embedding_response_cache_errors"] != 0 {
+		t.Fatalf("embedding cache metadata = %#v", result.Metadata)
 	}
 }
 
@@ -369,9 +439,10 @@ func restoreBoolFlag(t *testing.T, target *bool, value bool) {
 }
 
 type refreshTestBackend struct {
-	hits    []memoryHit
-	stored  []memorySnapshot
-	queries []string
+	hits     []memoryHit
+	stored   []memorySnapshot
+	queries  []string
+	onSearch func()
 }
 
 func (*refreshTestBackend) Name() string { return "pgvector" }
@@ -393,6 +464,9 @@ func (b *refreshTestBackend) Search(
 	_ int,
 ) ([]memoryHit, error) {
 	b.queries = append(b.queries, query)
+	if b.onSearch != nil {
+		b.onSearch()
+	}
 	return append([]memoryHit(nil), b.hits...), nil
 }
 
