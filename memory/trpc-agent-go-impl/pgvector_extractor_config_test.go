@@ -68,6 +68,31 @@ func TestCurrentPGVectorExtractionConfig(t *testing.T) {
 	}
 }
 
+func TestValidatePGVectorExtractionFlags(t *testing.T) {
+	oldPolicy := *flagPGVectorUpdatePolicy
+	oldAssistantResults := *flagPGVectorAssistantResultExtraction
+	defer func() {
+		*flagPGVectorUpdatePolicy = oldPolicy
+		*flagPGVectorAssistantResultExtraction = oldAssistantResults
+	}()
+
+	*flagPGVectorUpdatePolicy = "custom"
+	*flagPGVectorAssistantResultExtraction = false
+	if err := validatePGVectorExtractionFlags([]string{"mem0"}); err != nil {
+		t.Fatalf("irrelevant pgvector flags returned error: %v", err)
+	}
+	if err := validatePGVectorExtractionFlags([]string{"pgvector"}); err == nil {
+		t.Fatal("unsupported pgvector policy passed early validation")
+	}
+
+	*flagPGVectorUpdatePolicy = "reconcile"
+	if err := validatePGVectorExtractionFlags(
+		[]string{"pgvector", "mem0"},
+	); err != nil {
+		t.Fatalf("supported pgvector configuration returned error: %v", err)
+	}
+}
+
 func TestBuildMemoryServiceOptionsAppliesPGVectorExtractionConfig(t *testing.T) {
 	oldPolicy := *flagPGVectorUpdatePolicy
 	oldAssistantResults := *flagPGVectorAssistantResultExtraction

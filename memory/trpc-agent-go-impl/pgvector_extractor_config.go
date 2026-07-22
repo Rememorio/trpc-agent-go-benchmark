@@ -29,6 +29,25 @@ type pgvectorExtractionConfig struct {
 	AssistantResultUpdatePolicy string               `json:"assistant_result_update_policy,omitempty"`
 }
 
+func validatePGVectorExtractionFlags(backends []string) error {
+	usesPGVector := false
+	for _, backend := range backends {
+		if backend == "pgvector" {
+			usesPGVector = true
+			break
+		}
+	}
+	if !usesPGVector {
+		return nil
+	}
+	config, err := currentPGVectorExtractionConfig()
+	if err != nil {
+		return err
+	}
+	_, err = pgvectorExtractorOptions(config)
+	return err
+}
+
 func currentPGVectorExtractionConfig() (
 	pgvectorExtractionConfig,
 	error,

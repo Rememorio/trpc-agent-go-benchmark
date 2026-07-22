@@ -409,10 +409,14 @@ func validateFlags() {
 	} else {
 		validateLoCoMoFlags()
 	}
-	for _, b := range parseMemoryBackends(*flagMemoryBackends) {
+	backends := parseMemoryBackends(*flagMemoryBackends)
+	for _, b := range backends {
 		if !validBackends[b] {
 			log.Fatalf("Invalid memory backend: %s", b)
 		}
+	}
+	if err := validatePGVectorExtractionFlags(backends); err != nil {
+		log.Fatalf("Invalid pgvector extraction configuration: %v", err)
 	}
 
 	if *flagMaxTasks < 0 {
