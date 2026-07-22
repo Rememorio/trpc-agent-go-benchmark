@@ -1,0 +1,779 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-07-10T14:36:38.185998+08:00",
+  "config": {
+    "appName": "toolsearch-benchmark",
+    "evalSetId": "toolsearch-catalog-multiturn",
+    "mode": "keyword",
+    "modelName": "deepseek-v4-flash",
+    "embedModel": "text-embedding-3-small",
+    "maxTools": 5,
+    "numRuns": 1,
+    "dataDir": "toolsearch/data",
+    "outputDir": "toolsearch/output"
+  },
+  "result": {
+    "overallStatus": "failed",
+    "executionTimeMs": 378886,
+    "wallTimeMs": 378886,
+    "evalSetResultId": "toolsearch-benchmark_toolsearch-catalog-multiturn_e726f117-5aff-4d6b-ad5d-87ec656fee71"
+  },
+  "tokens": {
+    "chat": {
+      "prompt": 689084,
+      "completion": 12874,
+      "total": 701958
+    },
+    "toolsearch": {
+      "prompt": 210505,
+      "completion": 5779,
+      "total": 216284
+    },
+    "total": {
+      "prompt": 899589,
+      "completion": 18653,
+      "total": 918242
+    }
+  },
+  "cases": [
+    {
+      "evalCaseId": "filesystem",
+      "overallStatus": "passed",
+      "runs": [
+        {
+          "runId": 1,
+          "finalEvalStatus": "passed",
+          "sessionId": "1af6d333-216e-4e2d-8696-edbbf71c944c",
+          "turns": [
+            {
+              "turnId": "fs-01",
+              "metricScore": 1,
+              "expectedTool": "write_file",
+              "actualTools": [
+                "tool_search",
+                "write_file"
+              ],
+              "durationMs": 3819,
+              "chatTokens": 3951,
+              "toolsearchTokens": 1661
+            },
+            {
+              "turnId": "fs-02",
+              "metricScore": 1,
+              "expectedTool": "read_file",
+              "actualTools": [
+                "tool_search",
+                "read_file",
+                "read_file",
+                "tool_search",
+                "find_files"
+              ],
+              "durationMs": 12169,
+              "chatTokens": 11296,
+              "toolsearchTokens": 4841
+            },
+            {
+              "turnId": "fs-03",
+              "metricScore": 1,
+              "expectedTool": "list_directory",
+              "actualTools": [
+                "tool_search",
+                "list_directory",
+                "get_file_info",
+                "list_directory",
+                "find_files"
+              ],
+              "durationMs": 9901,
+              "chatTokens": 19204,
+              "toolsearchTokens": 3362
+            },
+            {
+              "turnId": "fs-04",
+              "metricScore": 1,
+              "expectedTool": "search_file_content|find_files",
+              "actualTools": [
+                "tool_search",
+                "search_file_content"
+              ],
+              "durationMs": 7008,
+              "chatTokens": 10255,
+              "toolsearchTokens": 4250
+            },
+            {
+              "turnId": "fs-05",
+              "metricScore": 1,
+              "expectedTool": "move_file",
+              "actualTools": [
+                "tool_search",
+                "move_file"
+              ],
+              "durationMs": 5128,
+              "chatTokens": 11210,
+              "toolsearchTokens": 5218
+            },
+            {
+              "turnId": "fs-06",
+              "metricScore": 1,
+              "expectedTool": "delete_file",
+              "actualTools": [
+                "tool_search",
+                "delete_file"
+              ],
+              "durationMs": 4093,
+              "chatTokens": 11945,
+              "toolsearchTokens": 5728
+            },
+            {
+              "turnId": "fs-07",
+              "metricScore": 1,
+              "expectedTool": "create_directory",
+              "actualTools": [
+                "tool_search",
+                "create_directory"
+              ],
+              "durationMs": 4368,
+              "chatTokens": 12824,
+              "toolsearchTokens": 6159
+            },
+            {
+              "turnId": "fs-08",
+              "metricScore": 1,
+              "expectedTool": "get_file_info",
+              "actualTools": [
+                "tool_search",
+                "get_file_info",
+                "read_file"
+              ],
+              "durationMs": 7466,
+              "chatTokens": 20769,
+              "toolsearchTokens": 6543
+            },
+            {
+              "turnId": "fs-09",
+              "metricScore": 1,
+              "expectedTool": "append_file",
+              "actualTools": [
+                "tool_search",
+                "tool_search",
+                "get_current_time",
+                "tool_search",
+                "get_current_time",
+                "append_file"
+              ],
+              "durationMs": 13412,
+              "chatTokens": 31733,
+              "toolsearchTokens": 22569
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "evalCaseId": "git",
+      "overallStatus": "passed",
+      "runs": [
+        {
+          "runId": 1,
+          "finalEvalStatus": "passed",
+          "sessionId": "4a5a7c46-1a60-472f-813e-7b9b8f246cf5",
+          "turns": [
+            {
+              "turnId": "git-01",
+              "metricScore": 1,
+              "expectedTool": "git_status",
+              "actualTools": [
+                "tool_search",
+                "git_status",
+                "git_diff",
+                "git_diff"
+              ],
+              "durationMs": 7218,
+              "chatTokens": 9016,
+              "toolsearchTokens": 1631
+            },
+            {
+              "turnId": "git-02",
+              "metricScore": 1,
+              "expectedTool": "git_diff",
+              "actualTools": [
+                "git_diff"
+              ],
+              "durationMs": 2900,
+              "chatTokens": 5170,
+              "toolsearchTokens": 0
+            },
+            {
+              "turnId": "git-03",
+              "metricScore": 1,
+              "expectedTool": "git_add",
+              "actualTools": [
+                "tool_search",
+                "git_add"
+              ],
+              "durationMs": 4993,
+              "chatTokens": 6037,
+              "toolsearchTokens": 2704
+            },
+            {
+              "turnId": "git-04",
+              "metricScore": 1,
+              "expectedTool": "git_commit",
+              "actualTools": [
+                "tool_search",
+                "git_commit"
+              ],
+              "durationMs": 4548,
+              "chatTokens": 6889,
+              "toolsearchTokens": 3101
+            },
+            {
+              "turnId": "git-05",
+              "metricScore": 1,
+              "expectedTool": "git_log",
+              "actualTools": [
+                "tool_search",
+                "git_log",
+                "git_log",
+                "git_log"
+              ],
+              "durationMs": 10212,
+              "chatTokens": 15985,
+              "toolsearchTokens": 3549
+            },
+            {
+              "turnId": "git-06",
+              "metricScore": 1,
+              "expectedTool": "git_checkout",
+              "actualTools": [
+                "tool_search",
+                "git_checkout"
+              ],
+              "durationMs": 3866,
+              "chatTokens": 9191,
+              "toolsearchTokens": 4259
+            },
+            {
+              "turnId": "git-07",
+              "metricScore": 1,
+              "expectedTool": "git_push",
+              "actualTools": [
+                "tool_search",
+                "git_push"
+              ],
+              "durationMs": 4685,
+              "chatTokens": 9967,
+              "toolsearchTokens": 4706
+            },
+            {
+              "turnId": "git-08",
+              "metricScore": 1,
+              "expectedTool": "git_pull",
+              "actualTools": [
+                "tool_search",
+                "git_pull"
+              ],
+              "durationMs": 4280,
+              "chatTokens": 10880,
+              "toolsearchTokens": 5137
+            },
+            {
+              "turnId": "git-09",
+              "metricScore": 1,
+              "expectedTool": "git_blame",
+              "actualTools": [
+                "tool_search",
+                "git_blame"
+              ],
+              "durationMs": 5417,
+              "chatTokens": 11790,
+              "toolsearchTokens": 5568
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "evalCaseId": "document",
+      "overallStatus": "passed",
+      "runs": [
+        {
+          "runId": 1,
+          "finalEvalStatus": "passed",
+          "sessionId": "d415174f-4858-4abb-ae51-06d9156b65f6",
+          "turns": [
+            {
+              "turnId": "doc-01",
+              "metricScore": 1,
+              "expectedTool": "create_document",
+              "actualTools": [
+                "tool_search",
+                "create_document"
+              ],
+              "durationMs": 6178,
+              "chatTokens": 5843,
+              "toolsearchTokens": 1648
+            },
+            {
+              "turnId": "doc-02",
+              "metricScore": 1,
+              "expectedTool": "export_pdf",
+              "actualTools": [
+                "tool_search",
+                "tool_search",
+                "find_files",
+                "list_directory",
+                "export_pdf"
+              ],
+              "durationMs": 15766,
+              "chatTokens": 18485,
+              "toolsearchTokens": 6675
+            },
+            {
+              "turnId": "doc-03",
+              "metricScore": 1,
+              "expectedTool": "convert_markdown_to_html",
+              "actualTools": [
+                "tool_search",
+                "convert_markdown_to_html"
+              ],
+              "durationMs": 6078,
+              "chatTokens": 10605,
+              "toolsearchTokens": 4984
+            },
+            {
+              "turnId": "doc-04",
+              "metricScore": 1,
+              "expectedTool": "summarize_document",
+              "actualTools": [
+                "summarize_document",
+                "read_file",
+                "list_directory",
+                "read_file",
+                "find_files"
+              ],
+              "durationMs": 15337,
+              "chatTokens": 34901,
+              "toolsearchTokens": 0
+            },
+            {
+              "turnId": "doc-05",
+              "metricScore": 1,
+              "expectedTool": "translate_document",
+              "actualTools": [
+                "translate_document"
+              ],
+              "durationMs": 4547,
+              "chatTokens": 12854,
+              "toolsearchTokens": 0
+            },
+            {
+              "turnId": "doc-06",
+              "metricScore": 1,
+              "expectedTool": "extract_document_text",
+              "actualTools": [
+                "extract_document_text"
+              ],
+              "durationMs": 3230,
+              "chatTokens": 13215,
+              "toolsearchTokens": 0
+            },
+            {
+              "turnId": "doc-07",
+              "metricScore": 1,
+              "expectedTool": "merge_documents",
+              "actualTools": [
+                "tool_search",
+                "list_directory",
+                "find_files",
+                "merge_documents"
+              ],
+              "durationMs": 10002,
+              "chatTokens": 29259,
+              "toolsearchTokens": 6738
+            },
+            {
+              "turnId": "doc-08",
+              "metricScore": 1,
+              "expectedTool": "get_document_outline",
+              "actualTools": [
+                "get_document_outline"
+              ],
+              "durationMs": 4771,
+              "chatTokens": 15282,
+              "toolsearchTokens": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "evalCaseId": "process-network",
+      "overallStatus": "passed",
+      "runs": [
+        {
+          "runId": 1,
+          "finalEvalStatus": "passed",
+          "sessionId": "dbff372c-b320-4f64-a85b-28d2f14de172",
+          "turns": [
+            {
+              "turnId": "pn-01",
+              "metricScore": 1,
+              "expectedTool": "run_command",
+              "actualTools": [
+                "tool_search",
+                "run_command"
+              ],
+              "durationMs": 3645,
+              "chatTokens": 3949,
+              "toolsearchTokens": 1656
+            },
+            {
+              "turnId": "pn-02",
+              "metricScore": 1,
+              "expectedTool": "list_processes",
+              "actualTools": [
+                "tool_search",
+                "list_processes"
+              ],
+              "durationMs": 4173,
+              "chatTokens": 4785,
+              "toolsearchTokens": 2115
+            },
+            {
+              "turnId": "pn-03",
+              "metricScore": 1,
+              "expectedTool": "kill_process",
+              "actualTools": [
+                "tool_search",
+                "kill_process"
+              ],
+              "durationMs": 5525,
+              "chatTokens": 5732,
+              "toolsearchTokens": 2566
+            },
+            {
+              "turnId": "pn-04",
+              "metricScore": 1,
+              "expectedTool": "get_env_var",
+              "actualTools": [
+                "tool_search",
+                "get_env_var"
+              ],
+              "durationMs": 5570,
+              "chatTokens": 6565,
+              "toolsearchTokens": 2969
+            },
+            {
+              "turnId": "pn-05",
+              "metricScore": 1,
+              "expectedTool": "http_get",
+              "actualTools": [
+                "tool_search",
+                "http_get"
+              ],
+              "durationMs": 5564,
+              "chatTokens": 7577,
+              "toolsearchTokens": 3460
+            },
+            {
+              "turnId": "pn-06",
+              "metricScore": 1,
+              "expectedTool": "http_post",
+              "actualTools": [
+                "tool_search",
+                "http_post"
+              ],
+              "durationMs": 6257,
+              "chatTokens": 8896,
+              "toolsearchTokens": 4049
+            },
+            {
+              "turnId": "pn-07",
+              "metricScore": 1,
+              "expectedTool": "download_file",
+              "actualTools": [
+                "tool_search",
+                "download_file"
+              ],
+              "durationMs": 5523,
+              "chatTokens": 9980,
+              "toolsearchTokens": 4618
+            },
+            {
+              "turnId": "pn-08",
+              "metricScore": 1,
+              "expectedTool": "upload_file",
+              "actualTools": [
+                "tool_search",
+                "upload_file"
+              ],
+              "durationMs": 4108,
+              "chatTokens": 10796,
+              "toolsearchTokens": 5134
+            },
+            {
+              "turnId": "pn-09",
+              "metricScore": 1,
+              "expectedTool": "check_url_status",
+              "actualTools": [
+                "tool_search",
+                "check_url_status"
+              ],
+              "durationMs": 5576,
+              "chatTokens": 11685,
+              "toolsearchTokens": 5572
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "evalCaseId": "iam-crm",
+      "overallStatus": "failed",
+      "runs": [
+        {
+          "runId": 1,
+          "finalEvalStatus": "failed",
+          "sessionId": "8f277a05-da08-4226-9fdc-2832294244d5",
+          "turns": [
+            {
+              "turnId": "ic-01",
+              "metricScore": 1,
+              "expectedTool": "delete_user",
+              "actualTools": [
+                "tool_search",
+                "delete_user"
+              ],
+              "durationMs": 4535,
+              "chatTokens": 3940,
+              "toolsearchTokens": 1681
+            },
+            {
+              "turnId": "ic-02",
+              "metricScore": 1,
+              "expectedTool": "create_user",
+              "actualTools": [
+                "tool_search",
+                "create_user"
+              ],
+              "durationMs": 8238,
+              "chatTokens": 5726,
+              "toolsearchTokens": 2169
+            },
+            {
+              "turnId": "ic-03",
+              "metricScore": 1,
+              "expectedTool": "grant_role",
+              "actualTools": [
+                "tool_search",
+                "grant_role"
+              ],
+              "durationMs": 3606,
+              "chatTokens": 6661,
+              "toolsearchTokens": 3006
+            },
+            {
+              "turnId": "ic-04",
+              "metricScore": 1,
+              "expectedTool": "revoke_role",
+              "actualTools": [
+                "tool_search",
+                "revoke_role"
+              ],
+              "durationMs": 5877,
+              "chatTokens": 7673,
+              "toolsearchTokens": 3509
+            },
+            {
+              "turnId": "ic-05",
+              "metricScore": 0,
+              "expectedTool": "delete_customer",
+              "actualTools": [
+                "tool_search",
+                "tool_search",
+                "list_customers",
+                "list_customers",
+                "list_customers"
+              ],
+              "durationMs": 13169,
+              "chatTokens": 20508,
+              "toolsearchTokens": 8403
+            },
+            {
+              "turnId": "ic-06",
+              "metricScore": 1,
+              "expectedTool": "create_customer",
+              "actualTools": [
+                "tool_search",
+                "create_customer"
+              ],
+              "durationMs": 4893,
+              "chatTokens": 11818,
+              "toolsearchTokens": 5551
+            },
+            {
+              "turnId": "ic-07",
+              "metricScore": 1,
+              "expectedTool": "add_contact",
+              "actualTools": [
+                "tool_search",
+                "list_customers",
+                "list_customers",
+                "get_customer",
+                "list_customers",
+                "get_customer",
+                "get_customer",
+                "add_contact"
+              ],
+              "durationMs": 24364,
+              "chatTokens": 59367,
+              "toolsearchTokens": 6014
+            },
+            {
+              "turnId": "ic-08",
+              "metricScore": 1,
+              "expectedTool": "list_customers",
+              "actualTools": [
+                "list_customers",
+                "list_customers",
+                "list_customers"
+              ],
+              "durationMs": 9826,
+              "chatTokens": 34095,
+              "toolsearchTokens": 0
+            },
+            {
+              "turnId": "ic-09",
+              "metricScore": 0,
+              "expectedTool": "update_customer",
+              "actualTools": [
+                "tool_search",
+                "list_customers",
+                "list_customers"
+              ],
+              "durationMs": 10514,
+              "chatTokens": 28365,
+              "toolsearchTokens": 8999
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "evalCaseId": "default-tools",
+      "overallStatus": "passed",
+      "runs": [
+        {
+          "runId": 1,
+          "finalEvalStatus": "passed",
+          "sessionId": "06e826b1-a132-4435-945d-0525562d3af6",
+          "turns": [
+            {
+              "turnId": "def-01",
+              "metricScore": 1,
+              "expectedTool": "calculator",
+              "actualTools": [
+                "tool_search",
+                "calculator",
+                "calculator"
+              ],
+              "durationMs": 6970,
+              "chatTokens": 6271,
+              "toolsearchTokens": 1639
+            },
+            {
+              "turnId": "def-02",
+              "metricScore": 1,
+              "expectedTool": "get_current_time",
+              "actualTools": [
+                "tool_search",
+                "get_current_time",
+                "get_current_time",
+                "web_search",
+                "web_search",
+                "get_current_time",
+                "web_search"
+              ],
+              "durationMs": 15591,
+              "chatTokens": 21177,
+              "toolsearchTokens": 2346
+            },
+            {
+              "turnId": "def-03",
+              "metricScore": 1,
+              "expectedTool": "generate_qrcode",
+              "actualTools": [
+                "tool_search",
+                "generate_qrcode",
+                "generate_qrcode"
+              ],
+              "durationMs": 6826,
+              "chatTokens": 12054,
+              "toolsearchTokens": 3568
+            },
+            {
+              "turnId": "def-04",
+              "metricScore": 1,
+              "expectedTool": "base64_encode",
+              "actualTools": [
+                "tool_search",
+                "base64_encode"
+              ],
+              "durationMs": 4463,
+              "chatTokens": 9210,
+              "toolsearchTokens": 4292
+            },
+            {
+              "turnId": "def-05",
+              "metricScore": 1,
+              "expectedTool": "base64_decode",
+              "actualTools": [
+                "tool_search",
+                "base64_decode"
+              ],
+              "durationMs": 3665,
+              "chatTokens": 10131,
+              "toolsearchTokens": 4794
+            },
+            {
+              "turnId": "def-06",
+              "metricScore": 1,
+              "expectedTool": "parse_json",
+              "actualTools": [
+                "tool_search",
+                "parse_json"
+              ],
+              "durationMs": 3999,
+              "chatTokens": 11104,
+              "toolsearchTokens": 5207
+            },
+            {
+              "turnId": "def-07",
+              "metricScore": 1,
+              "expectedTool": "format_date",
+              "actualTools": [
+                "tool_search",
+                "format_date"
+              ],
+              "durationMs": 6255,
+              "chatTokens": 12260,
+              "toolsearchTokens": 5687
+            },
+            {
+              "turnId": "def-08",
+              "metricScore": 1,
+              "expectedTool": "generate_uuid",
+              "actualTools": [
+                "tool_search",
+                "generate_uuid"
+              ],
+              "durationMs": 3715,
+              "chatTokens": 13077,
+              "toolsearchTokens": 6249
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

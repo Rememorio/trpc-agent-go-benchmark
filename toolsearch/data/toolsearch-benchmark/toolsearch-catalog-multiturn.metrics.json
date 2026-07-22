@@ -4,6 +4,7 @@
     "threshold": 1,
     "criterion": {
       "toolTrajectory": {
+        "compareName": "unwrap_call_tool",
         "defaultStrategy": {
           "name": {
             "matchStrategy": "regex"
