@@ -146,6 +146,9 @@ func (c *longMemEvalJudgeCache) Lookup(key string) (*lmeJudgeResult, string, boo
 	if !ok {
 		return nil, "", false
 	}
+	if !completeLongMemEvalJudgeConsensus(&entry.Judge) {
+		return nil, "", false
+	}
 	source := lmeJudgeVerdictSourceCurrentRun
 	if _, ok := c.persistent[key]; ok {
 		source = lmeJudgeVerdictSourcePersistent
@@ -162,7 +165,11 @@ func (c *longMemEvalJudgeCache) Put(
 	if c == nil || judge == nil {
 		return nil
 	}
-	if _, ok := c.file.Entries[key]; ok {
+	if !completeLongMemEvalJudgeConsensus(judge) {
+		return nil
+	}
+	previous, existed := c.file.Entries[key]
+	if existed && completeLongMemEvalJudgeConsensus(&previous.Judge) {
 		return nil
 	}
 	cloned, err := cloneLongMemEvalJudgeResult(judge)
@@ -182,7 +189,11 @@ func (c *longMemEvalJudgeCache) Put(
 		return nil
 	}
 	if err := writeLongMemEvalJudgeCache(c.path, &c.file); err != nil {
-		delete(c.file.Entries, key)
+		if existed {
+			c.file.Entries[key] = previous
+		} else {
+			delete(c.file.Entries, key)
+		}
 		return err
 	}
 	return nil
@@ -230,7 +241,7 @@ func resolveLongMemEvalJudge(
 	)
 	judge.CacheKey = key
 	judge.VerdictSource = lmeJudgeVerdictSourceModel
-	if _, valid := longMemEvalJudgeCorrect(&backendResult{Judge: judge}); valid {
+	if completeLongMemEvalJudgeConsensus(judge) {
 		if err := cache.Put(key, identity, judge); err != nil {
 			return nil, "", err
 		}
@@ -278,12 +289,7 @@ func validateLongMemEvalJudgeCacheEntry(key string, entry lmeJudgeCacheEntry) er
 	if judge.Model != entry.Identity.Model {
 		return fmt.Errorf("judge model %q does not match identity model %q", judge.Model, entry.Identity.Model)
 	}
-	if !shouldReuseLongMemEvalJudge(
-		&backendResult{Judge: &judge},
-		entry.Identity.Model,
-		entry.Identity.Runs,
-		key,
-	) {
+	if _, valid := longMemEvalJudgeCorrect(&backendResult{Judge: &judge}); !valid {
 		return fmt.Errorf("cached judge verdict is incomplete or inconsistent")
 	}
 	return nil

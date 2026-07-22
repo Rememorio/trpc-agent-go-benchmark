@@ -1941,6 +1941,7 @@ func judgeLongMemEvalResult(
 	if err := os.MkdirAll(filepath.Dir(outPath), 0755); err != nil {
 		return fmt.Errorf("create judge output dir: %w", err)
 	}
+	incomplete := make([]string, 0)
 
 	for _, cr := range result.Cases {
 		if cr == nil {
@@ -1980,6 +1981,9 @@ func judgeLongMemEvalResult(
 				return fmt.Errorf("judge %s backend %s: %w", cr.QuestionID, backendName, err)
 			}
 			br.Judge = judge
+			if !completeLongMemEvalJudgeConsensus(judge) {
+				incomplete = append(incomplete, cr.QuestionID+"/"+backendName)
+			}
 			if *flagLMEBlindProgress {
 				log.Printf("  %s judge completed source=%s votes=%d/%d err=%t",
 					backendName, source, judge.ValidRuns, judge.RequestedRuns, judge.Error != "")
@@ -1999,6 +2003,12 @@ func judgeLongMemEvalResult(
 	result.Summary = buildLongMemEvalSummary(result.Cases)
 	printLongMemEvalSummary(result)
 	log.Printf("LongMemEval judged results written to %s", outPath)
+	if len(incomplete) > 0 {
+		return fmt.Errorf(
+			"LongMemEval judge produced incomplete consensus for %s",
+			strings.Join(incomplete, ", "),
+		)
+	}
 	return nil
 }
 
@@ -2114,8 +2124,25 @@ func shouldReuseLongMemEvalJudge(
 	if savedRuns != runs {
 		return false
 	}
-	_, valid := longMemEvalJudgeCorrect(br)
-	return valid
+	return completeLongMemEvalJudgeConsensus(br.Judge)
+}
+
+func completeLongMemEvalJudgeConsensus(judge *lmeJudgeResult) bool {
+	if judge == nil {
+		return false
+	}
+	if _, valid := longMemEvalJudgeCorrect(&backendResult{Judge: judge}); !valid {
+		return false
+	}
+	requestedRuns := judge.RequestedRuns
+	if requestedRuns == 0 {
+		requestedRuns = 1
+	}
+	validRuns := judge.ValidRuns
+	if validRuns == 0 && requestedRuns == 1 {
+		validRuns = 1
+	}
+	return validRuns == requestedRuns
 }
 
 func restoreLongMemEvalRawAnswer(cr *caseResult, br *backendResult) {

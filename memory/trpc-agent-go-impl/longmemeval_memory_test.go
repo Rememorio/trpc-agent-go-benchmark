@@ -2111,6 +2111,15 @@ func TestShouldReuseLongMemEvalJudge(t *testing.T) {
 		{Judge: &lmeJudgeResult{Model: "judge-model", Raw: "VERDICT: yes", Correct: true, Error: "failed"}},
 		{Judge: &lmeJudgeResult{Model: "judge-model", Raw: "VERDICT: yes", Correct: false}},
 		{Judge: &lmeJudgeResult{Model: "judge-model", Raw: "VERDICT: yes", Correct: true, RequestedRuns: 1}},
+		{Judge: &lmeJudgeResult{
+			Model: "judge-model", Raw: "VERDICT: yes", Correct: true, CacheKey: cacheKey,
+			RequestedRuns: 3, ValidRuns: 2,
+			Attempts: []lmeJudgeAttempt{
+				{Raw: "VERDICT: yes", Correct: true},
+				{Raw: "VERDICT: yes", Correct: true},
+				{Error: "timeout"},
+			},
+		}},
 	} {
 		if shouldReuseLongMemEvalJudge(result, "judge-model", 3, cacheKey) {
 			t.Fatalf("invalid or incompatible judge was reused: %#v", result)
@@ -2121,6 +2130,101 @@ func TestShouldReuseLongMemEvalJudge(t *testing.T) {
 	}}
 	if shouldReuseLongMemEvalJudge(legacy, "judge-model", 1, cacheKey) {
 		t.Fatal("legacy verdict without a content-addressed key must be rejudged")
+	}
+}
+
+func TestResolveLongMemEvalJudgeDoesNotCacheIncompleteConsensus(t *testing.T) {
+	t.Parallel()
+
+	cache, err := openLongMemEvalJudgeCache("")
+	if err != nil {
+		t.Fatalf("open cache: %v", err)
+	}
+	llm := &queuedJudgeModel{responses: []string{
+		"VERDICT: yes",
+		"VERDICT: yes",
+		"missing verdict",
+		`{"unexpected":true}`,
+		"VERDICT: yes",
+		"VERDICT: yes",
+		"VERDICT: yes",
+	}}
+	cr := &caseResult{
+		QuestionType: "single-session-user",
+		Question:     "Which option?",
+		Answer:       "Option B",
+	}
+	answer := &backendResult{Answer: "Option B"}
+	first, source, err := resolveLongMemEvalJudge(
+		context.Background(), llm, "judge-model", "glm", cr, answer, 3, cache,
+	)
+	if err != nil {
+		t.Fatalf("resolve incomplete verdict: %v", err)
+	}
+	if source != lmeJudgeVerdictSourceModel || first.ValidRuns != 2 || cache.Len() != 0 {
+		t.Fatalf("incomplete verdict was cached: source=%q judge=%#v cache=%d", source, first, cache.Len())
+	}
+	identity, key, err := longMemEvalJudgeCacheKey(cr, answer.Answer, "judge-model", "glm", 3)
+	if err != nil {
+		t.Fatalf("build legacy cache key: %v", err)
+	}
+	cache.file.Entries[key] = lmeJudgeCacheEntry{Identity: identity, Judge: *first}
+	if _, _, ok := cache.Lookup(key); ok {
+		t.Fatal("legacy incomplete cache entry was reused")
+	}
+	second, source, err := resolveLongMemEvalJudge(
+		context.Background(), llm, "judge-model", "glm", cr, answer, 3, cache,
+	)
+	if err != nil {
+		t.Fatalf("resolve replacement verdict: %v", err)
+	}
+	if source != lmeJudgeVerdictSourceModel || second.ValidRuns != 3 || cache.Len() != 1 {
+		t.Fatalf("replacement verdict = source=%q judge=%#v cache=%d", source, second, cache.Len())
+	}
+	if cached := cache.file.Entries[key].Judge; cached.ValidRuns != 3 {
+		t.Fatalf("legacy incomplete cache entry was not replaced: %#v", cached)
+	}
+	if llm.calls != 7 {
+		t.Fatalf("model calls = %d, want 7", llm.calls)
+	}
+}
+
+func TestJudgeLongMemEvalResultFailsAfterCheckpointingIncompleteConsensus(t *testing.T) {
+	t.Parallel()
+
+	cache, err := openLongMemEvalJudgeCache("")
+	if err != nil {
+		t.Fatalf("open cache: %v", err)
+	}
+	result := &runResult{Cases: []*caseResult{{
+		QuestionID:   "q-incomplete",
+		QuestionType: "single-session-user",
+		Question:     "Which option?",
+		Answer:       "Option B",
+		BackendResults: map[string]*backendResult{
+			"pgvector": {Backend: "pgvector", Answer: "Option B"},
+		},
+	}}}
+	llm := &queuedJudgeModel{responses: []string{
+		"VERDICT: yes",
+		"VERDICT: yes",
+		"missing verdict",
+		`{"unexpected":true}`,
+	}}
+	outPath := filepath.Join(t.TempDir(), "judged_results.json")
+	err = judgeLongMemEvalResult(
+		context.Background(), result, llm, "judge-model", "glm", 3, cache, outPath,
+	)
+	if err == nil || !strings.Contains(err.Error(), "q-incomplete/pgvector") {
+		t.Fatalf("incomplete consensus error = %v", err)
+	}
+	loaded, loadErr := loadLongMemEvalResults(outPath)
+	if loadErr != nil {
+		t.Fatalf("load incomplete checkpoint: %v", loadErr)
+	}
+	judge := loaded.Cases[0].BackendResults["pgvector"].Judge
+	if judge == nil || judge.ValidRuns != 2 || cache.Len() != 0 {
+		t.Fatalf("incomplete checkpoint = judge=%#v cache=%d", judge, cache.Len())
 	}
 }
 
