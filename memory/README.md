@@ -515,7 +515,7 @@ the input files. Paths are resolved relative to the manifest:
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "replicates": [
     {
       "name": "primary",
@@ -541,7 +541,7 @@ the input files. Paths are resolved relative to the manifest:
     "judge_runs": 3,
     "per_type_max_deficit": 0,
     "memory_llm_token_ratio_maximum": 1.55,
-    "memory_embedding_token_ratio_maximum": 2.0,
+    "memory_embedding_request_ratio_maximum": 2.0,
     "final_memory_count_ratio_maximum": 3.0
   }
 }
@@ -556,8 +556,10 @@ accuracy, total correct answer replicates, per-type results, instability, and
 source-run cost for the fixed pgvector-main, Mem0, and pgvector-candidate arms.
 The candidate passes only when both majority and replicate totals strictly beat
 both baselines, category deficits stay bounded, all usage is reported, and the
-pre-registered cost ratios hold. The JSON, TSV, and Markdown outputs retain
-input hashes and gate details for audit.
+pre-registered cost ratios hold. Embedding cost is gated on logical requests,
+which are independent of shared response-ledger execution order; provider calls
+and tokens remain visible as realized cache-sensitive cost. The JSON, TSV, and
+Markdown outputs retain input hashes and gate details for audit.
 
 `-lme-answer-cache` supplies a shared, content-addressed answer ledger. Its key
 covers the exact ordered memories and metadata shown to the answer model, the

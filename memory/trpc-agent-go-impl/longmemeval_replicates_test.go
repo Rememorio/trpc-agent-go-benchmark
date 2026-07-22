@@ -67,6 +67,50 @@ func TestCompareLongMemEvalReplicates(t *testing.T) {
 	}
 }
 
+func TestReplicateGateUsesLogicalEmbeddingRequests(t *testing.T) {
+	t.Parallel()
+
+	arm := func(name string, majority, correct, requests, providerTokens int) *lmeReplicateArm {
+		return &lmeReplicateArm{
+			Name: name, Cases: 2, MajorityCorrect: majority,
+			CorrectReplicates: correct, ProviderUsageReportedCases: 2,
+			MemoryTokenUsage: lmeTokenUsage{TotalTokens: 100},
+			MemoryEmbeddingUsage: lmeEmbeddingUsage{
+				Requests: requests, TotalTokens: providerTokens,
+			},
+			FinalMemories: 10,
+			ByType: map[string]*lmeReplicateTypeSummary{
+				"single-session-user": {MajorityCorrect: majority},
+			},
+		}
+	}
+	comparison := &lmeReplicateComparison{Arms: map[string]*lmeReplicateArm{
+		lmeReplicateArmPGVectorMain:      arm(lmeReplicateArmPGVectorMain, 0, 0, 100, 100),
+		lmeReplicateArmMem0OSS:           arm(lmeReplicateArmMem0OSS, 0, 0, 100, 100),
+		lmeReplicateArmPGVectorCandidate: arm(lmeReplicateArmPGVectorCandidate, 2, 6, 201, 0),
+	}}
+	gate := lmeReplicatePromotionGate{
+		ExpectedCases: 2, JudgeRuns: 3, PerTypeMaxDeficit: 0,
+		MemoryLLMTokenRatioMaximum:         1.55,
+		MemoryEmbeddingRequestRatioMaximum: 2,
+		FinalMemoryCountRatioMaximum:       3,
+	}
+
+	result := evaluateLongMemEvalReplicateGate(comparison, gate)
+	if result.Passed {
+		t.Fatal("gate passed despite excessive logical embedding requests")
+	}
+	for _, check := range result.Checks {
+		if check.Name == "candidate_memory_embedding_requests_vs_main" {
+			if check.Passed || check.Actual != "2.010000 (201/100)" {
+				t.Fatalf("embedding request check = %+v", check)
+			}
+			return
+		}
+	}
+	t.Fatal("logical embedding request check is missing")
+}
+
 func TestLongMemEvalReplicateValidationRejectsDrift(t *testing.T) {
 	t.Parallel()
 
@@ -201,9 +245,9 @@ func TestValidateLongMemEvalReplicateManifest(t *testing.T) {
 		},
 		Gate: lmeReplicatePromotionGate{
 			ExpectedCases: 2, JudgeRuns: 3, PerTypeMaxDeficit: 1,
-			MemoryLLMTokenRatioMaximum:       1.35,
-			MemoryEmbeddingTokenRatioMaximum: 2,
-			FinalMemoryCountRatioMaximum:     2,
+			MemoryLLMTokenRatioMaximum:         1.35,
+			MemoryEmbeddingRequestRatioMaximum: 2,
+			FinalMemoryCountRatioMaximum:       2,
 		},
 	}
 	for _, test := range []struct {
@@ -302,9 +346,9 @@ func writeLongMemEvalReplicateFixture(t *testing.T, dir string) string {
 		SchemaVersion: lmeReplicateComparisonSchemaVersion,
 		Gate: lmeReplicatePromotionGate{
 			ExpectedCases: 2, JudgeRuns: 3, PerTypeMaxDeficit: 1,
-			MemoryLLMTokenRatioMaximum:       1.35,
-			MemoryEmbeddingTokenRatioMaximum: 2,
-			FinalMemoryCountRatioMaximum:     2,
+			MemoryLLMTokenRatioMaximum:         1.35,
+			MemoryEmbeddingRequestRatioMaximum: 2,
+			FinalMemoryCountRatioMaximum:       2,
 		},
 	}
 	for index, scores := range correctness {
@@ -431,7 +475,10 @@ func longMemEvalReplicateFixtureBackend(
 		Retrieval:     []memoryHit{{ID: questionID + "-hit", Memory: "stable answer evidence", Score: 0.9}},
 		Answer:        answer, RawAnswer: answer, AnswerSource: lmeAnswerSourceModel,
 		TokenUsage: &totalUsage, AnswerUsage: answerUsage,
-		EmbeddingUsage:        &lmeEmbeddingUsage{PromptTokens: embeddingTokens, TotalTokens: embeddingTokens, Calls: 2},
+		EmbeddingUsage: &lmeEmbeddingUsage{
+			PromptTokens: embeddingTokens, TotalTokens: embeddingTokens,
+			Calls: 2, Requests: 2,
+		},
 		ProviderUsageReported: true,
 		FailureStage:          stage, ExactMatch: correct,
 		Judge: &lmeJudgeResult{

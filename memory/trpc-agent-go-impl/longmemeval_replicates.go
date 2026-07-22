@@ -23,7 +23,7 @@ import (
 )
 
 const (
-	lmeReplicateComparisonSchemaVersion = 1
+	lmeReplicateComparisonSchemaVersion = 2
 	lmeReplicateKindPrimary             = "primary"
 	lmeReplicateKindIndependentReanswer = "independent-reanswer"
 
@@ -46,12 +46,12 @@ type lmeReplicateComparisonPair struct {
 }
 
 type lmeReplicatePromotionGate struct {
-	ExpectedCases                    int     `json:"expected_cases"`
-	JudgeRuns                        int     `json:"judge_runs"`
-	PerTypeMaxDeficit                int     `json:"per_type_max_deficit"`
-	MemoryLLMTokenRatioMaximum       float64 `json:"memory_llm_token_ratio_maximum"`
-	MemoryEmbeddingTokenRatioMaximum float64 `json:"memory_embedding_token_ratio_maximum"`
-	FinalMemoryCountRatioMaximum     float64 `json:"final_memory_count_ratio_maximum"`
+	ExpectedCases                      int     `json:"expected_cases"`
+	JudgeRuns                          int     `json:"judge_runs"`
+	PerTypeMaxDeficit                  int     `json:"per_type_max_deficit"`
+	MemoryLLMTokenRatioMaximum         float64 `json:"memory_llm_token_ratio_maximum"`
+	MemoryEmbeddingRequestRatioMaximum float64 `json:"memory_embedding_request_ratio_maximum"`
+	FinalMemoryCountRatioMaximum       float64 `json:"final_memory_count_ratio_maximum"`
 }
 
 type lmeLoadedReplicateComparisonPair struct {
@@ -324,7 +324,7 @@ func validateLongMemEvalReplicateManifest(manifest lmeReplicateComparisonManifes
 	}
 	gate := manifest.Gate
 	if gate.ExpectedCases <= 0 || gate.JudgeRuns <= 1 || gate.JudgeRuns%2 == 0 || gate.PerTypeMaxDeficit < 0 ||
-		gate.MemoryLLMTokenRatioMaximum <= 0 || gate.MemoryEmbeddingTokenRatioMaximum <= 0 ||
+		gate.MemoryLLMTokenRatioMaximum <= 0 || gate.MemoryEmbeddingRequestRatioMaximum <= 0 ||
 		gate.FinalMemoryCountRatioMaximum <= 0 {
 		return fmt.Errorf("LongMemEval replicate manifest has invalid promotion gate: %+v", gate)
 	}
@@ -763,9 +763,9 @@ func evaluateLongMemEvalReplicateGate(
 	addLongMemEvalReplicateRatioCheck(&result, "candidate_memory_llm_tokens_vs_main",
 		candidate.MemoryTokenUsage.TotalTokens, main.MemoryTokenUsage.TotalTokens,
 		gate.MemoryLLMTokenRatioMaximum)
-	addLongMemEvalReplicateRatioCheck(&result, "candidate_memory_embedding_tokens_vs_main",
-		candidate.MemoryEmbeddingUsage.TotalTokens, main.MemoryEmbeddingUsage.TotalTokens,
-		gate.MemoryEmbeddingTokenRatioMaximum)
+	addLongMemEvalReplicateRatioCheck(&result, "candidate_memory_embedding_requests_vs_main",
+		candidate.MemoryEmbeddingUsage.Requests, main.MemoryEmbeddingUsage.Requests,
+		gate.MemoryEmbeddingRequestRatioMaximum)
 	addLongMemEvalReplicateRatioCheck(&result, "candidate_final_memories_vs_main",
 		candidate.FinalMemories, main.FinalMemories, gate.FinalMemoryCountRatioMaximum)
 	return result
@@ -821,14 +821,16 @@ func formatLongMemEvalReplicateComparisonMarkdown(comparison *lmeReplicateCompar
 		gateStatus = "PASS"
 	}
 	fmt.Fprintf(&b, "- Promotion gate: **%s**\n\n", gateStatus)
-	b.WriteString("| Arm | Primary | Majority | Correct replicates | Unstable | Memory LLM tokens | Embedding tokens | Memories |\n")
-	b.WriteString("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
+	b.WriteString("| Arm | Primary | Majority | Correct replicates | Unstable | Memory LLM tokens | Embedding requests | Embedding provider calls | Embedding provider tokens | Memories |\n")
+	b.WriteString("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
 	for _, name := range []string{lmeReplicateArmPGVectorMain, lmeReplicateArmMem0OSS, lmeReplicateArmPGVectorCandidate} {
 		arm := comparison.Arms[name]
-		fmt.Fprintf(&b, "| %s | %d/%d | %d/%d | %d/%d | %d | %d | %d | %d |\n",
+		fmt.Fprintf(&b, "| %s | %d/%d | %d/%d | %d/%d | %d | %d | %d | %d | %d | %d |\n",
 			name, arm.PrimaryCorrect, arm.Cases, arm.MajorityCorrect, arm.Cases,
 			arm.CorrectReplicates, arm.TotalAnswerReplicates, arm.UnstableCases,
-			arm.MemoryTokenUsage.TotalTokens, arm.MemoryEmbeddingUsage.TotalTokens, arm.FinalMemories)
+			arm.MemoryTokenUsage.TotalTokens, arm.MemoryEmbeddingUsage.Requests,
+			arm.MemoryEmbeddingUsage.Calls, arm.MemoryEmbeddingUsage.TotalTokens,
+			arm.FinalMemories)
 	}
 	b.WriteString("\n## Gate\n\n")
 	for _, check := range comparison.Gate.Checks {
