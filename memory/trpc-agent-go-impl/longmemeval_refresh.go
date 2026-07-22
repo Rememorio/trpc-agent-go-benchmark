@@ -64,7 +64,7 @@ func refreshLongMemEvalRetrievalResults(
 		}
 	}
 	backend, err := newLongMemEvalPGVectorBackend(
-		nil, pgvectorExtractionConfig{}, true,
+		nil, pgvectorExtractionConfig{}, true, nil,
 	)
 	if err != nil {
 		return err

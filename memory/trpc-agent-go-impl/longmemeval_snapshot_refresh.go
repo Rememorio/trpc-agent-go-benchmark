@@ -122,9 +122,11 @@ func validateLongMemEvalSnapshotRefresh(result *runResult, backendNames []string
 func newLongMemEvalSnapshotBackend(name string) (memoryBackend, error) {
 	switch strings.TrimSpace(name) {
 	case "pgvector":
-		return newLongMemEvalPGVectorBackend(nil, pgvectorExtractionConfig{}, true)
+		return newLongMemEvalPGVectorBackend(
+			nil, pgvectorExtractionConfig{}, true, nil,
+		)
 	case "mem0":
-		return newBackend("mem0", nil, pgvectorExtractionConfig{})
+		return newBackend("mem0", nil, pgvectorExtractionConfig{}, nil)
 	default:
 		return nil, fmt.Errorf("unsupported backend %q", name)
 	}

@@ -586,8 +586,15 @@ Exact request matches replay with zero model calls and tokens, while requests
 changed by an earlier candidate state remain honest cache misses. A strict
 comparison rejects different or implicit user scopes, different or ephemeral
 model-response ledgers, and any recorded cache error. This mode controls
-model-response variance for mechanism attribution; use an independent uncached
-run for production cost.
+model-response variance for mechanism attribution. If the ablation can change
+how often an identical embedding text reaches the provider, also supply one
+shared `-lme-embedding-response-cache` ledger. It fixes the exact vector for
+each text hash, model, and dimension across both arms, preventing provider-side
+vector drift from changing retrieval order before model replay. Embedding usage
+then records logical `requests`, ledger `response_cache_hits`, and real provider
+`calls`/tokens separately. Strict comparison verifies that both arms used the
+same persistent embedding ledger without cache errors. Use an independent
+uncached run for production cost.
 
 The judge command checkpoints `judged_results.json` after each case. An odd
 `-lme-judge-runs` value greater than one records every independent vote and
@@ -721,6 +728,7 @@ LongMemEval-specific options:
 | `-lme-answer`            | true    | Generate answers from retrieved memories     |
 | `-lme-answer-cache`      |         | Shared content-addressed answer cache         |
 | `-lme-model-response-cache` |      | Shared primary-run model response ledger      |
+| `-lme-embedding-response-cache` |  | Shared exact-vector embedding response ledger |
 | `-lme-blind-progress`    | false   | Hide outcome content from progress and case logs |
 | `-lme-implementation`    | (env)   | Reproducible implementation label            |
 | `-lme-reanswer-results`   |         | Re-answer using saved ranked retrieval hits  |

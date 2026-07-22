@@ -282,6 +282,11 @@ var (
 		"",
 		"Shared content-addressed model response cache for primary LongMemEval runs",
 	)
+	flagLMEEmbeddingResponseCache = flag.String(
+		"lme-embedding-response-cache",
+		"",
+		"Shared content-addressed embedding response cache for LongMemEval runs",
+	)
 	flagLoCoMoReuseMemories = flag.Bool(
 		"locomo-reuse-memories",
 		false,

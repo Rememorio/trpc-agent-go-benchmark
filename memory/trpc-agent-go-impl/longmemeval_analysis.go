@@ -345,6 +345,50 @@ func validateLongMemEvalComparison(baseline, candidate *runResult) error {
 			)
 		}
 	}
+	if longMemEvalMetadataPresent(
+		baseline.Metadata, "embedding_response_cache_format_version",
+	) || longMemEvalMetadataPresent(
+		candidate.Metadata, "embedding_response_cache_format_version",
+	) {
+		for _, key := range []string{
+			"embedding_response_cache_format_version",
+			"embedding_response_cache_shared",
+			"embedding_response_cache_ledger_id",
+			"embedding_response_cache_errors",
+		} {
+			if err := compareLongMemEvalMetadataValue(
+				baseline.Metadata,
+				candidate.Metadata,
+				key,
+				true,
+			); err != nil {
+				return err
+			}
+		}
+		baselineShared, ok :=
+			baseline.Metadata["embedding_response_cache_shared"].(bool)
+		if !ok || !baselineShared {
+			return errors.New(
+				"strict LongMemEval comparison requires a shared embedding response cache",
+			)
+		}
+		cacheErrors, ok := longMemEvalMetadataInt(
+			baseline.Metadata["embedding_response_cache_errors"],
+		)
+		if !ok {
+			return fmt.Errorf(
+				"strict LongMemEval comparison metadata %q is not an integer: %v",
+				"embedding_response_cache_errors",
+				baseline.Metadata["embedding_response_cache_errors"],
+			)
+		}
+		if cacheErrors != 0 {
+			return fmt.Errorf(
+				"strict LongMemEval comparison requires zero embedding response cache errors, got %d",
+				cacheErrors,
+			)
+		}
+	}
 	if longMemEvalMetadataPresent(baseline.Metadata, "judge_runs") ||
 		longMemEvalMetadataPresent(candidate.Metadata, "judge_runs") {
 		for _, key := range []string{
@@ -1103,8 +1147,8 @@ func writeLongMemEvalComparisonArms(b *strings.Builder, baseline, candidate *run
 	} else {
 		b.WriteString("## Two-Arm Summary\n\n")
 	}
-	b.WriteString("| Arm | Implementation | Backend | Cases | Correct | EM | Avg F1 | Memories | LLM Calls | LLM Tokens | Cached | Embedding Calls | Embedding Tokens | Ingest (s) |\n")
-	b.WriteString("|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n")
+	b.WriteString("| Arm | Implementation | Backend | Cases | Correct | EM | Avg F1 | Memories | LLM Calls | LLM Tokens | Cached | Embedding Requests | Ledger Hits | Provider Embedding Calls | Embedding Tokens | Ingest (s) |\n")
+	b.WriteString("|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n")
 	if hasPGVector {
 		arm := "baseline"
 		if hasMem0 {
@@ -1186,7 +1230,7 @@ func writeLongMemEvalComparisonArm(
 	}
 	fmt.Fprintf(
 		b,
-		"| %s | %s | %s | %d | %d | %d | %.4f | %d | %d | %d | %d | %d | %d | %.1f |\n",
+		"| %s | %s | %s | %d | %d | %d | %.4f | %d | %d | %d | %d | %d | %d | %d | %d | %.1f |\n",
 		mdCell(arm),
 		mdCell(implementation),
 		mdCell(backend),
@@ -1198,6 +1242,8 @@ func writeLongMemEvalComparisonArm(
 		usage.TokenUsage.LLMCalls,
 		usage.TokenUsage.TotalTokens,
 		usage.TokenUsage.CachedTokens,
+		usage.EmbeddingUsage.Requests,
+		usage.EmbeddingUsage.ResponseCacheHits,
 		usage.EmbeddingUsage.Calls,
 		usage.EmbeddingUsage.TotalTokens,
 		float64(ingestDurationMs)/1000,
@@ -1316,8 +1362,8 @@ func formatLongMemEvalAnalysisMarkdown(
 		"Answer-stage labels use a valid semantic-judge verdict when available. `results.json` retains the pre-judge `failure_stage`, which is also exposed as `raw_stage` for bad cases.\n\n")
 
 	b.WriteString("## Backend Summary\n\n")
-	b.WriteString("| Backend | Cases | EM | Judge | Avg F1 | Avg BLEU | LLM Calls | LLM Tokens | Cached | Cache Hit | Embedding Calls | Embedding Tokens | Provider Usage |\n")
-	b.WriteString("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n")
+	b.WriteString("| Backend | Cases | EM | Judge | Avg F1 | Avg BLEU | LLM Calls | LLM Tokens | Cached | Cache Hit | Embedding Requests | Ledger Hits | Provider Embedding Calls | Embedding Tokens | Provider Usage |\n")
+	b.WriteString("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n")
 	for _, backend := range sortedAnalysisBackends(analysis) {
 		a := analysis[backend]
 		avgF1, avgBLEU := 0.0, 0.0
@@ -1334,12 +1380,14 @@ func formatLongMemEvalAnalysisMarkdown(
 			result.Summary.BackendSummaries[backend] != nil {
 			usage = *result.Summary.BackendSummaries[backend]
 		}
-		fmt.Fprintf(&b, "| %s | %d | %d | %s | %.4f | %.4f | %d | %d | %d | %.4f | %d | %d | %d/%d |\n",
+		fmt.Fprintf(&b, "| %s | %d | %d | %s | %.4f | %.4f | %d | %d | %d | %.4f | %d | %d | %d | %d | %d/%d |\n",
 			backend, a.Cases, a.ExactMatches, judge, avgF1, avgBLEU,
 			usage.TokenUsage.LLMCalls,
 			usage.TokenUsage.TotalTokens,
 			usage.TokenUsage.CachedTokens,
 			usage.TokenUsage.CacheHitRate,
+			usage.EmbeddingUsage.Requests,
+			usage.EmbeddingUsage.ResponseCacheHits,
 			usage.EmbeddingUsage.Calls,
 			usage.EmbeddingUsage.TotalTokens,
 			usage.ProviderUsageCases,

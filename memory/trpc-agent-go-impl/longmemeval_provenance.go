@@ -37,13 +37,14 @@ const (
 
 	// These versions are part of the experiment contract. Bump the relevant
 	// version whenever replay, prompting, or judging semantics change.
-	lmeProtocolVersion          = "lme-memory-turn-pair-v2"
-	lmeAnswerPromptVersion      = "lme-memory-answer-v7"
-	lmeJudgePromptVersion       = "lme-official-superset-judge-v3"
-	lmeJudgeProtocolVersion     = "lme-content-addressed-verdict-v1"
-	lmeJudgeCacheFormatVersion  = "lme-judge-cache-v1"
-	lmeAnswerCacheFormatVersion = "lme-answer-cache-v1"
-	lmeModelCacheFormatVersion  = "lme-model-response-cache-v1"
+	lmeProtocolVersion             = "lme-memory-turn-pair-v2"
+	lmeAnswerPromptVersion         = "lme-memory-answer-v7"
+	lmeJudgePromptVersion          = "lme-official-superset-judge-v3"
+	lmeJudgeProtocolVersion        = "lme-content-addressed-verdict-v1"
+	lmeJudgeCacheFormatVersion     = "lme-judge-cache-v1"
+	lmeAnswerCacheFormatVersion    = "lme-answer-cache-v1"
+	lmeModelCacheFormatVersion     = "lme-model-response-cache-v1"
+	lmeEmbeddingCacheFormatVersion = "lme-embedding-response-cache-v1"
 )
 
 var (

@@ -104,6 +104,8 @@ type lmeEmbeddingUsage struct {
 	PromptTokens      int `json:"prompt_tokens"`
 	TotalTokens       int `json:"total_tokens"`
 	Calls             int `json:"calls"`
+	Requests          int `json:"requests,omitempty"`
+	ResponseCacheHits int `json:"response_cache_hits,omitempty"`
 	UsageMissingCalls int `json:"usage_missing_calls,omitempty"`
 }
 
@@ -111,11 +113,14 @@ func (u *lmeEmbeddingUsage) Add(other lmeEmbeddingUsage) {
 	u.PromptTokens += other.PromptTokens
 	u.TotalTokens += other.TotalTokens
 	u.Calls += other.Calls
+	u.Requests += other.Requests
+	u.ResponseCacheHits += other.ResponseCacheHits
 	u.UsageMissingCalls += other.UsageMissingCalls
 }
 
 func (u lmeEmbeddingUsage) IsZero() bool {
 	return u.PromptTokens == 0 && u.TotalTokens == 0 && u.Calls == 0 &&
+		u.Requests == 0 && u.ResponseCacheHits == 0 &&
 		u.UsageMissingCalls == 0
 }
 
@@ -351,13 +356,27 @@ func lmeModelCallContextError(err error, timeout time.Duration) string {
 }
 
 type lmeTrackingEmbedder struct {
-	base  *embeddingopenai.Embedder
-	mu    sync.Mutex
-	usage lmeEmbeddingUsage
+	base          *embeddingopenai.Embedder
+	responseCache *longMemEvalEmbeddingResponseCache
+	modelName     string
+	mu            sync.Mutex
+	usage         lmeEmbeddingUsage
 }
 
 func newLongMemEvalTrackingEmbedder(base *embeddingopenai.Embedder) *lmeTrackingEmbedder {
 	return &lmeTrackingEmbedder{base: base}
+}
+
+func newLongMemEvalTrackingEmbedderWithCache(
+	base *embeddingopenai.Embedder,
+	cache *longMemEvalEmbeddingResponseCache,
+	modelName string,
+) *lmeTrackingEmbedder {
+	return &lmeTrackingEmbedder{
+		base:          base,
+		responseCache: cache,
+		modelName:     modelName,
+	}
 }
 
 func (e *lmeTrackingEmbedder) GetEmbedding(ctx context.Context, text string) ([]float64, error) {
@@ -369,9 +388,40 @@ func (e *lmeTrackingEmbedder) GetEmbeddingWithUsage(
 	ctx context.Context,
 	text string,
 ) ([]float64, map[string]any, error) {
+	e.mu.Lock()
+	e.usage.Requests++
+	e.mu.Unlock()
+
+	var cacheIdentity lmeEmbeddingResponseCacheIdentity
+	var cacheKey string
+	if e.responseCache != nil {
+		var err error
+		cacheIdentity, cacheKey, err = longMemEvalEmbeddingResponseCacheKey(
+			text, e.modelName, e.GetDimensions(),
+		)
+		if err != nil {
+			return nil, nil, err
+		}
+		if embedding, ok := e.responseCache.Lookup(cacheKey); ok {
+			e.mu.Lock()
+			e.usage.ResponseCacheHits++
+			e.mu.Unlock()
+			return embedding, nil, nil
+		}
+	}
+
 	embedding, usage, err := e.base.GetEmbeddingWithUsage(ctx, text)
 	if err != nil {
 		return nil, nil, err
+	}
+	if e.responseCache != nil {
+		var err error
+		embedding, err = e.responseCache.Put(
+			cacheKey, cacheIdentity, embedding,
+		)
+		if err != nil {
+			return nil, nil, err
+		}
 	}
 	e.mu.Lock()
 	e.usage.Calls++

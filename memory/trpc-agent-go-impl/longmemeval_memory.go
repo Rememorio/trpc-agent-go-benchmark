@@ -970,6 +970,11 @@ func runLongMemEvalMemory(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	embeddingResponseCache, err :=
+		openConfiguredLongMemEvalEmbeddingResponseCache()
+	if err != nil {
+		return err
+	}
 
 	backends := parseMemoryBackends(*flagMemoryBackends)
 	mem0Implementation := ""
@@ -1069,6 +1074,9 @@ func runLongMemEvalMemory(ctx context.Context) error {
 	initializeLongMemEvalModelResponseCacheMetadata(
 		results.Metadata, modelResponseCache,
 	)
+	initializeLongMemEvalEmbeddingResponseCacheMetadata(
+		results.Metadata, embeddingResponseCache,
+	)
 	for _, backend := range backends {
 		if backend == "mem0" {
 			mode := "self-hosted-oss"
@@ -1106,7 +1114,9 @@ func runLongMemEvalMemory(ctx context.Context) error {
 				modelName:     modelName,
 				modelVariant:  modelVariant,
 			}
-			backend, err := newBackend(backendName, llm, pgExtractionConfig)
+			backend, err := newBackend(
+				backendName, llm, pgExtractionConfig, embeddingResponseCache,
+			)
 			if err != nil {
 				cr.BackendResults[backendName] = &backendResult{Backend: backendName, Error: err.Error()}
 				log.Printf("  %s create failed: %v", backendName, err)
@@ -1126,6 +1136,9 @@ func runLongMemEvalMemory(ctx context.Context) error {
 		updateLongMemEvalAnswerCacheMetadata(results.Metadata, answerCache)
 		updateLongMemEvalModelResponseCacheMetadata(
 			results.Metadata, modelResponseCache,
+		)
+		updateLongMemEvalEmbeddingResponseCacheMetadata(
+			results.Metadata, embeddingResponseCache,
 		)
 		results.Summary = buildLongMemEvalSummary(results.Cases)
 		saveLongMemEvalResults(*flagOutput, results)
@@ -1178,16 +1191,18 @@ func longMemEvalCaseProgress(index, total int, inst *lmeInstance, blind bool) st
 
 func longMemEvalBackendProgress(backendName string, br *backendResult, blind bool) string {
 	if blind {
-		return fmt.Sprintf("  %s pairs=%d memories=%d snapshot_truncated=%v hits=%d calls=%d tokens=%d cached=%d embed_calls=%d embed_tokens=%d provider_usage=%v",
+		return fmt.Sprintf("  %s pairs=%d memories=%d snapshot_truncated=%v hits=%d calls=%d tokens=%d cached=%d embed_requests=%d embed_calls=%d embed_tokens=%d provider_usage=%v",
 			backendName, br.IngestedPairs, len(br.FinalMemories), br.SnapshotTruncated, len(br.Retrieval),
 			tokenCalls(br.TokenUsage), tokenTotal(br.TokenUsage), tokenCached(br.TokenUsage),
+			embeddingRequests(br.EmbeddingUsage),
 			embeddingCalls(br.EmbeddingUsage), embeddingTokens(br.EmbeddingUsage),
 			br.ProviderUsageReported)
 	}
-	return fmt.Sprintf("  %s pairs=%d memories=%d snapshot_truncated=%v hits=%d evidence=%s calls=%d tokens=%d cached=%d embed_calls=%d embed_tokens=%d provider_usage=%v em=%v f1=%.3f answer=%q",
+	return fmt.Sprintf("  %s pairs=%d memories=%d snapshot_truncated=%v hits=%d evidence=%s calls=%d tokens=%d cached=%d embed_requests=%d embed_calls=%d embed_tokens=%d provider_usage=%v em=%v f1=%.3f answer=%q",
 		backendName, br.IngestedPairs, len(br.FinalMemories), br.SnapshotTruncated, len(br.Retrieval),
 		br.FailureStage,
 		tokenCalls(br.TokenUsage), tokenTotal(br.TokenUsage), tokenCached(br.TokenUsage),
+		embeddingRequests(br.EmbeddingUsage),
 		embeddingCalls(br.EmbeddingUsage), embeddingTokens(br.EmbeddingUsage),
 		br.ProviderUsageReported,
 		br.ExactMatch, br.F1, truncate(br.Answer, 120))
@@ -1387,11 +1402,12 @@ func newBackend(
 	name string,
 	llm model.Model,
 	pgExtractionConfig pgvectorExtractionConfig,
+	embeddingResponseCache *longMemEvalEmbeddingResponseCache,
 ) (memoryBackend, error) {
 	switch strings.TrimSpace(name) {
 	case "pgvector":
 		return newLongMemEvalPGVectorBackend(
-			llm, pgExtractionConfig, false,
+			llm, pgExtractionConfig, false, embeddingResponseCache,
 		)
 	case "mem0":
 		host := getMem0Host()
@@ -1447,13 +1463,16 @@ func newLongMemEvalPGVectorBackend(
 	llm model.Model,
 	pgExtractionConfig pgvectorExtractionConfig,
 	readOnly bool,
+	embeddingResponseCache *longMemEvalEmbeddingResponseCache,
 ) (*pgvectorBackend, error) {
 	dsn := getPGVectorDSN()
 	if dsn == "" {
 		return nil, fmt.Errorf("pgvector-dsn or PGVECTOR_DSN is required")
 	}
-	emb := newLongMemEvalTrackingEmbedder(
+	emb := newLongMemEvalTrackingEmbedderWithCache(
 		newEmbeddingEmbedder(getEmbedModelName()),
+		embeddingResponseCache,
+		getEmbedModelName(),
 	)
 	opts := []memorypgvector.ServiceOpt{
 		memorypgvector.WithPGVectorClientDSN(dsn),
@@ -2879,7 +2898,9 @@ func saveCaseLog(
 			br.TokenUsage.CacheHitRate)
 	}
 	if br.EmbeddingUsage != nil {
-		fmt.Fprintf(&b, "EmbeddingUsage: prompt=%d total=%d calls=%d\n\n",
+		fmt.Fprintf(&b, "EmbeddingUsage: requests=%d cache_hits=%d prompt=%d total=%d calls=%d\n\n",
+			br.EmbeddingUsage.Requests,
+			br.EmbeddingUsage.ResponseCacheHits,
 			br.EmbeddingUsage.PromptTokens,
 			br.EmbeddingUsage.TotalTokens,
 			br.EmbeddingUsage.Calls)
@@ -2900,7 +2921,9 @@ func saveCaseLog(
 				tr.TokenUsage.CacheHitRate)
 		}
 		if tr.EmbeddingUsage != nil {
-			fmt.Fprintf(&b, "  embedding_usage: prompt=%d total=%d calls=%d\n",
+			fmt.Fprintf(&b, "  embedding_usage: requests=%d cache_hits=%d prompt=%d total=%d calls=%d\n",
+				tr.EmbeddingUsage.Requests,
+				tr.EmbeddingUsage.ResponseCacheHits,
 				tr.EmbeddingUsage.PromptTokens,
 				tr.EmbeddingUsage.TotalTokens,
 				tr.EmbeddingUsage.Calls)
@@ -3004,7 +3027,9 @@ func saveBlindCaseLog(path string, cr *caseResult, br *backendResult) {
 			br.TokenUsage.CacheHitRate)
 	}
 	if br.EmbeddingUsage != nil {
-		fmt.Fprintf(&b, "EmbeddingUsage: prompt=%d total=%d calls=%d\n",
+		fmt.Fprintf(&b, "EmbeddingUsage: requests=%d cache_hits=%d prompt=%d total=%d calls=%d\n",
+			br.EmbeddingUsage.Requests,
+			br.EmbeddingUsage.ResponseCacheHits,
 			br.EmbeddingUsage.PromptTokens,
 			br.EmbeddingUsage.TotalTokens,
 			br.EmbeddingUsage.Calls)
@@ -3060,10 +3085,11 @@ func printLongMemEvalSummary(result *runResult) {
 	for _, cr := range result.Cases {
 		fmt.Printf("- %s (%s): %s\n", cr.QuestionID, cr.QuestionType, cr.Question)
 		for _, br := range cr.BackendResults {
-			fmt.Printf("  %s: pairs=%d memories=%d snapshotTruncated=%v hits=%d stage=%s calls=%d tokens=%d cached=%d embedCalls=%d embedTokens=%d providerUsage=%v EM=%v F1=%.3f BLEU=%.3f err=%s\n",
+			fmt.Printf("  %s: pairs=%d memories=%d snapshotTruncated=%v hits=%d stage=%s calls=%d tokens=%d cached=%d embedRequests=%d embedCalls=%d embedTokens=%d providerUsage=%v EM=%v F1=%.3f BLEU=%.3f err=%s\n",
 				br.Backend, br.IngestedPairs, len(br.FinalMemories), br.SnapshotTruncated, len(br.Retrieval),
 				br.FailureStage,
 				tokenCalls(br.TokenUsage), tokenTotal(br.TokenUsage), tokenCached(br.TokenUsage),
+				embeddingRequests(br.EmbeddingUsage),
 				embeddingCalls(br.EmbeddingUsage), embeddingTokens(br.EmbeddingUsage),
 				br.ProviderUsageReported,
 				br.ExactMatch, br.F1, br.BLEU,
@@ -3079,7 +3105,7 @@ func printLongMemEvalSummary(result *runResult) {
 		if summary.JudgedCases > 0 {
 			judgeText = fmt.Sprintf(" judge=%d/%d", summary.JudgeCorrect, summary.JudgedCases)
 		}
-		fmt.Printf("  %s: cases=%d EM=%d%s truncatedSnapshots=%d evidence=%d extractAny=%d retrievalAny=%d retrievalAll=%d turnEvidence=%d turnExtractAny=%d turnRetrievalAny=%d avgF1=%.3f avgBLEU=%.3f calls=%d tokens=%d cached=%d cacheHit=%.3f embedCalls=%d embedTokens=%d providerUsage=%d/%d\n",
+		fmt.Printf("  %s: cases=%d EM=%d%s truncatedSnapshots=%d evidence=%d extractAny=%d retrievalAny=%d retrievalAll=%d turnEvidence=%d turnExtractAny=%d turnRetrievalAny=%d avgF1=%.3f avgBLEU=%.3f calls=%d tokens=%d cached=%d cacheHit=%.3f embedRequests=%d embedCalls=%d embedTokens=%d providerUsage=%d/%d\n",
 			backend, summary.Cases, summary.ExactMatches,
 			judgeText, summary.TruncatedSnapshots,
 			summary.EvidenceCases, summary.ExtractRecallAny, summary.RetrievalRecallAny, summary.RetrievalRecallAll,
@@ -3087,6 +3113,7 @@ func printLongMemEvalSummary(result *runResult) {
 			summary.AvgF1, summary.AvgBLEU,
 			summary.TokenUsage.LLMCalls, summary.TokenUsage.TotalTokens,
 			summary.TokenUsage.CachedTokens, summary.TokenUsage.CacheHitRate,
+			summary.EmbeddingUsage.Requests,
 			summary.EmbeddingUsage.Calls, summary.EmbeddingUsage.TotalTokens,
 			summary.ProviderUsageCases, summary.Cases)
 	}
@@ -3204,6 +3231,13 @@ func embeddingCalls(u *lmeEmbeddingUsage) int {
 		return 0
 	}
 	return u.Calls
+}
+
+func embeddingRequests(u *lmeEmbeddingUsage) int {
+	if u == nil {
+		return 0
+	}
+	return u.Requests
 }
 
 func embeddingTokens(u *lmeEmbeddingUsage) int {

@@ -184,9 +184,11 @@ func TestSaveCaseLogBlindProgressRedactsOutcomeContent(t *testing.T) {
 			LLMCalls:         1,
 		},
 		EmbeddingUsage: &lmeEmbeddingUsage{
-			PromptTokens: 3,
-			TotalTokens:  3,
-			Calls:        1,
+			PromptTokens:      3,
+			TotalTokens:       3,
+			Calls:             1,
+			Requests:          2,
+			ResponseCacheHits: 1,
 		},
 		IngestTraces: []ingestTrace{{
 			SessionIndex:      2,
@@ -247,7 +249,7 @@ func TestSaveCaseLogBlindProgressRedactsOutcomeContent(t *testing.T) {
 		"RetrievalHits: 1",
 		"ErrorPresent: true",
 		"TokenUsage: prompt=10 completion=2 total=12 cached=4 calls=1",
-		"EmbeddingUsage: prompt=3 total=3 calls=1",
+		"EmbeddingUsage: requests=2 cache_hits=1 prompt=3 total=3 calls=1",
 		"[session_idx=2 pair=3]",
 		"duration=25ms new=1 total=4 snapshot_truncated=true error_present=true",
 	} {
