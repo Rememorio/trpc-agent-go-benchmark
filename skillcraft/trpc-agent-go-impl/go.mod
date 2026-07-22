@@ -55,4 +55,4 @@ require (
 	trpc.group/trpc-go/trpc-mcp-go v0.0.10 // indirect
 )
 
-replace trpc.group/trpc-go/trpc-agent-go => github.com/Rememorio/trpc-agent-go v0.0.0-20260722040050-e06d510e0cf7
+replace trpc.group/trpc-go/trpc-agent-go => github.com/Rememorio/trpc-agent-go v0.0.0-20260722041825-c829db858011
