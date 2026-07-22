@@ -292,6 +292,7 @@ type lmeJudgeResult struct {
 	VerdictSource string            `json:"verdict_source,omitempty"`
 	RequestedRuns int               `json:"requested_runs,omitempty"`
 	ValidRuns     int               `json:"valid_runs,omitempty"`
+	MaxAttempts   int               `json:"max_attempts,omitempty"`
 	Attempts      []lmeJudgeAttempt `json:"attempts,omitempty"`
 	TokenUsage    *lmeTokenUsage    `json:"token_usage,omitempty"`
 	DurationMs    int64             `json:"duration_ms,omitempty"`
@@ -1936,7 +1937,7 @@ func judgeLongMemEvalResult(
 	}
 	result.Metadata["judge_cache_initial_entries"] = judgeCache.Len()
 	result.Metadata["judged_at"] = time.Now().UTC().Format(time.RFC3339)
-	result.Metadata["judge_note"] = "LLM semantic correctness judge adapted from the official LongMemEval QA evaluator; only explicit final VERDICT votes are accepted, multiple requested runs use strict majority voting, and identical judge inputs reuse one content-addressed verdict."
+	result.Metadata["judge_note"] = "LLM semantic correctness judge adapted from the official LongMemEval QA evaluator; only explicit final VERDICT votes are accepted, requested runs count valid votes with bounded retries, multiple votes use strict majority, and identical judge inputs reuse one content-addressed verdict."
 	result.Metadata["answer_scoring"] = "raw model output; no retrieval-assisted answer post-processing"
 	if err := os.MkdirAll(filepath.Dir(outPath), 0755); err != nil {
 		return fmt.Errorf("create judge output dir: %w", err)
@@ -2045,12 +2046,13 @@ func judgeLongMemEvalConsensus(
 	judge := &lmeJudgeResult{
 		Model:         modelName,
 		RequestedRuns: runs,
-		Attempts:      make([]lmeJudgeAttempt, 0, runs),
+		MaxAttempts:   runs + lmeJudgeMaxExtraAttempts,
+		Attempts:      make([]lmeJudgeAttempt, 0, runs+lmeJudgeMaxExtraAttempts),
 	}
 	var totalUsage lmeTokenUsage
 	var yesVotes, noVotes int
 	var yesRaw, noRaw string
-	for range runs {
+	for len(judge.Attempts) < judge.MaxAttempts && yesVotes+noVotes < runs {
 		tracker := &lmeTokenTracker{}
 		llm := &lmeTrackingModel{
 			base:    baseLLM,
@@ -2091,6 +2093,17 @@ func judgeLongMemEvalConsensus(
 	judge.TokenUsage = tokenUsagePtr(totalUsage)
 	required := runs/2 + 1
 	switch {
+	case judge.ValidRuns < runs:
+		judge.Error = fmt.Sprintf(
+			"judge collected %d/%d valid votes after %d attempts",
+			judge.ValidRuns, runs, len(judge.Attempts),
+		)
+		if yesVotes >= required {
+			judge.Correct = true
+			judge.Raw = yesRaw
+		} else if noVotes >= required {
+			judge.Raw = noRaw
+		}
 	case yesVotes >= required:
 		judge.Correct = true
 		judge.Raw = yesRaw

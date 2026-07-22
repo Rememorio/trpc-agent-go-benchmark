@@ -34,13 +34,14 @@ const (
 	lmeAnswerMaxAttempts      = 2
 	lmeJudgePrimaryMaxTokens  = 1024
 	lmeJudgeRepairMaxTokens   = 2048
+	lmeJudgeMaxExtraAttempts  = 2
 
 	// These versions are part of the experiment contract. Bump the relevant
 	// version whenever replay, prompting, or judging semantics change.
 	lmeProtocolVersion             = "lme-memory-turn-pair-v2"
 	lmeAnswerPromptVersion         = "lme-memory-answer-v7"
 	lmeJudgePromptVersion          = "lme-official-superset-judge-v3"
-	lmeJudgeProtocolVersion        = "lme-content-addressed-verdict-v1"
+	lmeJudgeProtocolVersion        = "lme-content-addressed-verdict-v2"
 	lmeJudgeCacheFormatVersion     = "lme-judge-cache-v1"
 	lmeAnswerCacheFormatVersion    = "lme-answer-cache-v1"
 	lmeModelCacheFormatVersion     = "lme-model-response-cache-v1"
@@ -114,6 +115,7 @@ type lmeAnswerGenerationProvenance struct {
 type lmeJudgeGenerationProvenance struct {
 	PrimaryMaxTokens int     `json:"primary_max_tokens"`
 	RepairMaxTokens  int     `json:"repair_max_tokens"`
+	MaxExtraAttempts int     `json:"max_extra_attempts,omitempty"`
 	Temperature      float64 `json:"temperature"`
 	ReasoningEffort  string  `json:"reasoning_effort"`
 	ThinkingEnabled  bool    `json:"thinking_enabled"`
@@ -147,6 +149,7 @@ func currentLongMemEvalJudgeGeneration() lmeJudgeGenerationProvenance {
 	return lmeJudgeGenerationProvenance{
 		PrimaryMaxTokens: lmeJudgePrimaryMaxTokens,
 		RepairMaxTokens:  lmeJudgeRepairMaxTokens,
+		MaxExtraAttempts: lmeJudgeMaxExtraAttempts,
 		Temperature:      0,
 		ReasoningEffort:  "low",
 		ThinkingEnabled:  false,

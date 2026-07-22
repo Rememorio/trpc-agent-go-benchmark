@@ -934,8 +934,13 @@ func validLongMemEvalJudgeConsensus(judge *lmeJudgeResult) bool {
 	if judge == nil || judge.RequestedRuns == 0 || judge.RequestedRuns == 1 {
 		return true
 	}
+	maxAttempts := judge.MaxAttempts
+	if maxAttempts == 0 {
+		maxAttempts = judge.RequestedRuns
+	}
 	if judge.RequestedRuns < 1 || judge.RequestedRuns%2 == 0 ||
-		len(judge.Attempts) != judge.RequestedRuns {
+		len(judge.Attempts) < judge.RequestedRuns ||
+		len(judge.Attempts) > maxAttempts {
 		return false
 	}
 	var yesVotes, noVotes int

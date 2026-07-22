@@ -600,13 +600,17 @@ uncached run for production cost.
 
 The judge command checkpoints `judged_results.json` after each case. An odd
 `-lme-judge-runs` value greater than one records every independent vote and
-uses a strict majority. `-lme-judge-cache` supplies a shared, content-addressed
-verdict ledger. The key covers the exact judge prompt, model, variant,
-generation settings, protocol version, and vote count, so identical answers
-across backends or result files receive the same verdict. Cache reuse is
-recorded per result and does not double-count judge tokens. When resuming from
-that file with the same keyed judge contract, it keeps validated verdicts and
-retries only missing or invalid ones. Analysis treats a valid
+uses a strict majority. Each requested run is a valid vote; transient or
+malformed attempts are retained and permit up to two bounded replacement
+attempts. The command checkpoints diagnostics and fails if it still cannot
+collect the requested vote count. `-lme-judge-cache` supplies a shared,
+content-addressed verdict ledger. The key covers the exact judge prompt, model,
+variant, generation and retry settings, protocol version, and vote count, so
+identical answers across backends or result files receive the same verdict.
+Incomplete consensuses are never reused or cached. Cache reuse is recorded per
+result and does not double-count judge tokens. When resuming from that file
+with the same keyed judge contract, it keeps validated verdicts and retries
+only missing or invalid ones. Analysis treats a valid
 semantic-judge result as the primary correctness signal and falls back to exact
 match when no judge result is available. It writes `analysis.md` and
 `bad_cases.tsv`, including raw pipeline stages, evidence status, backend

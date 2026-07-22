@@ -2145,6 +2145,10 @@ func TestResolveLongMemEvalJudgeDoesNotCacheIncompleteConsensus(t *testing.T) {
 		"VERDICT: yes",
 		"missing verdict",
 		`{"unexpected":true}`,
+		"missing verdict",
+		`{"unexpected":true}`,
+		"missing verdict",
+		`{"unexpected":true}`,
 		"VERDICT: yes",
 		"VERDICT: yes",
 		"VERDICT: yes",
@@ -2184,8 +2188,8 @@ func TestResolveLongMemEvalJudgeDoesNotCacheIncompleteConsensus(t *testing.T) {
 	if cached := cache.file.Entries[key].Judge; cached.ValidRuns != 3 {
 		t.Fatalf("legacy incomplete cache entry was not replaced: %#v", cached)
 	}
-	if llm.calls != 7 {
-		t.Fatalf("model calls = %d, want 7", llm.calls)
+	if llm.calls != 11 {
+		t.Fatalf("model calls = %d, want 11", llm.calls)
 	}
 }
 
@@ -2208,6 +2212,10 @@ func TestJudgeLongMemEvalResultFailsAfterCheckpointingIncompleteConsensus(t *tes
 	llm := &queuedJudgeModel{responses: []string{
 		"VERDICT: yes",
 		"VERDICT: yes",
+		"missing verdict",
+		`{"unexpected":true}`,
+		"missing verdict",
+		`{"unexpected":true}`,
 		"missing verdict",
 		`{"unexpected":true}`,
 	}}
@@ -2662,7 +2670,7 @@ func TestJudgeLongMemEvalConsensusMajority(t *testing.T) {
 	if judge.Error != "" || !judge.Correct || judge.ValidRuns != 3 {
 		t.Fatalf("unexpected consensus: %#v", judge)
 	}
-	if judge.RequestedRuns != 3 || len(judge.Attempts) != 3 {
+	if judge.RequestedRuns != 3 || judge.MaxAttempts != 5 || len(judge.Attempts) != 3 {
 		t.Fatalf("unexpected attempts: %#v", judge)
 	}
 	if judge.TokenUsage == nil || judge.TokenUsage.LLMCalls != 3 ||
@@ -2690,8 +2698,34 @@ func TestJudgeLongMemEvalConsensusRequiresStrictMajority(t *testing.T) {
 	if judge.Error == "" || judge.ValidRuns != 2 {
 		t.Fatalf("expected no strict majority: %#v", judge)
 	}
-	if len(judge.Attempts) != 3 || judge.Attempts[2].Error == "" {
+	if len(judge.Attempts) != 5 || judge.Attempts[2].Error == "" {
 		t.Fatalf("expected failed vote to be retained: %#v", judge.Attempts)
+	}
+}
+
+func TestJudgeLongMemEvalConsensusRetriesUntilRequestedValidVotes(t *testing.T) {
+	t.Parallel()
+
+	llm := &queuedJudgeModel{responses: []string{
+		"VERDICT: yes",
+		"missing verdict",
+		`{"unexpected":true}`,
+		"VERDICT: yes",
+		"VERDICT: yes",
+	}}
+	judge := judgeLongMemEvalConsensus(
+		context.Background(), llm, "judge-model", &caseResult{
+			QuestionType: "single-session-user",
+			Question:     "Which option?",
+			Answer:       "Option B",
+		}, "Option B", 3,
+	)
+	if judge.Error != "" || !judge.Correct || judge.ValidRuns != 3 {
+		t.Fatalf("retried consensus = %#v", judge)
+	}
+	if judge.MaxAttempts != 5 || len(judge.Attempts) != 4 ||
+		judge.Attempts[1].Error == "" || llm.calls != 5 {
+		t.Fatalf("retry attempts = judge=%#v calls=%d", judge, llm.calls)
 	}
 }
 
