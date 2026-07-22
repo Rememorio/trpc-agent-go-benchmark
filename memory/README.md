@@ -57,19 +57,24 @@ Based on:
 
 | Arm | Primary | Majority | Correct replicates | Memory LLM tokens | Final memories |
 |-----|--------:|---------:|-------------------:|------------------:|---------------:|
-| pgvector main | 12/16 | 12/16 | 36/48 | 1,187,759 | 151 |
-| Mem0 OSS | 14/16 | 14/16 | 41/48 | 1,764,654 | 485 |
-| pgvector candidate | **16/16** | **16/16** | **48/48** | 1,790,001 | 416 |
+| pgvector main | 11/16 | 11/16 | 33/48 | 1,184,057 | 141 |
+| Mem0 OSS | 14/16 | 14/16 | 42/48 | 1,765,231 | 492 |
+| pgvector candidate before provenance ranking | 15/16 | 15/16 | 46/48 | 1,641,809 | 311 |
+| pgvector final candidate | **16/16** | **16/16** | **48/48** | 1,641,809* | 311* |
 
 LongMemEval replays 183 user/assistant pairs per arm through the production
 auto-memory path, then generates three independent answers with three judge
-votes each. The candidate passes the preregistered quality, category, usage,
-and cost gates. A compact-recovery ablation preserved 48/48 correct answers
-while reducing memory LLM tokens by 2.6% relative to its parent candidate;
-final memory count and wall-clock ingestion time did not improve. This fixed
-16-question set was already observed during development. It is not unseen
-evidence or a full-dataset significance claim; see the full English or Chinese
-report for provenance, stage-level bad cases, LoCoMo regression, and
+votes each. The final retrieval-only change adds query-aware provenance as a
+fourth RRF signal: explicit historical-assistant questions favor preserved
+assistant results, while other questions favor user-grounded memories. It
+repairs the sole unstable candidate case without filtering either source.
+`*` Ingestion, usage, and storage are inherited from an exact byte-stable
+memory snapshot; only retrieval order and fresh answer/judge runs changed.
+The accepted baseline replaced one whole answer replicate across every arm
+after a truncated Mem0 response, rather than selectively resampling a case.
+This fixed 16-question set was already observed during development. It is not
+unseen evidence or a full-dataset significance claim; see the full English or
+Chinese report for costs, provenance, bad cases, LoCoMo regression, and
 limitations.
 
 ## SQLite vs SQLiteVec (Subset)
@@ -573,6 +578,14 @@ different answer ledgers or do not both use a persistent shared ledger.
 Set `-lme-reanswer-reuse-source-answers=false` with a new empty cache when an
 independent answer replicate is required. The result records this choice, and
 the model must answer every cache miss instead of seeding from the source run.
+An answer records every execution attempt. A response that ends because of a
+length limit is regenerated once with a concise retry prompt and the configured
+larger token budget; an answer that is still empty or truncated permits up to
+two bounded replacement attempts. Failed answers are never cached as successful
+entries. Formal replicate replacement is all-arms and all-cases:
+if one backend invalidates a replicate, create a fresh answer and judge ledger
+and replace that complete replicate rather than resampling only the failed
+case.
 
 For causal ablations of ingestion behavior, `-lme-model-response-cache` can
 share complete primary-run model response streams between sequential runs. Its

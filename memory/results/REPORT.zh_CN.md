@@ -118,6 +118,13 @@ prompt 文本，同时保留来源标记、精确数值和结构化结果整体�
 这些机制只在 candidate 实验臂显式开启；普通 user memory 的更新继续使用
 兼容 upstream main 的默认 reconcile 行为。
 
+最终检索阶段复用 assistant-result memory 中已经保存的来源标记。问题明确
+引用历史 assistant 回答时，RRF 增加一组 assistant-result 排名；普通事实、
+偏好和当前建议问题则增加一组 user-grounded 排名。这是软性的第四个信号，
+不是过滤器，不改变 similarity score、持久化 memory 或公共 API。Intent
+分类器刻意保持窄范围：单独的“提醒我”、泛化 follow-up 或当前推荐请求，
+不会被归类为 assistant-history query。
+
 较早的 candidate 曾为普通 memory 导出一套独立的 history-preserving update
 policy。新鲜 LoCoMo 策略消融没有支持它：默认 reconcile 的整体分数略高，
 并在三次回答重复中赢得两次。因此最终设计删除该公共策略及其专用状态恢复
@@ -140,20 +147,22 @@ mem0 通过公开 API 接收同一个原始 pair。源 session 日期不写入�
 只看到搜索出的 memories，不会看到原始对话。
 
 所有实验臂都使用 temperature 0 的 glm52、`text-embedding-3-small` 和
-top-k 30。冻结的三臂 baseline 比较默认 reconcile 的 upstream-main
-pgvector、当时采用 history-preserving update 且提取 assistant result 的
-candidate，以及固定镜像的 self-hosted Mem0 OSS（pgvector 后端）。组件消融把
-最终 candidate 收敛为默认 reconcile 加 assistant-result extraction；一次新鲜
-完整配置回归与删除代码后的精确构建 smoke 分别验证它。Runner 记录 extraction
-operation、memory diff、retrieval hit、证据来源、错误、耗时、LLM/embedding
-usage、cached tokens、构建 revision 和脱敏 Mem0 配置。
+top-k 30。接受的冻结 baseline 比较默认 reconcile 的 upstream-main
+pgvector、采用默认 reconcile 加 assistant-result extraction 的 candidate，
+以及固定镜像、以 pgvector 为后端的 self-hosted Mem0 OSS。最终 provenance
+ranking 只从 candidate 的精确持久化 memory 快照刷新 retrieval，之后重新运行
+answer 和 judge。这样可以把 retrieval 改动与 extraction 随机性分离，并且只有在
+memory 逐字节稳定后才继承入库 usage。Runner 记录 extraction operation、memory
+diff、retrieval hit、证据来源、错误、耗时、LLM/embedding usage、cached token、
+构建 revision 和脱敏 Mem0 配置。
 
 固定开发集从每种 LongMemEval 类型抽取 2 个可回答问题，再加入 4 个
 abstention，共 16 题；每个实验臂重放 183 个 user/assistant pair。每个臂
 基于保存的 top-k 独立回答三次，每次答案再接受三个独立 semantic-judge
 投票。同一 replicate 内各臂共享一个空的 content-addressed answer/judge
-ledger，不同 replicate 使用不同 ledger。Exact Match、F1 和 BLEU 仅作
-辅助诊断。
+ledger，不同 replicate 使用不同 ledger。其中一个计划内 replicate 出现不完整
+Mem0 答案，因此整次 replicate 对所有实验臂、所有 case 使用新 ledger 替换，
+没有按 case 选择性重采样。Exact Match、F1 和 BLEU 仅作辅助诊断。
 
 比较前会校验 dataset、selection、protocol、prompt、model、build 和 Mem0
 runtime digest。运行前冻结的晋级 gate 同时覆盖多数正确率、正确 replicate
@@ -350,125 +359,92 @@ Long-Context 将完整对话历史放入单次 LLM 调用，在短单 session
 > 未见 holdout。早期 protocol v1 seed48/seed137 结果只保留为历史诊断。
 
 Protocol v2 比较评估的是生产 auto-memory 路径，而不是前文的 LoCoMo
-检索变体。三个实验臂重放相同的 183 个 user/assistant pair，消息正文
-逐字一致，日期只通过 metadata 传递，Top-K 均为 30，store 相互隔离。
-每个实验臂独立回答三次，每次答案接受三个 semantic-judge 投票。
+检索变体。接受的 baseline 重放相同的 183 个 user/assistant pair，消息正文
+逐字一致，日期只通过 metadata 传递，Top-K 均为 30，store 相互隔离。每个
+实验臂独立回答三次，每个答案接受三个独立 semantic-judge 投票。
 
 | 实验臂 | Memory 策略 | Primary | Majority | 正确 replicate | 不稳定 case | 错误 |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
-| pgvector main | 默认 reconcile；不提取 assistant result | 12/16 | 12/16 | 36/48 | 0 | 0 |
-| Mem0 OSS | 固定的 self-hosted OSS runtime | 14/16 | 14/16 | 41/48 | 1 | 0 |
-| 冻结 pgvector candidate | history-preserving；提取 assistant result | **16/16** | **16/16** | **48/48** | **0** | **0** |
-| reconcile + assistant 配置 | 默认 reconcile；提取 assistant result | **16/16** | **16/16** | **48/48** | **0** | **0** |
+| pgvector main | 默认 reconcile；不提取 assistant result | 11/16 | 11/16 | 33/48 | 0 | 0 |
+| Mem0 OSS | 固定的 self-hosted OSS runtime | 14/16 | 14/16 | 42/48 | 0 | 0 |
+| provenance 排名前的 pgvector | reconcile；提取 assistant result | 15/16 | 15/16 | 46/48 | 1 | 0 |
+| 最终 pgvector candidate | 相同 memory；query-aware provenance RRF | **16/16** | **16/16** | **48/48** | **0** | **0** |
 
-前三行来自预注册的同期三臂比较。最后一行是在完全相同固定 ID 上使用简化
-runtime 配置重新入库、重新回答的独立运行，使用新的模型响应与隔离 store，
-没有复用或改写冻结 candidate 的结果。该完整运行早于代码删除，但执行了相同的
-普通 reconcile 与私有 assistant-result persistence 语义；删除后的精确构建由
-下文单独的 implementation smoke 覆盖。
+前三行使用接受的全实验臂 replacement manifest。之前一次 replicate 因 Mem0
+答案仍被截断而废弃，所有实验臂、所有 case 都用新的 answer/judge ledger
+完整重跑。最后一行是在精确 candidate memory 快照上的 retrieval-only follow-up，
+使用三个新的 answer ledger，每个答案仍是三票 judge。因此它只继承 memory-layer
+成本，不继承 answer 结果。
 
-收益没有集中在单一类别：
+Majority 收益覆盖六个类别：
 
-| LongMemEval 类型 | 题数 | pgvector main | Mem0 OSS | 两次 candidate 运行 |
-| --- | ---: | ---: | ---: | ---: |
-| knowledge-update | 2 | 2 | 2 | 2 |
-| multi-session | 4 | 3 | 3 | **4** |
-| single-session-assistant | 2 | 0 | **2** | **2** |
-| single-session-preference | 2 | 1 | **2** | **2** |
-| single-session-user | 3 | 3 | 3 | 3 |
-| temporal-reasoning | 3 | **3** | 2 | **3** |
+| LongMemEval 类型 | 题数 | pgvector main | Mem0 OSS | 排名前 | 最终 candidate |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| knowledge-update | 2 | 2 | 2 | 2 | **2** |
+| multi-session | 4 | 2 | 3 | 3 | **4** |
+| single-session-assistant | 2 | 0 | **2** | **2** | **2** |
+| single-session-preference | 2 | **2** | **2** | **2** | **2** |
+| single-session-user | 3 | **3** | **3** | **3** | **3** |
+| temporal-reasoning | 3 | 2 | 2 | **3** | **3** |
 
-下表为 provider 上报的 memory-layer 成本，不含会受共享 cache 影响的
-answer 与 judge 调用；后者在原始制品中单独记录：
+以下是 provider 上报的 memory-layer usage，不含 answer/judge 调用。最终
+candidate 的数据继承自逐字节稳定的排名前快照：
 
-| 实验臂 | Memory LLM 调用 | Memory LLM Tokens | Cached Tokens | Embedding 调用 | Embedding Tokens | 最终 memories | 入库耗时 | 搜索耗时 |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| pgvector main | 183 | 1,187,759 | 599,360 | 694 | 21,919 | 151 | 1,313s | 16.6s |
-| Mem0 OSS | 183 | 1,764,654 | 1,410,624 | 373 | 116,725 | 485 | 1,278s | 20.9s |
-| 冻结 candidate | 207 | 1,790,001 | 968,960 | 619 | 35,922 | 416 | 2,301s | 20.3s |
-| compact history reference | 208 | 1,686,365 | 664,960 | 624 | 37,964 | 421 | 2,256s | - |
-| reconcile + assistant 配置 | 215 | 1,639,589 | 612,032 | 815 | 44,243 | 291 | 2,576s | 25.8s |
+| 实验臂 | LLM 调用 | Prompt token | Completion token | 总 token | Cached token | Cache hit rate |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| pgvector main | 183 | 1,114,204 | 69,853 | 1,184,057 | 441,472 | 39.62% |
+| Mem0 OSS | 183 | 1,667,854 | 97,377 | 1,765,231 | 1,292,992 | 77.52% |
+| provenance 排名前的 pgvector | 209 | 1,520,533 | 121,276 | 1,641,809 | 558,400 | 36.72% |
+| 最终 pgvector candidate | 209 | 1,520,533 | 121,276 | 1,641,809 | 558,400 | 36.72% |
 
-冻结 candidate 以 main 的 1.507 倍 LLM token、1.639 倍 embedding token 和
-2.755 倍最终 memory，通过了预注册的 1.53、2.0、3.0 倍上限。更简单的配置
-保持 48/48 质量；相对 compact history reference，LLM token 下降
-2.77%，最终 memory 下降 30.88%，但 embedding token 增加 16.54%，embedding
-调用增加 30.61%，入库耗时增加 14.2%，因此并非所有成本都改善。相对 main，
-它使用 1.380 倍 LLM token、2.019 倍 embedding token 和 1.927 倍最终 memory；
-相对 Mem0，则少使用 7.09% LLM token、62.09% embedding token 和 40.0%
-最终 memory。Cached token 单列，因为 provider 计费方式不同。新的简化 gate
-校验精确质量和制品完整性，没有事后套用冻结 promotion 的成本上限；尤其是
-最终 embedding-token 比例略高于原来的 2.0 倍上限。
+| 实验臂 | Embedding 请求 | Response-cache hit | Provider 调用 | Embedding token | 最终 memory | 入库耗时 | 搜索耗时 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| pgvector main | 663 | 210 | 453 | 16,500 | 141 | 1,697.6s | 21.0s |
+| Mem0 OSS | - | - | 373 | 116,822 | 492 | 1,941.4s | 21.9s |
+| provenance 排名前的 pgvector | 627 | 231 | 396 | 27,946 | 311 | 2,770.2s | 0.085s |
+| 最终 pgvector candidate | 627 | 231 | 396 | 27,946 | 311 | 2,770.2s | 刷新运行 |
 
-compact-recovery 消融复用了固定的已观察 16 题选择，仍达到 48/48 个正确
-answer replicate 和 144/144 个正确 judge vote。相对 parent candidate，
-recovery 调用从 27 降到 24，memory LLM 调用从 210 降到 207，LLM token
-和 embedding token 均下降约 2.6%。最终 memory 从 410 增至 416，因此这是
-小幅 prompt 成本改善，不是存储量或端到端延迟改善。完全移除 recovery 的
-方案已在机制集上被否决：`e3fc4d6e` 产生 0 条 memory，召回证据也完全缺失。
+相对 main，最终 candidate 使用 1.3866 倍 memory LLM token、1.6937 倍
+embedding token、0.9457 倍逻辑 embedding 请求和 2.2057 倍最终 memory。
+相对 Mem0，它少使用 6.99% memory LLM token、76.08% embedding token 和
+36.79% 最终 memory，但入库耗时长 42.69%。Prompt-cache token 单列，因为
+provider 计费语义不同。最终 answer follow-up 使用 54 次调用、140,568 个 answer
+token，以及 144 次调用、39,997 个 judge token；所有 ledger 均从空状态开始，
+cache hit 为 0。
 
-后续 assistant-result prompt compaction 使用新鲜、隔离的 store，与上述固定
-parent 做配对评估。在同一个已观察 dev16 对话集上，memory-layer token 从
-1,790,001 降至 1,686,365（-5.79%），入库时间从 2,301 秒降至 2,256 秒
-（-1.97%）。Embedding token 从 35,922 增至 37,964（+5.68%），最终 memory
-从 416 增至 421，assistant-result memory 保持为 146 对 147。预注册的正式
-晋级结论仍是**拒绝**，因为模型调用是 208，而 parent 的精确上限是 207；
-检查结果后没有回写或放宽原 gate。另一个明确标记为 post-hoc、不可晋级的
-质量诊断得到 48/48 个正确答案和 144/144 个有效 judge vote。
+保存的 trajectory 可以定位 baseline failure：
 
-工程集成判断使用 provider token、embedding、入库耗时、持久化 memory 边界
-和跨数据集质量作为直接资源与回归 gate；随机 recovery 调用数只保留为报告项，
-原正式拒绝仍是证据的一部分。Assistant-result prompt 常量缩短 59.85%，单测
-与 race 测试通过，综合 gate 建议集成到开发 candidate，而不是 blind 晋级。
+- `cc539528` 和 `e3fc4d6e` 是 main 的 extraction failure。Candidate 保存
+  assistant 的 `Ruby, Python, PHP` 列表和实体 `Dr. Arati Prabhakar`，两道
+  assistant-history 问题都是 3/3。
+- `d682f1a2` 主要是 main 的 answer-context failure：retrieval 已包含三个外卖
+  服务，但 main 回答 `2`，因此不支持再加 extraction 规则。
+- Mem0 的 `09ba9854_abs` 把建议的 bus/taxi 价格当成 user-grounded 事实，
+  错答本应 abstain 的问题。`gpt4_7abb270c` 虽召回全部六个 source session，
+  但 recommendation memory 过多且时间结构不可用；两题在三次回答中都稳定失败。
+- Provenance 排名前，`09ba9854_abs` 也是 candidate 唯一的 majority failure：
+  assistant 估价排第 1，三次只有一次 abstain。Query-aware RRF 将用户陈述的
+  “约 60 美元出租车太贵”排到该估价之前。三个新答案随后都 abstain，而两道
+  明确的 assistant-history 问题仍保持 3/3。
 
-随后，普通 update-policy 消融在 10 道固定分层 LoCoMo 问题上，用新鲜 store
-比较 history-preserving 与默认 reconcile，并各自重复回答三次。
-History-preserving 平均 F1 为 0.6861，reconcile 为 0.6912；reconcile 赢两次，
-history-preserving 赢一次，预声明的支持规则未通过。这不仅是 API 简化，而是
-证据不支持继续导出独立 history policy。新鲜的 16 题 reconcile + assistant
-配置运行得到 16/16、48/48、144/144 个有效投票，没有 pipeline error。
-删除该策略及 state-transition recovery 实现后，另一次精确构建的四题
-implementation smoke 完整重放 32 个 pair，得到 4/4、12/12 个有效投票，
-且四题均有完整 extraction/retrieval 证据。
+该 retrieval 改动调整了 16 题中的 14 题顺序，但没有改变持久化 memory 或
+evidence coverage。收紧 intent classifier 后，16 题的 retrieval array（包括
+score 与顺序）与第一版逐字节一致。跨数据集检查在一张包含 139 条 active memory
+的冻结 LoCoMo 表上，重放了 31 个唯一 query、60 条 Top-30 trajectory。该表没有
+assistant-result memory，所以所有调用的新 RRF signal 都为空，并与旧三信号
+merge 完全一致；继承的 target mean F1 为 0.7122。这是零 provider 调用的组件
+不活跃回归，不代表 provenance ranking 能改善 LoCoMo，也不是独立样本证据。
 
-保存的 trace 可以把 memory failure 与 answer variance 分开：
+更早的消融仍约束最终设计。完全移除保守 recovery 会让 `e3fc4d6e` 不产生
+memory，因此被拒绝。公开的 history-preserving update policy 在直接 LoCoMo
+消融中略低于默认 reconcile，三次重复只赢一次，因此已删除。Prompt compaction
+超过其精确模型调用上限，正式 gate 仍保留为拒绝，即使后续质量诊断支持较短的
+内部 prompt。这些结果支持私有、窄范围的 retrieval signal，而不是增加公共
+policy 或特殊 case extraction 规则。
 
-- `38146c39`：main 只保留了最新的 muscovado 决定和泛化 sugar 偏好，
-  丢失具体的 turbinado 搭配建议；最终 candidate 在普通 reconcile 下通过
-  assistant guidance 恢复该关系，因此这个 case 不支持独立 history policy。
-- `cc539528`：main 只保存用户对前后端开发的兴趣，无法恢复推荐语言；
-  candidate 保存 `Ruby, Python, PHP` 列表，三次均答对。
-- `e3fc4d6e`：main 对一段长 assistant 文章没有生成 memory；candidate
-  的保守 recovery 保存实体，三次均回答 `Dr. Arati Prabhakar`。
-- `d682f1a2`：main 已经保存并召回 Fresh Fusion、Domino's 和 Uber Eats，
-  但三次均回答 `2`；candidate 回答 `3`。这是 answer-context effect，
-  不是 extraction 或 retrieval miss，因此不用于支持定向 memory 规则。
-- Mem0 的 `09ba9854_abs` 把 assistant 建议的 bus/taxi 价格当成用户事实，
-  错答本应 abstain 的问题。`gpt4_7abb270c` 的 Top-30 覆盖全部六个 source
-  session，但被 recommendation memory 挤占且 event metadata 不一致，
-  三次均 abstain。`830ce83f` 是唯一不稳定的 Mem0 case，正确率为 2/3。
-
-冻结的三臂 candidate baseline 通过全部预注册开发 gate，包括六类零退化、
-完整 provider usage 和零错误。它此前的 LoCoMo 固定快照三次回归仍在容忍
-范围内（平均 F1 delta 为 `-0.0282`，要求不低于 `-0.05`），但不是改善；
-差值来自两题的 answer-recovery 结果，并未证明存在 memory miss。
-后续策略消融直接使用新鲜隔离 store 比较两种普通 update policy，因此是更强的
-策略选择证据。
-
-Prompt compaction 随后在 LoCoMo 上使用新鲜 parent/compact store 和固定的
-10 道分层问题做独立检查。Extraction prompt token 下降 5.90%，总 extraction
-token 下降 4.17%，embedding token 增加 0.88%，memory 数量增加 5.17%。
-固定 store 重复回答三次后，parent 平均 F1 为 0.6100，compact 为 0.7320，
-同时 QA token 下降 1.69%。`locomo10_1_q_12` 可以直接解释该收益：两张 store
-都提到 Sweden，但 compact 保留了完整的“约四年前从 Sweden 搬来”关系，并在
-第二次查询排到第 2；parent 排在前面的版本只写“home country”，最终拒答。
-另一方面，`locomo10_1_q_15` 的两臂都召回 counseling 与成长支持之间的因果
-证据，但对反事实问题仍选择拒答；这是 answer-layer failure，不支持继续添加
-memory 规则。LoCoMo 会把每个 session 的一位人类说话者映射为 assistant，
-所以这组结果是跨数据集成本与回归证据，不是现实 assistant-output 结论。
-
-要主张泛化，仍需经过授权、预注册的未见 full-haystack holdout 以及更大的
-LongMemEval-M 评测。
+当前所有 LongMemEval 证据都来自已经观察的 16 题开发集。最终 candidate 只按
+observed evidence 集成，不具备 promotion 资格。要主张泛化，仍需经过授权、
+预注册的未见 full-haystack holdout 以及更大的 LongMemEval-M 评测。
 
 ---
 
@@ -921,10 +897,11 @@ Agno                |====================                      | 0.267
 
 3. **Opt-in pgvector candidate 在固定 LongMemEval 开发回归中领先
    upstream main 和 self-hosted Mem0。** Protocol v2 下，candidate
-   达到 16/16、48/48 个正确 answer replicate；main 为 12/16、36/48，
-   Mem0 为 14/16、41/48。组件消融支持 assistant-result extraction，
-   但否定了单独的普通 history-preserving update policy。本协议尚未运行
-   新的未见 holdout。
+   达到 16/16、48/48 个正确 answer replicate；main 为 11/16、33/48，
+   Mem0 为 14/16、42/48。Assistant-result extraction 修复 assistant-history
+   recall，query-aware provenance RRF 则防止这些结果在普通查询中挤掉
+   user-grounded 证据。直接消融否定了单独的普通 history-preserving update
+   policy。本协议尚未运行新的未见 holdout。
 
 4. **trpc-agent-go 已明显超越专用记忆系统。** Session Recall 的
    4 类加权 F1 达到 0.531，显著高于 Mem0g（0.422）、Mem0
@@ -957,11 +934,11 @@ Agno                |====================                      | 0.267
    路线。
 
 7. **下一步重点是未见泛化，而不是继续调整已观察集合。** 当前 candidate
-   已修复所有已观察 LongMemEval 开发 gap；reconcile + assistant 配置运行
-   保持 48/48，同时使用 main 的 1.380 倍 memory token 和 1.927 倍最终
-   memory。2.019 倍 embedding-token 比例明确了下一个通用成本优化方向，
-   但继续针对这些已观察 ID 调整质量规则会增加过拟合风险。下一步应进入
-   预注册的未见 full-haystack holdout。
+   已修复所有已观察 LongMemEval 开发 gap，保持 48/48，同时使用 main 的
+   1.3866 倍 memory token、1.6937 倍 embedding token 和 2.2057 倍最终
+   memory。LoCoMo replay 只证明新组件在一个冻结快照上不活跃，并不证明泛化。
+   继续针对这些已观察 ID 调整质量规则会增加过拟合风险。下一步应进入预注册的
+   未见 full-haystack holdout。
 
 ### 生产建议
 
@@ -1036,11 +1013,12 @@ Agno                |====================                      | 0.267
 
 Candidate pgvector 复用完全相同的 ID 与 protocol，并设置
 `-pgvector-update-policy reconcile` 和
-`-pgvector-assistant-result-extraction=true`。冻结三臂 baseline 使用历史上的
-`history-preserving` policy，并保持不可变。Reconcile + assistant 配置使用新鲜
-store 重新入库和回答，删除代码后的精确构建另有独立 smoke。另外两次基于保存
-retrieval 的 re-answer 使用新的独立 answer ledger；所有结果都对每个答案执行
-三票 judge。原 replicate manifest 在运行前冻结质量和成本 gate。
+`-pgvector-assistant-result-extraction=true`。接受的三臂 baseline 使用默认
+reconcile，并保持不可变。另外两次基于保存 retrieval 的 re-answer 使用新的独立
+answer ledger；所有结果都对每个答案执行三票 judge。一个不完整 replicate 按
+预先冻结的规则对所有实验臂、所有 case 完整替换。最终 candidate 只从接受的
+candidate memory 快照刷新 retrieval，然后执行三轮新 answer/judge。原 replicate
+manifest 在运行前冻结质量和成本 gate。
 
 | Provenance 项 | Digest 或 revision |
 | --- | --- |
@@ -1071,6 +1049,12 @@ retrieval 的 re-answer 使用新的独立 answer ledger；所有结果都对每
 | LoCoMo update-policy checksum manifest SHA-256 | `292ff0a81b805978e7822ff5ee2b6a0bb5b22c10fdf52ee7c8976314d6017a61` |
 | 最终 implementation-smoke audit SHA-256 | `0415aa9bdb973f178aadd4d83cc8db0c3caaa157d395663627a56cca2d8765aa` |
 | 最终 implementation-smoke checksum manifest SHA-256 | `7a3f0b0d5e31b2dfb4880769f98f10aea62673e6f0862e1882614040b5ce6a92` |
+| 接受的 replacement-manifest comparison SHA-256 | `38bd9117ef320d1d76d7ee833030e51ab2db37a589165ff1ff03b3dcffec707b` |
+| 接受的 replacement audit SHA-256 | `6c64bb71f90fd5a56c2e8f3b004f9214b665e5b361d37a7846091331f3f0974a` |
+| Provenance-ranking candidate | `22455426803a478535fae28a6c8c103b4f8668c7` |
+| Provenance-ranking robust audit SHA-256 | `18d842890676130d3f332cbaeb37c2df48f5f017d56db0ff62f87497e8a78861` |
+| 收紧 classifier 的 equivalence audit SHA-256 | `bf61ac7a005981354ac201fa2262bea0e41063096d1a252af75af596f40ac3b2` |
+| LoCoMo provenance replay audit SHA-256 | `66c748d28c860832a5e28bfef2bf00201973a9aaff058153df219f40b565e898` |
 | Mem0 | source `b05cce58`、runtime `9d027353`、image `81d80e337521` |
 
 Audit 校验精确 build、完整 provider usage、零错误、隔离 store、每个实验臂
