@@ -137,6 +137,67 @@ func TestResolveLongMemEvalAnswerDoesNotCacheFailures(t *testing.T) {
 	}
 }
 
+func TestResolveLongMemEvalAnswerRetriesIncompleteAttempts(t *testing.T) {
+	t.Parallel()
+
+	cache, err := openLongMemEvalAnswerCache("")
+	if err != nil {
+		t.Fatalf("open cache: %v", err)
+	}
+	length := "length"
+	usage := func() *model.Usage {
+		return &model.Usage{
+			PromptTokens: 10, CompletionTokens: 2, TotalTokens: 12,
+		}
+	}
+	base := &queuedAnswerModel{responses: []*model.Response{
+		{
+			Choices: []model.Choice{{
+				Message:      model.NewAssistantMessage("partial one"),
+				FinishReason: &length,
+			}},
+			Usage: usage(),
+		},
+		{
+			Choices: []model.Choice{{
+				Message:      model.NewAssistantMessage("partial two"),
+				FinishReason: &length,
+			}},
+			Usage: usage(),
+		},
+		{
+			Choices: []model.Choice{{
+				Message: model.NewAssistantMessage("complete answer"),
+			}},
+			Usage: usage(),
+		},
+	}}
+	tracker := &lmeTokenTracker{}
+	llm := &lmeTrackingModel{base: base, tracker: tracker}
+	raw, key, source, attempts, total, err :=
+		resolveLongMemEvalAnswerWithRetries(
+			context.Background(), llm, tracker, "answer-model", "glm",
+			&lmeInstance{Question: "Which option?"}, nil, cache, "",
+		)
+	if err != nil {
+		t.Fatalf("resolve retried answer: %v", err)
+	}
+	if raw != "complete answer" || key == "" || source != lmeAnswerSourceModel {
+		t.Fatalf("answer=%q key=%q source=%q", raw, key, source)
+	}
+	if len(attempts) != 2 || attempts[0].Error == "" || attempts[1].Error != "" {
+		t.Fatalf("attempts = %#v", attempts)
+	}
+	if len(attempts[0].ModelCalls) != 2 || len(attempts[1].ModelCalls) != 1 ||
+		len(longMemEvalAnswerAttemptCalls(attempts)) != 3 ||
+		total.LLMCalls != 3 || total.TotalTokens != 36 {
+		t.Fatalf("attempt usage=%#v total=%+v", attempts, total)
+	}
+	if len(base.requests) != 3 || cache.Len() != 1 {
+		t.Fatalf("requests=%d cache entries=%d", len(base.requests), cache.Len())
+	}
+}
+
 func TestReanswerLongMemEvalResultSeedsCompatibleAnswerCache(t *testing.T) {
 	t.Parallel()
 

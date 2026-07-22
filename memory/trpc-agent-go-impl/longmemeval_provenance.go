@@ -32,6 +32,7 @@ const (
 	lmeAnswerPrimaryMaxTokens = 512
 	lmeAnswerRetryMaxTokens   = 1024
 	lmeAnswerMaxAttempts      = 2
+	lmeAnswerMaxExtraAttempts = 2
 	lmeJudgePrimaryMaxTokens  = 1024
 	lmeJudgeRepairMaxTokens   = 2048
 	lmeJudgeMaxExtraAttempts  = 2
@@ -112,6 +113,10 @@ type lmeAnswerGenerationProvenance struct {
 	ThinkingEnabled    bool     `json:"thinking_enabled"`
 }
 
+type lmeAnswerExecutionProvenance struct {
+	MaxExtraAttempts int `json:"max_extra_attempts"`
+}
+
 type lmeJudgeGenerationProvenance struct {
 	PrimaryMaxTokens int     `json:"primary_max_tokens"`
 	RepairMaxTokens  int     `json:"repair_max_tokens"`
@@ -142,6 +147,12 @@ func currentLongMemEvalAnswerGeneration() lmeAnswerGenerationProvenance {
 		Temperature:        0,
 		ReasoningEffort:    "low",
 		ThinkingEnabled:    false,
+	}
+}
+
+func currentLongMemEvalAnswerExecution() lmeAnswerExecutionProvenance {
+	return lmeAnswerExecutionProvenance{
+		MaxExtraAttempts: lmeAnswerMaxExtraAttempts,
 	}
 }
 

@@ -591,7 +591,8 @@ func longMemEvalReplicateSourceDigest(result *runResult, backend string) (string
 	}
 	metadata := make(map[string]any)
 	for key, value := range result.Metadata {
-		if strings.HasPrefix(key, "answer_cache_") || strings.HasPrefix(key, "reanswer_") ||
+		if strings.HasPrefix(key, "answer_cache_") || key == "answer_execution" ||
+			strings.HasPrefix(key, "reanswer_") ||
 			strings.HasPrefix(key, "judge_") || key == "reanswered_at" || key == "judged_at" {
 			continue
 		}
@@ -611,6 +612,8 @@ func longMemEvalReplicateSourceDigest(result *runResult, backend string) (string
 		copyBR.RawAnswer = ""
 		copyBR.AnswerCacheKey = ""
 		copyBR.AnswerSource = ""
+		copyBR.AnswerMaxAttempts = 0
+		copyBR.AnswerAttempts = nil
 		copyBR.AnswerModelCalls = nil
 		memoryUsage, err := longMemEvalReplicateMemoryLayerUsage(br)
 		if err != nil {

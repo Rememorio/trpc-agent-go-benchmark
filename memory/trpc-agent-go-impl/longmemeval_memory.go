@@ -265,6 +265,8 @@ type backendResult struct {
 	RawAnswer             string              `json:"raw_answer,omitempty"`
 	AnswerCacheKey        string              `json:"answer_cache_key,omitempty"`
 	AnswerSource          string              `json:"answer_source,omitempty"`
+	AnswerMaxAttempts     int                 `json:"answer_max_attempts,omitempty"`
+	AnswerAttempts        []lmeAnswerAttempt  `json:"answer_attempts,omitempty"`
 	AnswerModelCalls      []lmeModelCallTrace `json:"answer_model_calls,omitempty"`
 	TokenUsage            *lmeTokenUsage      `json:"token_usage,omitempty"`
 	EmbeddingUsage        *lmeEmbeddingUsage  `json:"embedding_usage,omitempty"`
@@ -282,6 +284,15 @@ type backendResult struct {
 	AnswerDuration        int64               `json:"answer_duration_ms,omitempty"`
 	AnswerError           string              `json:"answer_error,omitempty"`
 	Error                 string              `json:"error,omitempty"`
+}
+
+type lmeAnswerAttempt struct {
+	Raw        string              `json:"raw,omitempty"`
+	Source     string              `json:"source,omitempty"`
+	ModelCalls []lmeModelCallTrace `json:"model_calls,omitempty"`
+	TokenUsage *lmeTokenUsage      `json:"token_usage,omitempty"`
+	DurationMs int64               `json:"duration_ms,omitempty"`
+	Error      string              `json:"error,omitempty"`
 }
 
 type lmeJudgeResult struct {
@@ -1012,6 +1023,7 @@ func runLongMemEvalMemory(ctx context.Context) error {
 			"protocol_sha256":              protocolDigest,
 			"answer_prompt_version":        lmeAnswerPromptVersion,
 			"answer_generation":            currentLongMemEvalAnswerGeneration(),
+			"answer_execution":             currentLongMemEvalAnswerExecution(),
 			"judge_prompt_version":         lmeJudgePromptVersion,
 			"judge_protocol_version":       lmeJudgeProtocolVersion,
 			"judge_generation":             currentLongMemEvalJudgeGeneration(),
@@ -1367,14 +1379,19 @@ afterIngest:
 
 	if *flagLMEAnswer {
 		answerStart := time.Now()
-		rawAnswer, cacheKey, source, err := resolveLongMemEvalAnswer(
-			ctx, llm, modelName, modelVariant, inst, hits, answerCache, "",
-		)
-		br.AnswerModelCalls = tracker.SnapshotCalls()
+		rawAnswer, cacheKey, source, attempts, answerUsage, err :=
+			resolveLongMemEvalAnswerWithRetries(
+				ctx, llm, tracker, modelName, modelVariant, inst, hits,
+				answerCache, "",
+			)
+		br.AnswerMaxAttempts = 1 + lmeAnswerMaxExtraAttempts
+		br.AnswerAttempts = attempts
+		br.AnswerModelCalls = longMemEvalAnswerAttemptCalls(attempts)
 		usage, embeddingUsage, providerUsage := snapshotLongMemEvalUsage(
 			tracker,
 			backend,
 		)
+		usage.Add(answerUsage)
 		br.AnswerDuration = time.Since(answerStart).Milliseconds()
 		br.AnswerUsage = tokenUsagePtr(usage)
 		addLongMemEvalBackendUsage(br, usage, embeddingUsage, providerUsage)
@@ -1746,6 +1763,7 @@ func reanswerLongMemEvalResult(
 	result.Metadata["reanswer_model_variant"] = modelVariant
 	result.Metadata["reanswer_build"] = currentLongMemEvalBuildProvenance()
 	result.Metadata["answer_generation"] = currentLongMemEvalAnswerGeneration()
+	result.Metadata["answer_execution"] = currentLongMemEvalAnswerExecution()
 	result.Metadata["answer_prompt_version"] = lmeAnswerPromptVersion
 	result.Metadata["judge_prompt_version"] = lmeJudgePromptVersion
 	result.Metadata["judge_protocol_version"] = lmeJudgeProtocolVersion
@@ -1753,7 +1771,7 @@ func reanswerLongMemEvalResult(
 	result.Metadata["reanswered_at"] = time.Now().UTC().Format(time.RFC3339)
 	result.Metadata["reanswer_reuse_source_answers"] = reuseSourceAnswers
 	result.Metadata["answer_scoring"] = "raw model output; no retrieval-assisted answer post-processing"
-	result.Metadata["reanswer_note"] = "Answers regenerated from saved ranked retrieval hits; backend-specific similarity scores are not shown to the answer model. Responses ending with a length finish reason are retried once with the recorded larger token limit."
+	result.Metadata["reanswer_note"] = "Answers regenerated from saved ranked retrieval hits; backend-specific similarity scores are not shown to the answer model. Responses ending with a length finish reason are retried once with the recorded larger token limit, and incomplete answers receive bounded execution retries."
 	initializeLongMemEvalAnswerCacheMetadata(result.Metadata, answerCache)
 	clearLongMemEvalJudgeRunMetadata(result.Metadata)
 	for _, cr := range result.Cases {
@@ -1800,12 +1818,14 @@ func reanswerLongMemEvalResult(
 			if answerCache != nil && reuseExistingAnswers && br.AnswerError == "" {
 				existingAnswer = br.RawAnswer
 			}
-			raw, cacheKey, source, answerErr := resolveLongMemEvalAnswer(
-				ctx, llm, modelName, modelVariant, inst, br.Retrieval,
-				answerCache, existingAnswer,
-			)
-			br.AnswerModelCalls = tracker.SnapshotCalls()
-			usage := tracker.Snapshot()
+			raw, cacheKey, source, attempts, usage, answerErr :=
+				resolveLongMemEvalAnswerWithRetries(
+					ctx, llm, tracker, modelName, modelVariant, inst,
+					br.Retrieval, answerCache, existingAnswer,
+				)
+			br.AnswerMaxAttempts = 1 + lmeAnswerMaxExtraAttempts
+			br.AnswerAttempts = attempts
+			br.AnswerModelCalls = longMemEvalAnswerAttemptCalls(attempts)
 			replaceLongMemEvalAnswerUsage(br, usage)
 			br.AnswerDuration = time.Since(start).Milliseconds()
 			br.RawAnswer = raw

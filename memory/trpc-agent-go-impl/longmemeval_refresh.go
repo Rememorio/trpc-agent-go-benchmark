@@ -271,9 +271,11 @@ func refreshLongMemEvalRetrievalResult(
 	}
 	if answerEnabled {
 		result.Metadata["answer_generation"] = currentLongMemEvalAnswerGeneration()
+		result.Metadata["answer_execution"] = currentLongMemEvalAnswerExecution()
 		result.Metadata["answer_scoring"] = "raw model output; no retrieval-assisted answer post-processing"
 	} else {
 		delete(result.Metadata, "answer_generation")
+		delete(result.Metadata, "answer_execution")
 		result.Metadata["answer_scoring"] = "disabled for retrieval-only refresh"
 	}
 	result.Metadata["answer_prompt_version"] = lmeAnswerPromptVersion
@@ -354,12 +356,15 @@ func refreshLongMemEvalRetrievalResult(
 				base: baseLLM, tracker: tracker, timeout: *flagLMEModelCallTimeout,
 			}
 			answerStart := time.Now()
-			raw, cacheKey, source, answerErr := resolveLongMemEvalAnswer(
-				ctx, llm, modelName, modelVariant, inst, hits, answerCache, "",
-			)
+			raw, cacheKey, source, attempts, usage, answerErr :=
+				resolveLongMemEvalAnswerWithRetries(
+					ctx, llm, tracker, modelName, modelVariant, inst, hits,
+					answerCache, "",
+				)
 			br.AnswerDuration = time.Since(answerStart).Milliseconds()
-			br.AnswerModelCalls = tracker.SnapshotCalls()
-			usage := tracker.Snapshot()
+			br.AnswerMaxAttempts = 1 + lmeAnswerMaxExtraAttempts
+			br.AnswerAttempts = attempts
+			br.AnswerModelCalls = longMemEvalAnswerAttemptCalls(attempts)
 			replaceLongMemEvalAnswerUsage(br, usage)
 			br.RawAnswer = raw
 			br.Answer = strings.TrimSpace(raw)
@@ -427,6 +432,8 @@ func clearLongMemEvalRefreshAnswer(br *backendResult) {
 	br.RawAnswer = ""
 	br.AnswerCacheKey = ""
 	br.AnswerSource = ""
+	br.AnswerMaxAttempts = 0
+	br.AnswerAttempts = nil
 	br.AnswerModelCalls = nil
 	br.AnswerDuration = 0
 	br.ExactMatch = false

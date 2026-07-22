@@ -227,6 +227,70 @@ func resolveLongMemEvalAnswer(
 	return answer, key, lmeAnswerSourceModel, answerErr
 }
 
+func resolveLongMemEvalAnswerWithRetries(
+	ctx context.Context,
+	llm model.Model,
+	tracker *lmeTokenTracker,
+	modelName string,
+	modelVariant string,
+	inst *lmeInstance,
+	hits []memoryHit,
+	cache *longMemEvalAnswerCache,
+	existingAnswer string,
+) (
+	string,
+	string,
+	string,
+	[]lmeAnswerAttempt,
+	lmeTokenUsage,
+	error,
+) {
+	maxAttempts := 1 + lmeAnswerMaxExtraAttempts
+	attempts := make([]lmeAnswerAttempt, 0, maxAttempts)
+	allUsage := lmeTokenUsage{}
+	var raw, key, source string
+	var lastErr error
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		started := time.Now()
+		raw, key, source, lastErr = resolveLongMemEvalAnswer(
+			ctx, llm, modelName, modelVariant, inst, hits, cache,
+			existingAnswer,
+		)
+		calls := tracker.SnapshotCalls()
+		usage := tracker.Snapshot()
+		allUsage.Add(usage)
+		entry := lmeAnswerAttempt{
+			Raw:        raw,
+			Source:     source,
+			ModelCalls: calls,
+			TokenUsage: tokenUsagePtr(usage),
+			DurationMs: time.Since(started).Milliseconds(),
+		}
+		if lastErr != nil {
+			entry.Error = lastErr.Error()
+		}
+		attempts = append(attempts, entry)
+		if lastErr == nil {
+			return raw, key, source, attempts, allUsage, nil
+		}
+		if ctx.Err() != nil {
+			return raw, key, source, attempts, allUsage, ctx.Err()
+		}
+		existingAnswer = ""
+	}
+	return raw, key, source, attempts, allUsage, lastErr
+}
+
+func longMemEvalAnswerAttemptCalls(
+	attempts []lmeAnswerAttempt,
+) []lmeModelCallTrace {
+	var calls []lmeModelCallTrace
+	for _, attempt := range attempts {
+		calls = append(calls, attempt.ModelCalls...)
+	}
+	return calls
+}
+
 func longMemEvalAnswerCacheKey(
 	inst *lmeInstance,
 	hits []memoryHit,

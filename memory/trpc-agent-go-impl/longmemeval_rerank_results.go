@@ -118,6 +118,7 @@ func rerankLongMemEvalResult(
 	result.Metadata["reanswered_at"] = rerankedAt
 	result.Metadata["reanswer_note"] = "Answers regenerated from the reranked saved hits using the recorded rerank model and answer protocol."
 	result.Metadata["answer_generation"] = currentLongMemEvalAnswerGeneration()
+	result.Metadata["answer_execution"] = currentLongMemEvalAnswerExecution()
 	result.Metadata["answer_prompt_version"] = lmeAnswerPromptVersion
 	result.Metadata["judge_prompt_version"] = lmeJudgePromptVersion
 	result.Metadata["judge_protocol_version"] = lmeJudgeProtocolVersion
@@ -196,13 +197,16 @@ func rerankLongMemEvalResult(
 				base: baseLLM, tracker: answerTracker, timeout: *flagLMEModelCallTimeout,
 			}
 			answerStart := time.Now()
-			rawAnswer, cacheKey, source, answerErr := resolveLongMemEvalAnswer(
-				ctx, answerLLM, modelName, modelVariant, inst, br.Retrieval,
-				answerCache, "",
-			)
+			rawAnswer, cacheKey, source, attempts, answerUsage, answerErr :=
+				resolveLongMemEvalAnswerWithRetries(
+					ctx, answerLLM, answerTracker, modelName, modelVariant,
+					inst, br.Retrieval, answerCache, "",
+				)
 			br.AnswerDuration = time.Since(answerStart).Milliseconds()
-			br.AnswerModelCalls = answerTracker.SnapshotCalls()
-			replaceLongMemEvalAnswerUsage(br, answerTracker.Snapshot())
+			br.AnswerMaxAttempts = 1 + lmeAnswerMaxExtraAttempts
+			br.AnswerAttempts = attempts
+			br.AnswerModelCalls = longMemEvalAnswerAttemptCalls(attempts)
+			replaceLongMemEvalAnswerUsage(br, answerUsage)
 			br.RawAnswer = rawAnswer
 			br.Answer = strings.TrimSpace(rawAnswer)
 			br.AnswerCacheKey = cacheKey
