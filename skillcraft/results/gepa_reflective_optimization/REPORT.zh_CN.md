@@ -286,12 +286,16 @@ World Bank 的 loss。
 
 Benchmark 不需要 Python GEPA bridge，也不需要公开 optimizer 内部结构。Adapter 只
 提供公开 task cases、`Evaluator`、`Dataset`、`Request`、reflection model 和 options，
-然后调用 `New` 与 `Optimize`。Candidate graph、Pareto bookkeeping、mutation 解析、
-实验存储和晋升机制都保持在包内部。
+然后调用 `NewGEPA`，并使用返回的单方法 `Optimizer` 接口。具体 GEPA 类型、candidate
+graph、Pareto bookkeeping 和 mutation 解析都保持私有；统一的内部生命周期负责 seed
+与 holdout 评估、预算、实验记录、晋升及可选 revision submission，因此后续内置搜索
+算法无需复制这些控制逻辑。
 
 主库 API 具备评审条件，原因是：
 
 - optimization 是 opt-in 离线流程，不会直接修改 live skill；
+- 算法由类型明确的 constructor 选择，而不是字符串 registry；每份结果也会记录实际
+  使用的实现；
 - evaluator 由应用提供，各业务可以保留原生质量和成本目标；
 - validation 与 holdout 是显式 dataset contract；
 - metric calls、iterations、time 和 reflection batch size 都有界；
@@ -300,8 +304,8 @@ Benchmark 不需要 Python GEPA bridge，也不需要公开 optimizer 内部结�
 - search 可以 abstain，promotion policy 仍由应用拥有；
 - 即使调用方正确拒绝 candidate，框架仍返回可分析的完整 evidence。
 
-本次实验也验证了预期的扩展边界：框架保持不变，benchmark 在外部表达 SkillCraft 专属
-评测、token 计费、frozen holdout policy 和部署门禁。
+本次实验也验证了预期的扩展边界：optimizer contract 不依赖 GEPA 内部结构，benchmark
+则在外部表达 SkillCraft 专属评测、token 计费、frozen holdout policy 和部署门禁。
 
 ## 8. 结论与下一步
 

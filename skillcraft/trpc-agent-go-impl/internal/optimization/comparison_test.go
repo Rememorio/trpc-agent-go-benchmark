@@ -82,7 +82,7 @@ func TestRunFixedComparison(t *testing.T) {
 		Seed:      seed,
 		Candidate: candidate,
 		Dataset:   dataset,
-	}, func(model.Model, framework.Evaluator, ...framework.Option) (runner, error) {
+	}, func(model.Model, framework.Evaluator, ...framework.Option) (framework.Optimizer, error) {
 		t.Fatal("reflective optimizer must not be constructed for fixed comparison")
 		return nil, nil
 	})

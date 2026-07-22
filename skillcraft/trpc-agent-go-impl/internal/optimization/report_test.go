@@ -28,6 +28,7 @@ func TestAppendReport(t *testing.T) {
 		RandomSeed:       17,
 		SelectedChanged:  true,
 		Search: &framework.Result{
+			Algorithm:           "gepa",
 			CandidateCount:      2,
 			MetricCalls:         8,
 			StopReason:          "max_iterations",
@@ -50,6 +51,7 @@ func TestAppendReport(t *testing.T) {
 	var report strings.Builder
 	AppendReport(&report, run)
 	require.Contains(t, report.String(), "eligible for promotion")
+	require.Contains(t, report.String(), "- Optimizer: `gepa`")
 	require.Contains(t, report.String(), "- Random seed: `17`")
 	require.Contains(t, report.String(), "- Critical holdout scales: `e3`")
 	require.Contains(t, report.String(), "- Evaluation temperature: `0.00`")

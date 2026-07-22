@@ -18,15 +18,11 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
-type runner interface {
-	Optimize(context.Context, framework.Request) (*framework.Result, error)
-}
-
 type runnerFactory func(
 	model.Model,
 	framework.Evaluator,
 	...framework.Option,
-) (runner, error)
+) (framework.Optimizer, error)
 
 // Request contains the dependencies and inputs for one reflective search.
 type Request struct {
@@ -59,8 +55,8 @@ func newRunner(
 	reflectionModel model.Model,
 	evaluator framework.Evaluator,
 	opts ...framework.Option,
-) (runner, error) {
-	return framework.New(reflectionModel, evaluator, opts...)
+) (framework.Optimizer, error) {
+	return framework.NewGEPA(reflectionModel, evaluator, opts...)
 }
 
 func run(

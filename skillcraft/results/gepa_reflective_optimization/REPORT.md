@@ -340,13 +340,18 @@ invalidated the frozen protocol.
 
 The benchmark did not require a Python bridge to GEPA or public exposure of
 optimizer internals. Its adapter supplies the public task cases, `Evaluator`,
-`Dataset`, `Request`, reflection model, and options, then calls `New` and
-`Optimize`. Candidate graphs, Pareto bookkeeping, mutation parsing, experiment
-storage, and promotion mechanics remain internal.
+`Dataset`, `Request`, reflection model, and options, then calls `NewGEPA` and
+uses the returned one-method `Optimizer` interface. The concrete GEPA type,
+candidate graphs, Pareto bookkeeping, and mutation parsing remain private. A
+shared internal lifecycle owns seed and holdout evaluation, budgets, experiment
+records, promotion, and optional revision submission, so another built-in
+search does not need to duplicate those controls.
 
 The public design is suitable for review because:
 
 - optimization is opt-in and offline; it does not mutate the live skill path;
+- the algorithm is selected by a typed constructor rather than a string
+  registry, and each result records which implementation produced it;
 - the evaluator is application-owned, so domains retain their native quality
   and cost objectives;
 - validation and holdout are explicit dataset contracts;
@@ -358,9 +363,10 @@ The public design is suitable for review because:
 - the framework returns evidence even when the caller correctly rejects the
   candidate.
 
-The result also exercises the intended extensibility boundary: the framework
-stayed unchanged while the benchmark expressed SkillCraft-specific evaluation,
-token accounting, frozen holdout policy, and deployment gates externally.
+The result also exercises the intended extensibility boundary: the optimizer
+contract stays independent of GEPA internals while the benchmark expresses
+SkillCraft-specific evaluation, token accounting, frozen holdout policy, and
+deployment gates externally.
 
 ## 8. Conclusions and Next Step
 

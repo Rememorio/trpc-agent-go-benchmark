@@ -60,6 +60,9 @@ func AppendReport(b *strings.Builder, run *Result) {
 	fmt.Fprintf(b, "- Selected skill differs from seed: `%t`\n", run.SelectedChanged)
 
 	b.WriteString("\n### Experiment\n\n")
+	if result.Algorithm != "" {
+		fmt.Fprintf(b, "- Optimizer: `%s`\n", result.Algorithm)
+	}
 	fmt.Fprintf(b, "- Started: `%s`\n", run.StartedAt.Format(time.RFC3339))
 	fmt.Fprintf(b, "- Finished: `%s`\n", run.FinishedAt.Format(time.RFC3339))
 	fmt.Fprintf(b, "- Seed spec: `%s`\n", run.SeedSpec)

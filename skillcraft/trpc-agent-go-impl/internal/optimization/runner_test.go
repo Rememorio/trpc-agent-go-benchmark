@@ -43,7 +43,7 @@ func TestRun(t *testing.T) {
 		_ model.Model,
 		_ framework.Evaluator,
 		opts ...framework.Option,
-	) (runner, error) {
+	) (framework.Optimizer, error) {
 		require.NotEmpty(t, opts)
 		return fake, nil
 	}
@@ -69,7 +69,7 @@ func TestRun(t *testing.T) {
 	factoryErr := errors.New("factory failed")
 	_, err = run(
 		context.Background(), request,
-		func(model.Model, framework.Evaluator, ...framework.Option) (runner, error) {
+		func(model.Model, framework.Evaluator, ...framework.Option) (framework.Optimizer, error) {
 			return nil, factoryErr
 		},
 	)
