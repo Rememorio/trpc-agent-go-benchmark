@@ -122,6 +122,107 @@ func TestLongMemEvalAnswerCachePersists(t *testing.T) {
 	}
 }
 
+func TestLongMemEvalAnswerCacheSeparatesProviderAndLogicalUsage(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "answer-cache.json")
+	cache, err := openLongMemEvalAnswerCache(path)
+	if err != nil {
+		t.Fatalf("open cache: %v", err)
+	}
+	inst := &lmeInstance{Question: "Which option?"}
+	hits := []memoryHit{{Memory: "Option B was selected."}}
+	usage := &model.Usage{
+		PromptTokens: 10, CompletionTokens: 2, TotalTokens: 12,
+	}
+	firstBase := &queuedJudgeModel{
+		responses: []string{"Option B"},
+		usage:     usage,
+	}
+	firstTracker := &lmeTokenTracker{}
+	firstLLM := &lmeTrackingModel{
+		base: firstBase, tracker: firstTracker,
+	}
+	first, key, source, attempts, providerUsage, err :=
+		resolveLongMemEvalAnswerWithRetries(
+			context.Background(), firstLLM, firstTracker,
+			"answer-model", "glm", inst, hits, cache, "",
+		)
+	if err != nil {
+		t.Fatalf("resolve first answer: %v", err)
+	}
+	if first != "Option B" || key == "" ||
+		source != lmeAnswerSourceModel || firstBase.calls != 1 {
+		t.Fatalf(
+			"first answer=%q key=%q source=%q calls=%d",
+			first, key, source, firstBase.calls,
+		)
+	}
+	if len(attempts) != 1 || attempts[0].TokenUsage == nil ||
+		attempts[0].TokenUsage.TotalTokens != 12 ||
+		attempts[0].LogicalTokenUsage == nil ||
+		attempts[0].LogicalTokenUsage.TotalTokens != 12 ||
+		!attempts[0].LogicalUsageComplete ||
+		providerUsage.TotalTokens != 12 {
+		t.Fatalf(
+			"first attempts=%#v provider=%+v",
+			attempts, providerUsage,
+		)
+	}
+
+	loaded, err := openLongMemEvalAnswerCache(path)
+	if err != nil {
+		t.Fatalf("reload cache: %v", err)
+	}
+	secondBase := &queuedJudgeModel{responses: []string{"Option A"}, usage: usage}
+	secondTracker := &lmeTokenTracker{}
+	secondLLM := &lmeTrackingModel{
+		base: secondBase, tracker: secondTracker,
+	}
+	second, secondKey, source, attempts, providerUsage, err :=
+		resolveLongMemEvalAnswerWithRetries(
+			context.Background(), secondLLM, secondTracker,
+			"answer-model", "glm", inst, hits, loaded, "",
+		)
+	if err != nil {
+		t.Fatalf("resolve cached answer: %v", err)
+	}
+	if second != first || secondKey != key ||
+		source != lmeAnswerSourcePersistent || secondBase.calls != 0 {
+		t.Fatalf(
+			"cached answer=%q key=%q source=%q calls=%d",
+			second, secondKey, source, secondBase.calls,
+		)
+	}
+	if !providerUsage.IsZero() || len(attempts) != 1 ||
+		attempts[0].TokenUsage != nil ||
+		attempts[0].LogicalTokenUsage == nil ||
+		attempts[0].LogicalTokenUsage.TotalTokens != 12 ||
+		!attempts[0].LogicalUsageComplete ||
+		len(attempts[0].ModelCalls) != 1 ||
+		attempts[0].ModelCalls[0].Source != lmeAnswerSourcePersistent {
+		t.Fatalf(
+			"cached attempts=%#v provider=%+v",
+			attempts, providerUsage,
+		)
+	}
+	if loaded.logicalUsageHits != 1 ||
+		loaded.logicalUsageMissingHits != 0 {
+		t.Fatalf(
+			"logical cache counters: hits=%d missing=%d",
+			loaded.logicalUsageHits, loaded.logicalUsageMissingHits,
+		)
+	}
+	entry := loaded.file.Entries[key]
+	tamperedUsage := *entry.LogicalTokenUsage
+	tamperedUsage.TotalTokens++
+	entry.LogicalTokenUsage = &tamperedUsage
+	if err := validateLongMemEvalAnswerCacheEntry(key, entry); err == nil ||
+		!strings.Contains(err.Error(), "does not match model calls") {
+		t.Fatalf("tampered logical usage error = %v", err)
+	}
+}
+
 func TestResolveLongMemEvalAnswerDoesNotCacheFailures(t *testing.T) {
 	t.Parallel()
 
@@ -513,6 +614,14 @@ func TestOpenLongMemEvalAnswerCacheRejectsInvalidFiles(t *testing.T) {
 		wantError string
 	}{
 		{name: "invalid json", value: []byte("{"), wantError: "parse LongMemEval answer cache"},
+		{
+			name: "legacy version",
+			value: lmeAnswerCacheFile{
+				Version: "lme-answer-cache-v1", LedgerID: "ledger",
+				Entries: map[string]lmeAnswerCacheEntry{},
+			},
+			wantError: "unsupported LongMemEval answer cache version",
+		},
 		{
 			name: "unsupported version",
 			value: lmeAnswerCacheFile{

@@ -100,6 +100,22 @@ func tokenUsagePtr(u lmeTokenUsage) *lmeTokenUsage {
 	return &u
 }
 
+func longMemEvalLogicalUsageFromCalls(
+	calls []lmeModelCallTrace,
+) (lmeTokenUsage, bool) {
+	if len(calls) == 0 {
+		return lmeTokenUsage{}, false
+	}
+	var usage lmeTokenUsage
+	for _, call := range calls {
+		if call.LogicalTokenUsage == nil {
+			return lmeTokenUsage{}, false
+		}
+		usage.Add(*call.LogicalTokenUsage)
+	}
+	return usage, true
+}
+
 type lmeEmbeddingUsage struct {
 	PromptTokens      int `json:"prompt_tokens"`
 	TotalTokens       int `json:"total_tokens"`

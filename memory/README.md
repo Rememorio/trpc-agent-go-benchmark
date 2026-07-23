@@ -563,16 +563,18 @@ The candidate passes only when both majority and replicate totals strictly beat
 both baselines, category deficits stay bounded, all usage is reported, and the
 pre-registered cost ratios hold. Embedding cost is gated on logical requests,
 which are independent of shared response-ledger execution order; provider calls
-and tokens remain visible as realized cache-sensitive cost. The JSON, TSV, and
-Markdown outputs retain input hashes and gate details for audit.
+and tokens remain visible as realized cache-sensitive cost. Formal replicate
+aggregation also rejects incomplete answer or judge logical usage. The JSON,
+TSV, and Markdown outputs retain input hashes and gate details for audit.
 
 `-lme-answer-cache` supplies a shared, content-addressed answer ledger. Its key
 covers the exact ordered memories and metadata shown to the answer model, the
 question prompt, model, variant, generation settings, and protocol versions;
 storage IDs and similarity scores that the model cannot see do not affect the
-key. Cache hits record their source and key and contribute zero answer-model
-calls or tokens. Re-answering a result may seed the ledger from an existing
-successful answer only when the recorded model, variant, prompt version, and
+key. Cache hits record their source and key, contribute zero provider calls or
+tokens, and replay the cached model-call traces and logical token usage.
+Re-answering a result may seed the ledger from an existing successful answer
+only when the recorded model, variant, prompt version, and
 generation settings all match. A strict comparison rejects runs that record
 different answer ledgers or do not both use a persistent shared ledger.
 Set `-lme-reanswer-reuse-source-answers=false` with a new empty cache when an
@@ -659,8 +661,11 @@ back to that backend's original hits while retaining the failure trace. It
 preserves ingestion and embedding usage and replaces prior answer and rerank
 usage.
 
-Token counters cover model and embedding calls made by this process, including
-pgvector extraction, retrieval, and answer generation. A self-hosted mem0 can
+Provider token counters cover model and embedding calls made by this process,
+including pgvector extraction, retrieval, and answer generation. Answer and
+judge summaries additionally report logical token counters, which retain the
+original prompt, completion, prompt-cache, and reasoning usage when a
+content-addressed cache avoids a repeated provider call. A self-hosted mem0 can
 return internal LLM, cached-token, and embedding usage in `X-Mem0-Usage`;
 `provider_usage_reported` and the analysis coverage column show whether that
 usage was included. Stock mem0 servers do not return it, so their missing

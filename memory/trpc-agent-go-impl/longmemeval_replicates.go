@@ -268,6 +268,11 @@ func loadLongMemEvalReplicateComparison(
 		if err := validateLongMemEvalReplicateJudges(spec.Name, manifest.Gate.JudgeRuns, baseline, candidate); err != nil {
 			return manifest, manifestDigest, nil, err
 		}
+		if err := validateLongMemEvalReplicateLogicalUsage(
+			spec.Name, baseline, candidate,
+		); err != nil {
+			return manifest, manifestDigest, nil, err
+		}
 		answerLedger, ok := lmeMetadataString(baseline.Metadata, "answer_cache_ledger_id")
 		if !ok || strings.TrimSpace(answerLedger) == "" {
 			return manifest, manifestDigest, nil, fmt.Errorf("replicate %q is missing answer_cache_ledger_id", spec.Name)
@@ -424,6 +429,71 @@ func validateLongMemEvalReplicateJudges(
 				if _, ok := longMemEvalJudgeCorrect(br); !ok {
 					return fmt.Errorf("replicate %q case %q backend %q has an invalid judge consensus",
 						replicate, cr.QuestionID, backend)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func validateLongMemEvalReplicateLogicalUsage(
+	replicate string,
+	results ...*runResult,
+) error {
+	for _, result := range results {
+		for _, key := range []string{
+			"answer_cache_logical_usage_missing_hits",
+			"judge_cache_logical_usage_missing_hits",
+		} {
+			missing, ok := longMemEvalMetadataInt(result.Metadata[key])
+			if !ok || missing != 0 {
+				return fmt.Errorf(
+					"replicate %q metadata %q must be integer zero",
+					replicate, key,
+				)
+			}
+		}
+		for _, cr := range result.Cases {
+			if cr == nil {
+				continue
+			}
+			for backend, br := range cr.BackendResults {
+				if br == nil {
+					continue
+				}
+				answerUsage, answerComplete :=
+					longMemEvalAnswerAttemptLogicalUsage(
+						br.AnswerAttempts,
+					)
+				if !answerComplete ||
+					br.AnswerLogicalUsage == nil ||
+					*br.AnswerLogicalUsage != answerUsage {
+					return fmt.Errorf(
+						"replicate %q case %q backend %q has "+
+							"incomplete answer logical usage",
+						replicate, cr.QuestionID, backend,
+					)
+				}
+				judgeUsage, judgeComplete, err :=
+					validateLongMemEvalJudgeAttemptUsage(
+						br.Judge.Attempts,
+					)
+				if err != nil {
+					return fmt.Errorf(
+						"replicate %q case %q backend %q "+
+							"judge logical usage: %w",
+						replicate, cr.QuestionID, backend, err,
+					)
+				}
+				if !judgeComplete ||
+					!br.Judge.LogicalUsageComplete ||
+					br.Judge.LogicalTokenUsage == nil ||
+					*br.Judge.LogicalTokenUsage != judgeUsage {
+					return fmt.Errorf(
+						"replicate %q case %q backend %q has "+
+							"incomplete judge logical usage",
+						replicate, cr.QuestionID, backend,
+					)
 				}
 			}
 		}
@@ -651,6 +721,7 @@ func longMemEvalReplicateSourceDigest(result *runResult, backend string) (string
 		}
 		copyBR.TokenUsage = tokenUsagePtr(memoryUsage)
 		copyBR.AnswerUsage = nil
+		copyBR.AnswerLogicalUsage = nil
 		copyBR.FailureStage = ""
 		copyBR.Judge = nil
 		copyBR.ExactMatch = false

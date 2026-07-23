@@ -281,6 +281,7 @@ type backendResult struct {
 	TokenUsage            *lmeTokenUsage      `json:"token_usage,omitempty"`
 	EmbeddingUsage        *lmeEmbeddingUsage  `json:"embedding_usage,omitempty"`
 	AnswerUsage           *lmeTokenUsage      `json:"answer_token_usage,omitempty"`
+	AnswerLogicalUsage    *lmeTokenUsage      `json:"answer_logical_token_usage,omitempty"`
 	ProviderUsageReported bool                `json:"provider_usage_reported,omitempty"`
 	ProviderUsageError    string              `json:"provider_usage_error,omitempty"`
 	Evidence              *evidenceMetrics    `json:"evidence,omitempty"`
@@ -297,36 +298,42 @@ type backendResult struct {
 }
 
 type lmeAnswerAttempt struct {
-	Raw        string              `json:"raw,omitempty"`
-	Source     string              `json:"source,omitempty"`
-	ModelCalls []lmeModelCallTrace `json:"model_calls,omitempty"`
-	TokenUsage *lmeTokenUsage      `json:"token_usage,omitempty"`
-	DurationMs int64               `json:"duration_ms,omitempty"`
-	Error      string              `json:"error,omitempty"`
+	Raw                  string              `json:"raw,omitempty"`
+	Source               string              `json:"source,omitempty"`
+	ModelCalls           []lmeModelCallTrace `json:"model_calls,omitempty"`
+	TokenUsage           *lmeTokenUsage      `json:"token_usage,omitempty"`
+	LogicalTokenUsage    *lmeTokenUsage      `json:"logical_token_usage,omitempty"`
+	LogicalUsageComplete bool                `json:"logical_usage_complete,omitempty"`
+	DurationMs           int64               `json:"duration_ms,omitempty"`
+	Error                string              `json:"error,omitempty"`
 }
 
 type lmeJudgeResult struct {
-	Model         string            `json:"model"`
-	Correct       bool              `json:"correct"`
-	Raw           string            `json:"raw"`
-	CacheKey      string            `json:"cache_key,omitempty"`
-	VerdictSource string            `json:"verdict_source,omitempty"`
-	RequestedRuns int               `json:"requested_runs,omitempty"`
-	ValidRuns     int               `json:"valid_runs,omitempty"`
-	MaxAttempts   int               `json:"max_attempts,omitempty"`
-	Attempts      []lmeJudgeAttempt `json:"attempts,omitempty"`
-	TokenUsage    *lmeTokenUsage    `json:"token_usage,omitempty"`
-	DurationMs    int64             `json:"duration_ms,omitempty"`
-	Error         string            `json:"error,omitempty"`
+	Model                string            `json:"model"`
+	Correct              bool              `json:"correct"`
+	Raw                  string            `json:"raw"`
+	CacheKey             string            `json:"cache_key,omitempty"`
+	VerdictSource        string            `json:"verdict_source,omitempty"`
+	RequestedRuns        int               `json:"requested_runs,omitempty"`
+	ValidRuns            int               `json:"valid_runs,omitempty"`
+	MaxAttempts          int               `json:"max_attempts,omitempty"`
+	Attempts             []lmeJudgeAttempt `json:"attempts,omitempty"`
+	TokenUsage           *lmeTokenUsage    `json:"token_usage,omitempty"`
+	LogicalTokenUsage    *lmeTokenUsage    `json:"logical_token_usage,omitempty"`
+	LogicalUsageComplete bool              `json:"logical_usage_complete,omitempty"`
+	DurationMs           int64             `json:"duration_ms,omitempty"`
+	Error                string            `json:"error,omitempty"`
 }
 
 type lmeJudgeAttempt struct {
-	Correct    bool                `json:"correct"`
-	Raw        string              `json:"raw"`
-	ModelCalls []lmeModelCallTrace `json:"model_calls,omitempty"`
-	TokenUsage *lmeTokenUsage      `json:"token_usage,omitempty"`
-	DurationMs int64               `json:"duration_ms,omitempty"`
-	Error      string              `json:"error,omitempty"`
+	Correct              bool                `json:"correct"`
+	Raw                  string              `json:"raw"`
+	ModelCalls           []lmeModelCallTrace `json:"model_calls,omitempty"`
+	TokenUsage           *lmeTokenUsage      `json:"token_usage,omitempty"`
+	LogicalTokenUsage    *lmeTokenUsage      `json:"logical_token_usage,omitempty"`
+	LogicalUsageComplete bool                `json:"logical_usage_complete,omitempty"`
+	DurationMs           int64               `json:"duration_ms,omitempty"`
+	Error                string              `json:"error,omitempty"`
 }
 
 type caseResult struct {
@@ -347,35 +354,49 @@ type runResult struct {
 }
 
 type runSummary struct {
-	TotalCases       int                        `json:"total_cases"`
-	BackendSummaries map[string]*backendSummary `json:"backend_summaries"`
-	TokenUsage       lmeTokenUsage              `json:"token_usage"`
-	EmbeddingUsage   lmeEmbeddingUsage          `json:"embedding_usage"`
-	JudgeTokenUsage  lmeTokenUsage              `json:"judge_token_usage,omitempty"`
+	TotalCases                     int                        `json:"total_cases"`
+	BackendSummaries               map[string]*backendSummary `json:"backend_summaries"`
+	TokenUsage                     lmeTokenUsage              `json:"token_usage"`
+	EmbeddingUsage                 lmeEmbeddingUsage          `json:"embedding_usage"`
+	AnswerTokenUsage               lmeTokenUsage              `json:"answer_token_usage,omitempty"`
+	AnswerLogicalTokenUsage        lmeTokenUsage              `json:"answer_logical_token_usage,omitempty"`
+	AnswerLogicalUsageCases        int                        `json:"answer_logical_usage_cases,omitempty"`
+	AnswerLogicalUsageMissingCases int                        `json:"answer_logical_usage_missing_cases,omitempty"`
+	JudgeTokenUsage                lmeTokenUsage              `json:"judge_token_usage,omitempty"`
+	JudgeLogicalTokenUsage         lmeTokenUsage              `json:"judge_logical_token_usage,omitempty"`
+	JudgeLogicalUsageCases         int                        `json:"judge_logical_usage_cases,omitempty"`
+	JudgeLogicalUsageMissingCases  int                        `json:"judge_logical_usage_missing_cases,omitempty"`
 }
 
 type backendSummary struct {
-	Cases              int               `json:"cases"`
-	ExactMatches       int               `json:"exact_matches"`
-	JudgedCases        int               `json:"judged_cases,omitempty"`
-	JudgeCorrect       int               `json:"judge_correct,omitempty"`
-	TotalPairs         int               `json:"total_pairs"`
-	TotalMemories      int               `json:"total_memories"`
-	TruncatedSnapshots int               `json:"truncated_snapshots,omitempty"`
-	TotalHits          int               `json:"total_hits"`
-	EvidenceCases      int               `json:"evidence_cases"`
-	ExtractRecallAny   int               `json:"extract_recall_any"`
-	RetrievalRecallAny int               `json:"retrieval_recall_any"`
-	RetrievalRecallAll int               `json:"retrieval_recall_all"`
-	TurnEvidenceCases  int               `json:"turn_evidence_cases"`
-	ExtractTurnAny     int               `json:"extract_turn_recall_any"`
-	RetrievalTurnAny   int               `json:"retrieval_turn_recall_any"`
-	AvgF1              float64           `json:"avg_f1"`
-	AvgBLEU            float64           `json:"avg_bleu"`
-	TokenUsage         lmeTokenUsage     `json:"token_usage"`
-	EmbeddingUsage     lmeEmbeddingUsage `json:"embedding_usage"`
-	ProviderUsageCases int               `json:"provider_usage_cases"`
-	JudgeTokenUsage    lmeTokenUsage     `json:"judge_token_usage,omitempty"`
+	Cases                          int               `json:"cases"`
+	ExactMatches                   int               `json:"exact_matches"`
+	JudgedCases                    int               `json:"judged_cases,omitempty"`
+	JudgeCorrect                   int               `json:"judge_correct,omitempty"`
+	TotalPairs                     int               `json:"total_pairs"`
+	TotalMemories                  int               `json:"total_memories"`
+	TruncatedSnapshots             int               `json:"truncated_snapshots,omitempty"`
+	TotalHits                      int               `json:"total_hits"`
+	EvidenceCases                  int               `json:"evidence_cases"`
+	ExtractRecallAny               int               `json:"extract_recall_any"`
+	RetrievalRecallAny             int               `json:"retrieval_recall_any"`
+	RetrievalRecallAll             int               `json:"retrieval_recall_all"`
+	TurnEvidenceCases              int               `json:"turn_evidence_cases"`
+	ExtractTurnAny                 int               `json:"extract_turn_recall_any"`
+	RetrievalTurnAny               int               `json:"retrieval_turn_recall_any"`
+	AvgF1                          float64           `json:"avg_f1"`
+	AvgBLEU                        float64           `json:"avg_bleu"`
+	TokenUsage                     lmeTokenUsage     `json:"token_usage"`
+	EmbeddingUsage                 lmeEmbeddingUsage `json:"embedding_usage"`
+	ProviderUsageCases             int               `json:"provider_usage_cases"`
+	AnswerTokenUsage               lmeTokenUsage     `json:"answer_token_usage,omitempty"`
+	AnswerLogicalTokenUsage        lmeTokenUsage     `json:"answer_logical_token_usage,omitempty"`
+	AnswerLogicalUsageCases        int               `json:"answer_logical_usage_cases,omitempty"`
+	AnswerLogicalUsageMissingCases int               `json:"answer_logical_usage_missing_cases,omitempty"`
+	JudgeTokenUsage                lmeTokenUsage     `json:"judge_token_usage,omitempty"`
+	JudgeLogicalTokenUsage         lmeTokenUsage     `json:"judge_logical_token_usage,omitempty"`
+	JudgeLogicalUsageCases         int               `json:"judge_logical_usage_cases,omitempty"`
+	JudgeLogicalUsageMissingCases  int               `json:"judge_logical_usage_missing_cases,omitempty"`
 }
 
 type evidenceMetrics struct {
@@ -1473,6 +1494,7 @@ afterIngest:
 		br.AnswerMaxAttempts = 1 + lmeAnswerMaxExtraAttempts
 		br.AnswerAttempts = attempts
 		br.AnswerModelCalls = longMemEvalAnswerAttemptCalls(attempts)
+		replaceLongMemEvalAnswerLogicalUsage(br, attempts)
 		usage, embeddingUsage, providerUsage := snapshotLongMemEvalUsage(
 			tracker,
 			backend,
@@ -2005,6 +2027,7 @@ func reanswerLongMemEvalResult(
 			br.AnswerMaxAttempts = 1 + lmeAnswerMaxExtraAttempts
 			br.AnswerAttempts = attempts
 			br.AnswerModelCalls = longMemEvalAnswerAttemptCalls(attempts)
+			replaceLongMemEvalAnswerLogicalUsage(br, attempts)
 			replaceLongMemEvalAnswerUsage(br, usage)
 			br.AnswerDuration = time.Since(start).Milliseconds()
 			br.RawAnswer = raw
@@ -2055,6 +2078,21 @@ func replaceLongMemEvalAnswerUsage(br *backendResult, usage lmeTokenUsage) {
 	total.Add(usage)
 	br.TokenUsage = tokenUsagePtr(total)
 	br.AnswerUsage = tokenUsagePtr(usage)
+}
+
+func replaceLongMemEvalAnswerLogicalUsage(
+	br *backendResult,
+	attempts []lmeAnswerAttempt,
+) {
+	if br == nil {
+		return
+	}
+	usage, complete := longMemEvalAnswerAttemptLogicalUsage(attempts)
+	if !complete {
+		br.AnswerLogicalUsage = nil
+		return
+	}
+	br.AnswerLogicalUsage = &usage
 }
 
 func judgeLongMemEvalResults(ctx context.Context, path, outputDir string) error {
@@ -2136,7 +2174,7 @@ func judgeLongMemEvalResult(
 	}
 	result.Metadata["judge_cache_initial_entries"] = judgeCache.Len()
 	result.Metadata["judged_at"] = time.Now().UTC().Format(time.RFC3339)
-	result.Metadata["judge_note"] = "LLM semantic correctness judge adapted from the official LongMemEval QA evaluator; only explicit final VERDICT votes are accepted, requested runs count valid votes with bounded retries, multiple votes use strict majority, and identical judge inputs reuse one content-addressed verdict."
+	result.Metadata["judge_note"] = "LLM semantic correctness judge adapted from the official LongMemEval QA evaluator; only explicit final VERDICT votes are accepted, requested runs count valid votes with bounded retries, multiple votes use strict majority, and identical judge inputs reuse one content-addressed verdict while retaining logical usage separately from provider usage."
 	result.Metadata["answer_scoring"] = "raw model output; no retrieval-assisted answer post-processing"
 	if err := os.MkdirAll(filepath.Dir(outPath), 0755); err != nil {
 		return fmt.Errorf("create judge output dir: %w", err)
@@ -2221,6 +2259,14 @@ func updateLongMemEvalJudgeCacheMetadata(
 	}
 	metadata["judge_cache_final_entries"] = cache.Len()
 	metadata["judge_cache_hits"] = cache.Hits()
+	logicalUsageHits, logicalUsageMissingHits := 0, 0
+	if cache != nil {
+		logicalUsageHits = cache.logicalUsageHits
+		logicalUsageMissingHits = cache.logicalUsageMissingHits
+	}
+	metadata["judge_cache_logical_usage_hits"] = logicalUsageHits
+	metadata["judge_cache_logical_usage_missing_hits"] =
+		logicalUsageMissingHits
 }
 
 func longMemEvalJudgedOutputName(path string) string {
@@ -2248,7 +2294,8 @@ func judgeLongMemEvalConsensus(
 		MaxAttempts:   runs + lmeJudgeMaxExtraAttempts,
 		Attempts:      make([]lmeJudgeAttempt, 0, runs+lmeJudgeMaxExtraAttempts),
 	}
-	var totalUsage lmeTokenUsage
+	var totalUsage, totalLogicalUsage lmeTokenUsage
+	logicalUsageComplete := true
 	var yesVotes, noVotes int
 	var yesRaw, noRaw string
 	for len(judge.Attempts) < judge.MaxAttempts && yesVotes+noVotes < runs {
@@ -2261,12 +2308,24 @@ func judgeLongMemEvalConsensus(
 		start := time.Now()
 		raw, err := judgeLongMemEvalAnswer(ctx, llm, cr, answer)
 		usage := tracker.Snapshot()
+		calls := tracker.SnapshotCalls()
+		logicalUsage, attemptLogicalUsageComplete :=
+			longMemEvalLogicalUsageFromCalls(calls)
+		if !attemptLogicalUsageComplete {
+			logicalUsageComplete = false
+		} else {
+			totalLogicalUsage.Add(logicalUsage)
+		}
 		duration := time.Since(start).Milliseconds()
 		attempt := lmeJudgeAttempt{
-			Raw:        raw,
-			ModelCalls: tracker.SnapshotCalls(),
-			TokenUsage: tokenUsagePtr(usage),
-			DurationMs: duration,
+			Raw:                  raw,
+			ModelCalls:           calls,
+			TokenUsage:           tokenUsagePtr(usage),
+			LogicalUsageComplete: attemptLogicalUsageComplete,
+			DurationMs:           duration,
+		}
+		if attemptLogicalUsageComplete {
+			attempt.LogicalTokenUsage = &logicalUsage
 		}
 		if err == nil {
 			attempt.Correct, err = parseLongMemEvalJudge(raw)
@@ -2290,6 +2349,11 @@ func judgeLongMemEvalConsensus(
 	}
 	judge.ValidRuns = yesVotes + noVotes
 	judge.TokenUsage = tokenUsagePtr(totalUsage)
+	judge.LogicalUsageComplete =
+		logicalUsageComplete && len(judge.Attempts) > 0
+	if judge.LogicalUsageComplete {
+		judge.LogicalTokenUsage = &totalLogicalUsage
+	}
 	required := runs/2 + 1
 	switch {
 	case judge.ValidRuns < runs:
@@ -3424,7 +3488,7 @@ func printLongMemEvalSummary(result *runResult) {
 		if summary.JudgedCases > 0 {
 			judgeText = fmt.Sprintf(" judge=%d/%d", summary.JudgeCorrect, summary.JudgedCases)
 		}
-		fmt.Printf("  %s: cases=%d EM=%d%s truncatedSnapshots=%d evidence=%d extractAny=%d retrievalAny=%d retrievalAll=%d turnEvidence=%d turnExtractAny=%d turnRetrievalAny=%d avgF1=%.3f avgBLEU=%.3f calls=%d tokens=%d cached=%d cacheHit=%.3f embedRequests=%d embedCalls=%d embedTokens=%d providerUsage=%d/%d\n",
+		fmt.Printf("  %s: cases=%d EM=%d%s truncatedSnapshots=%d evidence=%d extractAny=%d retrievalAny=%d retrievalAll=%d turnEvidence=%d turnExtractAny=%d turnRetrievalAny=%d avgF1=%.3f avgBLEU=%.3f calls=%d tokens=%d cached=%d cacheHit=%.3f answerTokens=%d answerLogicalTokens=%d answerLogical=%d/%d judgeTokens=%d judgeLogicalTokens=%d judgeLogical=%d/%d embedRequests=%d embedCalls=%d embedTokens=%d providerUsage=%d/%d\n",
 			backend, summary.Cases, summary.ExactMatches,
 			judgeText, summary.TruncatedSnapshots,
 			summary.EvidenceCases, summary.ExtractRecallAny, summary.RetrievalRecallAny, summary.RetrievalRecallAll,
@@ -3432,6 +3496,16 @@ func printLongMemEvalSummary(result *runResult) {
 			summary.AvgF1, summary.AvgBLEU,
 			summary.TokenUsage.LLMCalls, summary.TokenUsage.TotalTokens,
 			summary.TokenUsage.CachedTokens, summary.TokenUsage.CacheHitRate,
+			summary.AnswerTokenUsage.TotalTokens,
+			summary.AnswerLogicalTokenUsage.TotalTokens,
+			summary.AnswerLogicalUsageCases,
+			summary.AnswerLogicalUsageCases+
+				summary.AnswerLogicalUsageMissingCases,
+			summary.JudgeTokenUsage.TotalTokens,
+			summary.JudgeLogicalTokenUsage.TotalTokens,
+			summary.JudgeLogicalUsageCases,
+			summary.JudgeLogicalUsageCases+
+				summary.JudgeLogicalUsageMissingCases,
 			summary.EmbeddingUsage.Requests,
 			summary.EmbeddingUsage.Calls, summary.EmbeddingUsage.TotalTokens,
 			summary.ProviderUsageCases, summary.Cases)
@@ -3508,9 +3582,41 @@ func buildLongMemEvalSummary(cases []*caseResult) *runSummary {
 			if br.ProviderUsageReported {
 				bs.ProviderUsageCases++
 			}
+			if br.AnswerUsage != nil {
+				bs.AnswerTokenUsage.Add(*br.AnswerUsage)
+				summary.AnswerTokenUsage.Add(*br.AnswerUsage)
+			}
+			if br.AnswerLogicalUsage != nil {
+				bs.AnswerLogicalTokenUsage.Add(*br.AnswerLogicalUsage)
+				summary.AnswerLogicalTokenUsage.Add(
+					*br.AnswerLogicalUsage,
+				)
+				bs.AnswerLogicalUsageCases++
+				summary.AnswerLogicalUsageCases++
+			} else if br.AnswerSource != "" ||
+				len(br.AnswerAttempts) > 0 {
+				bs.AnswerLogicalUsageMissingCases++
+				summary.AnswerLogicalUsageMissingCases++
+			}
 			if br.Judge != nil && br.Judge.TokenUsage != nil {
 				bs.JudgeTokenUsage.Add(*br.Judge.TokenUsage)
 				summary.JudgeTokenUsage.Add(*br.Judge.TokenUsage)
+			}
+			if br.Judge != nil {
+				if br.Judge.LogicalUsageComplete &&
+					br.Judge.LogicalTokenUsage != nil {
+					bs.JudgeLogicalTokenUsage.Add(
+						*br.Judge.LogicalTokenUsage,
+					)
+					summary.JudgeLogicalTokenUsage.Add(
+						*br.Judge.LogicalTokenUsage,
+					)
+					bs.JudgeLogicalUsageCases++
+					summary.JudgeLogicalUsageCases++
+				} else {
+					bs.JudgeLogicalUsageMissingCases++
+					summary.JudgeLogicalUsageMissingCases++
+				}
 			}
 		}
 	}

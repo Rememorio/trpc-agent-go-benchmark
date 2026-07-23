@@ -206,6 +206,7 @@ func rerankLongMemEvalResult(
 			br.AnswerMaxAttempts = 1 + lmeAnswerMaxExtraAttempts
 			br.AnswerAttempts = attempts
 			br.AnswerModelCalls = longMemEvalAnswerAttemptCalls(attempts)
+			replaceLongMemEvalAnswerLogicalUsage(br, attempts)
 			replaceLongMemEvalAnswerUsage(br, answerUsage)
 			br.RawAnswer = rawAnswer
 			br.Answer = strings.TrimSpace(rawAnswer)

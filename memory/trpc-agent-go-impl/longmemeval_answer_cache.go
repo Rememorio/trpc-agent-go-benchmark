@@ -41,9 +41,12 @@ type lmeAnswerCacheIdentity struct {
 }
 
 type lmeAnswerCacheEntry struct {
-	Identity  lmeAnswerCacheIdentity `json:"identity"`
-	Answer    string                 `json:"answer"`
-	CreatedAt string                 `json:"created_at"`
+	Identity             lmeAnswerCacheIdentity `json:"identity"`
+	Answer               string                 `json:"answer"`
+	ModelCalls           []lmeModelCallTrace    `json:"model_calls,omitempty"`
+	LogicalTokenUsage    *lmeTokenUsage         `json:"logical_token_usage,omitempty"`
+	LogicalUsageComplete bool                   `json:"logical_usage_complete,omitempty"`
+	CreatedAt            string                 `json:"created_at"`
 }
 
 type lmeAnswerCacheFile struct {
@@ -53,11 +56,23 @@ type lmeAnswerCacheFile struct {
 	Entries   map[string]lmeAnswerCacheEntry `json:"entries"`
 }
 
+type lmeAnswerResolution struct {
+	Raw                  string
+	CacheKey             string
+	Source               string
+	ModelCalls           []lmeModelCallTrace
+	ProviderUsage        lmeTokenUsage
+	LogicalUsage         lmeTokenUsage
+	LogicalUsageComplete bool
+}
+
 type longMemEvalAnswerCache struct {
-	path       string
-	file       lmeAnswerCacheFile
-	persistent map[string]struct{}
-	hits       int
+	path                    string
+	file                    lmeAnswerCacheFile
+	persistent              map[string]struct{}
+	hits                    int
+	logicalUsageHits        int
+	logicalUsageMissingHits int
 }
 
 func openConfiguredLongMemEvalAnswerCache() (*longMemEvalAnswerCache, error) {
@@ -147,26 +162,51 @@ func (c *longMemEvalAnswerCache) Hits() int {
 	return c.hits
 }
 
-func (c *longMemEvalAnswerCache) Lookup(key string) (string, string, bool) {
+func (c *longMemEvalAnswerCache) Lookup(
+	key string,
+) (lmeAnswerResolution, bool) {
 	if c == nil {
-		return "", "", false
+		return lmeAnswerResolution{}, false
 	}
 	entry, ok := c.file.Entries[key]
 	if !ok {
-		return "", "", false
+		return lmeAnswerResolution{}, false
 	}
 	source := lmeAnswerSourceCurrentRun
 	if _, ok := c.persistent[key]; ok {
 		source = lmeAnswerSourcePersistent
 	}
 	c.hits++
-	return entry.Answer, source, true
+	logicalUsage := lmeTokenUsage{}
+	if entry.LogicalTokenUsage != nil {
+		logicalUsage = *entry.LogicalTokenUsage
+	}
+	if entry.LogicalUsageComplete {
+		c.logicalUsageHits++
+	} else {
+		c.logicalUsageMissingHits++
+	}
+	calls := cloneLongMemEvalModelCallTraces(entry.ModelCalls)
+	for i := range calls {
+		calls[i].Source = source
+	}
+	return lmeAnswerResolution{
+		Raw:                  entry.Answer,
+		CacheKey:             key,
+		Source:               source,
+		ModelCalls:           calls,
+		LogicalUsage:         logicalUsage,
+		LogicalUsageComplete: entry.LogicalUsageComplete,
+	}, true
 }
 
 func (c *longMemEvalAnswerCache) Put(
 	key string,
 	identity lmeAnswerCacheIdentity,
 	answer string,
+	modelCalls []lmeModelCallTrace,
+	logicalUsage lmeTokenUsage,
+	logicalUsageComplete bool,
 ) error {
 	if c == nil {
 		return nil
@@ -175,9 +215,14 @@ func (c *longMemEvalAnswerCache) Put(
 		return nil
 	}
 	entry := lmeAnswerCacheEntry{
-		Identity:  identity,
-		Answer:    strings.TrimSpace(answer),
-		CreatedAt: time.Now().UTC().Format(time.RFC3339),
+		Identity:             identity,
+		Answer:               strings.TrimSpace(answer),
+		ModelCalls:           cloneLongMemEvalModelCallTraces(modelCalls),
+		LogicalUsageComplete: logicalUsageComplete,
+		CreatedAt:            time.Now().UTC().Format(time.RFC3339),
+	}
+	if logicalUsageComplete {
+		entry.LogicalTokenUsage = &logicalUsage
 	}
 	if err := validateLongMemEvalAnswerCacheEntry(key, entry); err != nil {
 		return err
@@ -203,28 +248,69 @@ func resolveLongMemEvalAnswer(
 	cache *longMemEvalAnswerCache,
 	existingAnswer string,
 ) (string, string, string, error) {
+	result, err := resolveTrackedLongMemEvalAnswer(
+		ctx, llm, nil, modelName, modelVariant, inst, hits, cache,
+		existingAnswer,
+	)
+	return result.Raw, result.CacheKey, result.Source, err
+}
+
+func resolveTrackedLongMemEvalAnswer(
+	ctx context.Context,
+	llm model.Model,
+	tracker *lmeTokenTracker,
+	modelName string,
+	modelVariant string,
+	inst *lmeInstance,
+	hits []memoryHit,
+	cache *longMemEvalAnswerCache,
+	existingAnswer string,
+) (lmeAnswerResolution, error) {
 	identity, key, err := longMemEvalAnswerCacheKey(
 		inst, hits, modelName, modelVariant,
 	)
 	if err != nil {
-		return "", "", "", err
+		return lmeAnswerResolution{}, err
 	}
-	if answer, source, ok := cache.Lookup(key); ok {
-		return answer, key, source, nil
+	if result, ok := cache.Lookup(key); ok {
+		return result, nil
 	}
 	if existingAnswer = strings.TrimSpace(existingAnswer); existingAnswer != "" && cache != nil {
-		if err := cache.Put(key, identity, existingAnswer); err != nil {
-			return existingAnswer, key, lmeAnswerSourceExisting, err
+		result := lmeAnswerResolution{
+			Raw:      existingAnswer,
+			CacheKey: key,
+			Source:   lmeAnswerSourceExisting,
 		}
-		return existingAnswer, key, lmeAnswerSourceExisting, nil
+		if err := cache.Put(
+			key, identity, existingAnswer, nil, lmeTokenUsage{}, false,
+		); err != nil {
+			return result, err
+		}
+		return result, nil
 	}
 	answer, answerErr := answerFromMemories(ctx, llm, inst, hits)
+	calls := tracker.SnapshotCalls()
+	providerUsage := tracker.Snapshot()
+	logicalUsage, logicalUsageComplete :=
+		longMemEvalLogicalUsageFromCalls(calls)
+	result := lmeAnswerResolution{
+		Raw:                  answer,
+		CacheKey:             key,
+		Source:               lmeAnswerSourceModel,
+		ModelCalls:           calls,
+		ProviderUsage:        providerUsage,
+		LogicalUsage:         logicalUsage,
+		LogicalUsageComplete: logicalUsageComplete,
+	}
 	if answerErr == nil && strings.TrimSpace(answer) != "" {
-		if err := cache.Put(key, identity, answer); err != nil {
-			return answer, key, lmeAnswerSourceModel, err
+		if err := cache.Put(
+			key, identity, answer, calls, logicalUsage,
+			logicalUsageComplete,
+		); err != nil {
+			return result, err
 		}
 	}
-	return answer, key, lmeAnswerSourceModel, answerErr
+	return result, answerErr
 }
 
 func resolveLongMemEvalAnswerWithRetries(
@@ -252,19 +338,23 @@ func resolveLongMemEvalAnswerWithRetries(
 	var lastErr error
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		started := time.Now()
-		raw, key, source, lastErr = resolveLongMemEvalAnswer(
-			ctx, llm, modelName, modelVariant, inst, hits, cache,
-			existingAnswer,
+		result, err := resolveTrackedLongMemEvalAnswer(
+			ctx, llm, tracker, modelName, modelVariant, inst, hits,
+			cache, existingAnswer,
 		)
-		calls := tracker.SnapshotCalls()
-		usage := tracker.Snapshot()
-		allUsage.Add(usage)
+		raw, key, source, lastErr =
+			result.Raw, result.CacheKey, result.Source, err
+		allUsage.Add(result.ProviderUsage)
 		entry := lmeAnswerAttempt{
-			Raw:        raw,
-			Source:     source,
-			ModelCalls: calls,
-			TokenUsage: tokenUsagePtr(usage),
-			DurationMs: time.Since(started).Milliseconds(),
+			Raw:                  raw,
+			Source:               source,
+			ModelCalls:           result.ModelCalls,
+			TokenUsage:           tokenUsagePtr(result.ProviderUsage),
+			LogicalUsageComplete: result.LogicalUsageComplete,
+			DurationMs:           time.Since(started).Milliseconds(),
+		}
+		if result.LogicalUsageComplete {
+			entry.LogicalTokenUsage = &result.LogicalUsage
 		}
 		if lastErr != nil {
 			entry.Error = lastErr.Error()
@@ -289,6 +379,23 @@ func longMemEvalAnswerAttemptCalls(
 		calls = append(calls, attempt.ModelCalls...)
 	}
 	return calls
+}
+
+func longMemEvalAnswerAttemptLogicalUsage(
+	attempts []lmeAnswerAttempt,
+) (lmeTokenUsage, bool) {
+	if len(attempts) == 0 {
+		return lmeTokenUsage{}, false
+	}
+	var usage lmeTokenUsage
+	for _, attempt := range attempts {
+		if !attempt.LogicalUsageComplete ||
+			attempt.LogicalTokenUsage == nil {
+			return lmeTokenUsage{}, false
+		}
+		usage.Add(*attempt.LogicalTokenUsage)
+	}
+	return usage, true
 }
 
 func longMemEvalAnswerCacheKey(
@@ -330,7 +437,44 @@ func validateLongMemEvalAnswerCacheEntry(
 	if strings.TrimSpace(entry.Answer) == "" {
 		return fmt.Errorf("cached answer is empty")
 	}
+	if entry.LogicalUsageComplete {
+		if entry.LogicalTokenUsage == nil {
+			return fmt.Errorf(
+				"logical usage is complete but token usage is missing",
+			)
+		}
+		usage, complete := longMemEvalLogicalUsageFromCalls(entry.ModelCalls)
+		if !complete || usage != *entry.LogicalTokenUsage {
+			return fmt.Errorf(
+				"cached logical usage does not match model calls",
+			)
+		}
+	} else if entry.LogicalTokenUsage != nil {
+		return fmt.Errorf(
+			"logical token usage is present but marked incomplete",
+		)
+	}
 	return nil
+}
+
+func cloneLongMemEvalModelCallTraces(
+	calls []lmeModelCallTrace,
+) []lmeModelCallTrace {
+	if len(calls) == 0 {
+		return nil
+	}
+	cloned := make([]lmeModelCallTrace, len(calls))
+	for i, call := range calls {
+		cloned[i] = call
+		cloned[i].ToolCalls = append(
+			[]lmeToolCallTrace(nil), call.ToolCalls...,
+		)
+		if call.LogicalTokenUsage != nil {
+			usage := *call.LogicalTokenUsage
+			cloned[i].LogicalTokenUsage = &usage
+		}
+	}
+	return cloned
 }
 
 func longMemEvalAnswerProvenanceMatches(
@@ -403,7 +547,7 @@ func initializeLongMemEvalAnswerCacheMetadata(
 		metadata["answer_cache_ledger_id"] = ledgerID
 	}
 	metadata["answer_cache_initial_entries"] = cache.Len()
-	metadata["answer_cache_note"] = "Identical complete answer prompts share one content-addressed model response; cache hits contribute zero answer-model calls and tokens."
+	metadata["answer_cache_note"] = "Identical complete answer prompts share one content-addressed answer. Cache hits contribute zero provider usage while replaying cached model-call traces and logical token usage."
 }
 
 func updateLongMemEvalAnswerCacheMetadata(
@@ -415,6 +559,9 @@ func updateLongMemEvalAnswerCacheMetadata(
 	}
 	metadata["answer_cache_final_entries"] = cache.Len()
 	metadata["answer_cache_hits"] = cache.Hits()
+	metadata["answer_cache_logical_usage_hits"] = cache.logicalUsageHits
+	metadata["answer_cache_logical_usage_missing_hits"] =
+		cache.logicalUsageMissingHits
 }
 
 func clearLongMemEvalAnswerCacheMetadata(metadata map[string]any) {
@@ -425,6 +572,8 @@ func clearLongMemEvalAnswerCacheMetadata(metadata map[string]any) {
 		"answer_cache_initial_entries",
 		"answer_cache_final_entries",
 		"answer_cache_hits",
+		"answer_cache_logical_usage_hits",
+		"answer_cache_logical_usage_missing_hits",
 		"answer_cache_note",
 	} {
 		delete(metadata, key)

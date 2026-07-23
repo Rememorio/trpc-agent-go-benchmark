@@ -54,10 +54,12 @@ type lmeJudgeCacheFile struct {
 }
 
 type longMemEvalJudgeCache struct {
-	path       string
-	file       lmeJudgeCacheFile
-	persistent map[string]struct{}
-	hits       int
+	path                    string
+	file                    lmeJudgeCacheFile
+	persistent              map[string]struct{}
+	hits                    int
+	logicalUsageHits        int
+	logicalUsageMissingHits int
 }
 
 func openLongMemEvalJudgeCache(path string) (*longMemEvalJudgeCache, error) {
@@ -154,6 +156,11 @@ func (c *longMemEvalJudgeCache) Lookup(key string) (*lmeJudgeResult, string, boo
 		source = lmeJudgeVerdictSourcePersistent
 	}
 	c.hits++
+	if entry.Judge.LogicalUsageComplete {
+		c.logicalUsageHits++
+	} else {
+		c.logicalUsageMissingHits++
+	}
 	return reusedLongMemEvalJudgeResult(entry.Judge, source), source, true
 }
 
@@ -292,7 +299,73 @@ func validateLongMemEvalJudgeCacheEntry(key string, entry lmeJudgeCacheEntry) er
 	if _, valid := longMemEvalJudgeCorrect(&backendResult{Judge: &judge}); !valid {
 		return fmt.Errorf("cached judge verdict is incomplete or inconsistent")
 	}
+	logicalUsage, logicalUsageComplete, err :=
+		validateLongMemEvalJudgeAttemptUsage(judge.Attempts)
+	if err != nil {
+		return err
+	}
+	if judge.LogicalUsageComplete != logicalUsageComplete {
+		return fmt.Errorf(
+			"judge logical usage completeness does not match attempts",
+		)
+	}
+	if logicalUsageComplete {
+		if judge.LogicalTokenUsage == nil {
+			return fmt.Errorf(
+				"judge logical usage is complete but token usage is missing",
+			)
+		}
+		if *judge.LogicalTokenUsage != logicalUsage {
+			return fmt.Errorf(
+				"judge logical token usage does not match attempts",
+			)
+		}
+	} else if judge.LogicalTokenUsage != nil {
+		return fmt.Errorf(
+			"judge logical token usage is present but marked incomplete",
+		)
+	}
 	return nil
+}
+
+func validateLongMemEvalJudgeAttemptUsage(
+	attempts []lmeJudgeAttempt,
+) (lmeTokenUsage, bool, error) {
+	if len(attempts) == 0 {
+		return lmeTokenUsage{}, false, nil
+	}
+	var total lmeTokenUsage
+	for i, attempt := range attempts {
+		usage, complete :=
+			longMemEvalLogicalUsageFromCalls(attempt.ModelCalls)
+		if attempt.LogicalUsageComplete != complete {
+			return lmeTokenUsage{}, false, fmt.Errorf(
+				"judge attempt %d logical usage completeness "+
+					"does not match model calls",
+				i,
+			)
+		}
+		if !complete {
+			if attempt.LogicalTokenUsage != nil {
+				return lmeTokenUsage{}, false, fmt.Errorf(
+					"judge attempt %d logical token usage is "+
+						"present but marked incomplete",
+					i,
+				)
+			}
+			return lmeTokenUsage{}, false, nil
+		}
+		if attempt.LogicalTokenUsage == nil ||
+			*attempt.LogicalTokenUsage != usage {
+			return lmeTokenUsage{}, false, fmt.Errorf(
+				"judge attempt %d logical token usage does not "+
+					"match model calls",
+				i,
+			)
+		}
+		total.Add(usage)
+	}
+	return total, true, nil
 }
 
 func reusedLongMemEvalJudgeResult(
@@ -305,7 +378,13 @@ func reusedLongMemEvalJudgeResult(
 	result.DurationMs = 0
 	result.Attempts = append([]lmeJudgeAttempt(nil), judge.Attempts...)
 	for i := range result.Attempts {
-		result.Attempts[i].ModelCalls = nil
+		result.Attempts[i].ModelCalls =
+			cloneLongMemEvalModelCallTraces(
+				result.Attempts[i].ModelCalls,
+			)
+		for j := range result.Attempts[i].ModelCalls {
+			result.Attempts[i].ModelCalls[j].Source = source
+		}
 		result.Attempts[i].TokenUsage = nil
 		result.Attempts[i].DurationMs = 0
 	}
@@ -336,6 +415,8 @@ func clearLongMemEvalJudgeRunMetadata(metadata map[string]any) {
 		"judge_cache_initial_entries",
 		"judge_cache_final_entries",
 		"judge_cache_hits",
+		"judge_cache_logical_usage_hits",
+		"judge_cache_logical_usage_missing_hits",
 		"judged_at",
 		"judge_note",
 	} {

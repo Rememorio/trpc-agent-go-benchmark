@@ -365,6 +365,7 @@ func refreshLongMemEvalRetrievalResult(
 			br.AnswerMaxAttempts = 1 + lmeAnswerMaxExtraAttempts
 			br.AnswerAttempts = attempts
 			br.AnswerModelCalls = longMemEvalAnswerAttemptCalls(attempts)
+			replaceLongMemEvalAnswerLogicalUsage(br, attempts)
 			replaceLongMemEvalAnswerUsage(br, usage)
 			br.RawAnswer = raw
 			br.Answer = strings.TrimSpace(raw)
@@ -428,6 +429,7 @@ func clearLongMemEvalRefreshAnswer(br *backendResult) {
 	resetLongMemEvalAnswerError(br)
 	replaceLongMemEvalAnswerUsage(br, lmeTokenUsage{})
 	br.AnswerUsage = nil
+	br.AnswerLogicalUsage = nil
 	br.Answer = ""
 	br.RawAnswer = ""
 	br.AnswerCacheKey = ""

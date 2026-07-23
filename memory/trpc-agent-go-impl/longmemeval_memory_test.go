@@ -2402,7 +2402,14 @@ func TestResolveLongMemEvalJudgeDeduplicatesIdenticalInputs(t *testing.T) {
 	}
 	if second.TokenUsage != nil || second.DurationMs != 0 ||
 		len(second.Attempts) != 1 || second.Attempts[0].TokenUsage != nil ||
-		len(second.Attempts[0].ModelCalls) != 0 {
+		second.LogicalTokenUsage == nil ||
+		second.LogicalTokenUsage.TotalTokens != 12 ||
+		!second.LogicalUsageComplete ||
+		second.Attempts[0].LogicalTokenUsage == nil ||
+		second.Attempts[0].LogicalTokenUsage.TotalTokens != 12 ||
+		len(second.Attempts[0].ModelCalls) != 1 ||
+		second.Attempts[0].ModelCalls[0].Source !=
+			lmeJudgeVerdictSourceCurrentRun {
 		t.Fatalf("cache reuse double-counted model work: %#v", second)
 	}
 }
@@ -2524,13 +2531,27 @@ func TestLongMemEvalJudgeCachePersistsAndInvalidatesByAnswer(t *testing.T) {
 		Question:     "Which option?",
 		Answer:       "Option B",
 	}
-	firstLLM := &queuedJudgeModel{responses: []string{"VERDICT: yes"}}
+	usage := &model.Usage{
+		PromptTokens: 20, CompletionTokens: 2, TotalTokens: 22,
+	}
+	firstLLM := &queuedJudgeModel{
+		responses: []string{"VERDICT: yes"},
+		usage:     usage,
+	}
 	first, _, err := resolveLongMemEvalJudge(
 		context.Background(), firstLLM, "judge-model", "glm", cr,
 		&backendResult{Answer: "Option B"}, 1, cache,
 	)
 	if err != nil {
 		t.Fatalf("resolve persisted verdict: %v", err)
+	}
+	if first.TokenUsage == nil || first.TokenUsage.TotalTokens != 22 ||
+		first.LogicalTokenUsage == nil ||
+		first.LogicalTokenUsage.TotalTokens != 22 ||
+		!first.LogicalUsageComplete ||
+		len(first.Attempts) != 1 ||
+		len(first.Attempts[0].ModelCalls) != 1 {
+		t.Fatalf("first verdict usage = %#v", first)
 	}
 	loaded, err := openLongMemEvalJudgeCache(path)
 	if err != nil {
@@ -2551,6 +2572,25 @@ func TestLongMemEvalJudgeCachePersistsAndInvalidatesByAnswer(t *testing.T) {
 		second.Correct != first.Correct {
 		t.Fatalf("persistent cache miss: source=%q calls=%d result=%#v", source, secondLLM.calls, second)
 	}
+	if second.TokenUsage != nil || second.LogicalTokenUsage == nil ||
+		second.LogicalTokenUsage.TotalTokens != 22 ||
+		!second.LogicalUsageComplete ||
+		len(second.Attempts) != 1 ||
+		second.Attempts[0].TokenUsage != nil ||
+		second.Attempts[0].LogicalTokenUsage == nil ||
+		second.Attempts[0].LogicalTokenUsage.TotalTokens != 22 ||
+		len(second.Attempts[0].ModelCalls) != 1 ||
+		second.Attempts[0].ModelCalls[0].Source !=
+			lmeJudgeVerdictSourcePersistent {
+		t.Fatalf("cached verdict usage = %#v", second)
+	}
+	if loaded.logicalUsageHits != 1 ||
+		loaded.logicalUsageMissingHits != 0 {
+		t.Fatalf(
+			"logical cache counters: hits=%d missing=%d",
+			loaded.logicalUsageHits, loaded.logicalUsageMissingHits,
+		)
+	}
 	third, source, err := resolveLongMemEvalJudge(
 		context.Background(), secondLLM, "judge-model", "glm", cr,
 		&backendResult{Answer: "Option A"}, 1, loaded,
@@ -2560,6 +2600,18 @@ func TestLongMemEvalJudgeCachePersistsAndInvalidatesByAnswer(t *testing.T) {
 	}
 	if source != lmeJudgeVerdictSourceModel || secondLLM.calls != 1 || third.CacheKey == first.CacheKey {
 		t.Fatalf("changed answer reused stale verdict: source=%q calls=%d result=%#v", source, secondLLM.calls, third)
+	}
+	entry := loaded.file.Entries[first.CacheKey]
+	tamperedJudge := entry.Judge
+	tamperedUsage := *tamperedJudge.LogicalTokenUsage
+	tamperedUsage.TotalTokens++
+	tamperedJudge.LogicalTokenUsage = &tamperedUsage
+	entry.Judge = tamperedJudge
+	if err := validateLongMemEvalJudgeCacheEntry(
+		first.CacheKey, entry,
+	); err == nil ||
+		!strings.Contains(err.Error(), "does not match attempts") {
+		t.Fatalf("tampered logical usage error = %v", err)
 	}
 }
 
@@ -2643,6 +2695,15 @@ func TestOpenLongMemEvalJudgeCacheRejectsInvalidFiles(t *testing.T) {
 			name:      "invalid json",
 			value:     []byte("{"),
 			wantError: "parse LongMemEval judge cache",
+		},
+		{
+			name: "legacy version",
+			value: lmeJudgeCacheFile{
+				Version:  "lme-judge-cache-v1",
+				LedgerID: "ledger",
+				Entries:  map[string]lmeJudgeCacheEntry{},
+			},
+			wantError: "unsupported LongMemEval judge cache version",
 		},
 		{
 			name: "unsupported version",
@@ -2738,16 +2799,18 @@ func TestClearLongMemEvalJudgeRunMetadata(t *testing.T) {
 	t.Parallel()
 
 	metadata := map[string]any{
-		"judge_model":                 "judge-model",
-		"judge_cache_format_version":  lmeJudgeCacheFormatVersion,
-		"judge_cache_shared":          true,
-		"judge_cache_ledger_id":       "ledger",
-		"judge_cache_initial_entries": 1,
-		"judge_cache_final_entries":   2,
-		"judge_cache_hits":            1,
-		"judged_at":                   "now",
-		"judge_prompt_version":        lmeJudgePromptVersion,
-		"judge_protocol_version":      lmeJudgeProtocolVersion,
+		"judge_model":                            "judge-model",
+		"judge_cache_format_version":             lmeJudgeCacheFormatVersion,
+		"judge_cache_shared":                     true,
+		"judge_cache_ledger_id":                  "ledger",
+		"judge_cache_initial_entries":            1,
+		"judge_cache_final_entries":              2,
+		"judge_cache_hits":                       1,
+		"judge_cache_logical_usage_hits":         1,
+		"judge_cache_logical_usage_missing_hits": 0,
+		"judged_at":                              "now",
+		"judge_prompt_version":                   lmeJudgePromptVersion,
+		"judge_protocol_version":                 lmeJudgeProtocolVersion,
 	}
 	clearLongMemEvalJudgeRunMetadata(metadata)
 	for _, key := range []string{
@@ -2758,6 +2821,8 @@ func TestClearLongMemEvalJudgeRunMetadata(t *testing.T) {
 		"judge_cache_initial_entries",
 		"judge_cache_final_entries",
 		"judge_cache_hits",
+		"judge_cache_logical_usage_hits",
+		"judge_cache_logical_usage_missing_hits",
 		"judged_at",
 	} {
 		if _, ok := metadata[key]; ok {
@@ -2942,7 +3007,16 @@ func TestBuildLongMemEvalSummaryIncludesJudgeMetrics(t *testing.T) {
 	result := buildLongMemEvalSummary([]*caseResult{{
 		BackendResults: map[string]*backendResult{
 			"pgvector": {
-				Backend: "pgvector",
+				Backend:      "pgvector",
+				AnswerSource: lmeAnswerSourceModel,
+				AnswerUsage: &lmeTokenUsage{
+					LLMCalls:    1,
+					TotalTokens: 7,
+				},
+				AnswerLogicalUsage: &lmeTokenUsage{
+					LLMCalls:    1,
+					TotalTokens: 7,
+				},
 				Judge: &lmeJudgeResult{
 					Correct: true,
 					Raw:     "VERDICT: yes",
@@ -2950,10 +3024,20 @@ func TestBuildLongMemEvalSummaryIncludesJudgeMetrics(t *testing.T) {
 						LLMCalls:    1,
 						TotalTokens: 11,
 					},
+					LogicalTokenUsage: &lmeTokenUsage{
+						LLMCalls:    1,
+						TotalTokens: 11,
+					},
+					LogicalUsageComplete: true,
 				},
 			},
 			"mem0": {
-				Backend: "mem0",
+				Backend:      "mem0",
+				AnswerSource: lmeAnswerSourcePersistent,
+				AnswerLogicalUsage: &lmeTokenUsage{
+					LLMCalls:    1,
+					TotalTokens: 8,
+				},
 				Judge: &lmeJudgeResult{
 					Correct: false,
 					Raw:     "VERDICT: no",
@@ -2961,6 +3045,11 @@ func TestBuildLongMemEvalSummaryIncludesJudgeMetrics(t *testing.T) {
 						LLMCalls:    1,
 						TotalTokens: 9,
 					},
+					LogicalTokenUsage: &lmeTokenUsage{
+						LLMCalls:    1,
+						TotalTokens: 9,
+					},
+					LogicalUsageComplete: true,
 				},
 			},
 		},
@@ -2975,6 +3064,17 @@ func TestBuildLongMemEvalSummaryIncludesJudgeMetrics(t *testing.T) {
 	}
 	if result.JudgeTokenUsage.LLMCalls != 2 || result.JudgeTokenUsage.TotalTokens != 20 {
 		t.Fatalf("unexpected judge token usage: %+v", result.JudgeTokenUsage)
+	}
+	if result.AnswerTokenUsage.TotalTokens != 7 ||
+		result.AnswerLogicalTokenUsage.TotalTokens != 15 ||
+		result.AnswerLogicalUsageCases != 2 ||
+		result.AnswerLogicalUsageMissingCases != 0 {
+		t.Fatalf("unexpected answer usage summary: %+v", result)
+	}
+	if result.JudgeLogicalTokenUsage.TotalTokens != 20 ||
+		result.JudgeLogicalUsageCases != 2 ||
+		result.JudgeLogicalUsageMissingCases != 0 {
+		t.Fatalf("unexpected judge logical usage summary: %+v", result)
 	}
 }
 

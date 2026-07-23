@@ -47,8 +47,8 @@ const (
 	lmeAnswerRetryResponseFormat   = "forced_function_call"
 	lmeJudgePromptVersion          = "lme-official-superset-judge-v3"
 	lmeJudgeProtocolVersion        = "lme-content-addressed-verdict-v1"
-	lmeJudgeCacheFormatVersion     = "lme-judge-cache-v1"
-	lmeAnswerCacheFormatVersion    = "lme-answer-cache-v1"
+	lmeJudgeCacheFormatVersion     = "lme-judge-cache-v2"
+	lmeAnswerCacheFormatVersion    = "lme-answer-cache-v2"
 	lmeModelCacheFormatVersion     = "lme-model-response-cache-v1"
 	lmeEmbeddingCacheFormatVersion = "lme-embedding-response-cache-v1"
 )

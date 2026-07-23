@@ -539,6 +539,72 @@ func TestValidateLongMemEvalReplicateFreshCaches(t *testing.T) {
 	}
 }
 
+func TestValidateLongMemEvalReplicateLogicalUsage(t *testing.T) {
+	t.Parallel()
+
+	newResult := func() *runResult {
+		return longMemEvalReplicateFixtureResult(
+			"candidate-2196",
+			"answer-ledger",
+			"judge-ledger",
+			lmeReplicateKindIndependentReanswer,
+			map[string][2]bool{"pgvector": {true, true}},
+		)
+	}
+	if err := validateLongMemEvalReplicateLogicalUsage(
+		"replicate", newResult(),
+	); err != nil {
+		t.Fatalf("valid logical usage: %v", err)
+	}
+	for _, test := range []struct {
+		name      string
+		mutate    func(*runResult)
+		wantError string
+	}{
+		{
+			name: "missing cache accounting",
+			mutate: func(result *runResult) {
+				delete(
+					result.Metadata,
+					"answer_cache_logical_usage_missing_hits",
+				)
+			},
+			wantError: "must be integer zero",
+		},
+		{
+			name: "missing answer usage",
+			mutate: func(result *runResult) {
+				result.Cases[0].BackendResults["pgvector"].
+					AnswerLogicalUsage = nil
+			},
+			wantError: "incomplete answer logical usage",
+		},
+		{
+			name: "missing judge usage",
+			mutate: func(result *runResult) {
+				result.Cases[0].BackendResults["pgvector"].Judge.
+					LogicalTokenUsage = nil
+			},
+			wantError: "incomplete judge logical usage",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result := newResult()
+			test.mutate(result)
+			err := validateLongMemEvalReplicateLogicalUsage(
+				"replicate", result,
+			)
+			if err == nil ||
+				!strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf(
+					"logical usage error = %v, want %q",
+					err, test.wantError,
+				)
+			}
+		})
+	}
+}
+
 func TestReplicateSourceCostRetainsCachedLogicalUsage(t *testing.T) {
 	t.Parallel()
 
@@ -660,8 +726,10 @@ func longMemEvalReplicateFixtureResult(
 	metadata["answer_cache_shared"] = true
 	metadata["answer_cache_ledger_id"] = answerLedger
 	metadata["answer_cache_initial_entries"] = 0
+	metadata["answer_cache_logical_usage_missing_hits"] = 0
 	metadata["judge_cache_ledger_id"] = judgeLedger
 	metadata["judge_cache_initial_entries"] = 0
+	metadata["judge_cache_logical_usage_missing_hits"] = 0
 	metadata["model_response_cache_initial_entries"] = 0
 	metadata["model_response_cache_hits"] = 0
 	if kind == lmeReplicateKindIndependentReanswer {
@@ -716,14 +784,43 @@ func longMemEvalReplicateFixtureBackend(
 		memories[index] = memorySnapshot{ID: questionID + "-memory-" + string(rune('a'+index)), Memory: "stable memory"}
 	}
 	answerUsage := &lmeTokenUsage{PromptTokens: 8, CompletionTokens: 2, TotalTokens: 10, LLMCalls: 1}
+	answerLogicalUsage := *answerUsage
+	answerCall := lmeModelCallTrace{
+		Source:            lmeModelCallSourceModel,
+		LogicalTokenUsage: &answerLogicalUsage,
+	}
+	answerAttempts := []lmeAnswerAttempt{{
+		Raw:                  answer,
+		Source:               lmeAnswerSourceModel,
+		ModelCalls:           []lmeModelCallTrace{answerCall},
+		TokenUsage:           answerUsage,
+		LogicalTokenUsage:    &answerLogicalUsage,
+		LogicalUsageComplete: true,
+	}}
 	totalUsage := lmeTokenUsage{PromptTokens: memoryTokens + 8, CompletionTokens: 2, TotalTokens: memoryTokens + 10, LLMCalls: 2}
 	judgeRaw := "VERDICT: no"
 	if correct {
 		judgeRaw = "VERDICT: yes"
 	}
 	attempts := make([]lmeJudgeAttempt, 3)
+	judgeLogicalUsage := lmeTokenUsage{}
 	for index := range attempts {
-		attempts[index] = lmeJudgeAttempt{Correct: correct, Raw: judgeRaw}
+		attemptUsage := lmeTokenUsage{
+			PromptTokens: 10, CompletionTokens: 2,
+			TotalTokens: 12, LLMCalls: 1,
+		}
+		judgeLogicalUsage.Add(attemptUsage)
+		attempts[index] = lmeJudgeAttempt{
+			Correct: correct,
+			Raw:     judgeRaw,
+			ModelCalls: []lmeModelCallTrace{{
+				Source:            lmeModelCallSourceModel,
+				LogicalTokenUsage: &attemptUsage,
+			}},
+			TokenUsage:           &attemptUsage,
+			LogicalTokenUsage:    &attemptUsage,
+			LogicalUsageComplete: true,
+		}
 	}
 	return &backendResult{
 		Backend: backend, UserID: backend + "-" + questionID, SessionID: "session-" + questionID,
@@ -743,7 +840,11 @@ func longMemEvalReplicateFixtureBackend(
 		FinalMemories: memories,
 		Retrieval:     []memoryHit{{ID: questionID + "-hit", Memory: "stable answer evidence", Score: 0.9}},
 		Answer:        answer, RawAnswer: answer, AnswerSource: lmeAnswerSourceModel,
-		TokenUsage: &totalUsage, AnswerUsage: answerUsage,
+		AnswerAttempts:     answerAttempts,
+		AnswerModelCalls:   []lmeModelCallTrace{answerCall},
+		TokenUsage:         &totalUsage,
+		AnswerUsage:        answerUsage,
+		AnswerLogicalUsage: &answerLogicalUsage,
 		EmbeddingUsage: &lmeEmbeddingUsage{
 			PromptTokens: embeddingTokens, TotalTokens: embeddingTokens,
 			Calls: 2, Requests: 2,
@@ -753,6 +854,8 @@ func longMemEvalReplicateFixtureBackend(
 		Judge: &lmeJudgeResult{
 			Model: "judge-model", Correct: correct, Raw: judgeRaw,
 			RequestedRuns: 3, ValidRuns: 3, Attempts: attempts,
+			LogicalTokenUsage:    &judgeLogicalUsage,
+			LogicalUsageComplete: true,
 		},
 		IngestDuration: 100, SearchDuration: 10,
 	}
