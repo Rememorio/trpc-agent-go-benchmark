@@ -27,9 +27,12 @@ The final same-model GLM-5.2 replay gives a scoped positive answer:
   two changed families, the overlay reduced end-to-end tokens by `6.77%` and
   improved quality by `0.16pp`; decomposition shows that Recipe produced the
   benefit while World Bank was a negative contribution.
-- **The optimizer API is ready for review.** It found a stable improvement,
-  rejected an unsafe validation winner, and allowed a frozen winner to be
-  rejected later when online evidence did not reproduce its benefit.
+- **The optimizer API is merged and consumable from upstream.** The benchmark
+  now builds against the official `trpc-agent-go` main revision that contains
+  the optimizer, without a fork replacement. The evidence remains unchanged:
+  the optimizer found a stable improvement, rejected an unsafe validation
+  winner, and allowed a frozen winner to be rejected later when online
+  evidence did not reproduce its benefit.
 
 **Table 1: Same-model GLM-5.2 operational replay (3 runs, n = 90 per arm)**
 
@@ -338,6 +341,13 @@ invalidated the frozen protocol.
 
 ## 7. Framework and API Assessment
 
+The framework implementation evaluated here was merged through
+`trpc-group/trpc-agent-go#2204`. The benchmark now resolves the official
+upstream module at main revision `99a8667aa8ad`, with no fork `replace` or
+adjacent local checkout. This is an integration update rather than an
+experimental rerun: the model results and evidence artifacts continue to
+describe the revisions and runtime configuration that actually produced them.
+
 The benchmark did not require a Python bridge to GEPA or public exposure of
 optimizer internals. Its adapter supplies the public task cases, `Evaluator`,
 `Dataset`, `Request`, reflection model, and options, then calls `NewGEPA` and
@@ -347,7 +357,7 @@ shared internal lifecycle owns seed and holdout evaluation, budgets, experiment
 records, promotion, and optional revision submission, so another built-in
 search does not need to duplicate those controls.
 
-The public design is suitable for review because:
+The merged public design remains a sound framework boundary because:
 
 - optimization is opt-in and offline; it does not mutate the live skill path;
 - the algorithm is selected by a typed constructor rather than a string
@@ -381,14 +391,15 @@ The complete evidence supports this bounded conclusion:
 
 The correct action is:
 
-1. move the main optimizer PR to normal code review;
+1. keep the benchmark on the official upstream module; no fork replacement is
+   needed;
 2. promote or package the accepted Recipe candidate for this GLM-5.2 runtime;
 3. do not promote the World Bank candidate; although the combined experimental
    overlay is positive at the changed-family scope, Recipe alone is the
    strictly better deployment choice;
 4. retain GPT-5.2 as a negative portability result; and
 5. treat broader model portability and Pokémon tool-response robustness as
-   follow-up work, not as a prerequisite for reviewing the API.
+   follow-up work, not as a blocker for adopting the merged API.
 
 Exact same-model aggregate values, per-run summaries, family metrics, paired
 outcomes, and preregistered gate verdicts are in

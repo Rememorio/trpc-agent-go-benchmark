@@ -21,8 +21,10 @@
   质量收益主要来自没有使用离线 overlay 的 Pokémon 偶发收尾失败。只聚合真正发生变化
   的两个任务族时，overlay 的端到端 tokens 降低 `6.77%`、质量提升 `0.16pp`；进一步
   分解可见收益由 Recipe 产生，World Bank 是负贡献。
-- **Optimizer API 已具备评审条件。** 它找到了稳定收益，拒绝了一个 validation winner
-  的安全回退，也允许一个 frozen winner 在完整在线证据无法复现收益时被再次拒绝。
+- **Optimizer API 已合入主库，并可从官方上游直接使用。** Benchmark 现在直接依赖
+  包含 optimizer 的 `trpc-agent-go` main revision，不再使用 fork replace。实验结论
+  不变：optimizer 找到了稳定收益，拒绝了一个存在安全回退的 validation winner，也
+  允许一个 frozen winner 在完整在线证据无法复现收益时被再次拒绝。
 
 **表 1：同模型 GLM-5.2 完整运行时回放（3 轮，每个 arm n = 90）**
 
@@ -284,6 +286,11 @@ World Bank 的 loss。
 
 ## 7. 框架与 API 判断
 
+本报告评估的框架实现已经通过 `trpc-group/trpc-agent-go#2204` 合入。Benchmark 当前
+解析到官方上游 main revision `99a8667aa8ad`，不再需要 fork `replace` 或相邻的本地
+checkout。这是集成状态更新，不是重新运行实验：模型结果和 evidence artifact 仍然
+如实记录实际产生它们的 revision 与运行时配置。
+
 Benchmark 不需要 Python GEPA bridge，也不需要公开 optimizer 内部结构。Adapter 只
 提供公开 task cases、`Evaluator`、`Dataset`、`Request`、reflection model 和 options，
 然后调用 `NewGEPA`，并使用返回的单方法 `Optimizer` 接口。具体 GEPA 类型、candidate
@@ -291,7 +298,7 @@ graph、Pareto bookkeeping 和 mutation 解析都保持私有；统一的内部�
 与 holdout 评估、预算、实验记录、晋升及可选 revision submission，因此后续内置搜索
 算法无需复制这些控制逻辑。
 
-主库 API 具备评审条件，原因是：
+已合入的主库 API 仍然保持清晰、合理的框架边界，原因是：
 
 - optimization 是 opt-in 离线流程，不会直接修改 live skill；
 - 算法由类型明确的 constructor 选择，而不是字符串 registry；每份结果也会记录实际
@@ -318,13 +325,13 @@ graph、Pareto bookkeeping 和 mutation 解析都保持私有；统一的内部�
 
 正确的后续动作是：
 
-1. 让主库 optimizer PR 进入正常代码评审；
+1. Benchmark 继续依赖官方上游 module，不再使用 fork replace；
 2. 针对本次 GLM-5.2 运行时晋升或打包已接受的 Recipe candidate；
 3. 不晋升 World Bank candidate；combined experimental overlay 在 changed-family
    范围为正收益，但只部署 Recipe 是严格更优的选择；
 4. 保留 GPT-5.2 结果作为负面的跨模型可迁移性证据；
-5. 把更广泛的模型可迁移性和 Pokémon tool-response 鲁棒性作为后续工作，而不是阻塞
-   API 评审。
+5. 把更广泛的模型可迁移性和 Pokémon tool-response 鲁棒性作为后续工作，不把它们
+   作为采用已合入 API 的阻塞项。
 
 同模型精确聚合值、逐轮摘要、逐族指标、配对结果和预注册门禁见
 [`glm_full_matrix_evidence.json`](glm_full_matrix_evidence.json)。早期跨模型聚合仍保存在
