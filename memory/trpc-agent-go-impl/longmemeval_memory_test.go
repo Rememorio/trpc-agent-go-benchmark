@@ -3093,15 +3093,24 @@ func TestAnswerFromMemoriesRetriesTruncatedResponse(t *testing.T) {
 	t.Parallel()
 
 	length := "length"
-	stop := "stop"
+	toolCalls := "tool_calls"
 	llm := &queuedAnswerModel{responses: []*model.Response{
 		{Choices: []model.Choice{{
 			Message:      model.NewAssistantMessage("reasoning without a final answer"),
 			FinishReason: &length,
 		}}},
 		{Choices: []model.Choice{{
-			Message:      model.NewAssistantMessage("3"),
-			FinishReason: &stop,
+			Message: model.Message{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					Type: "function",
+					Function: model.FunctionDefinitionParam{
+						Name:      lmeAnswerRepairToolName,
+						Arguments: []byte(`{"answer":"3"}`),
+					},
+				}},
+			},
+			FinishReason: &toolCalls,
 		}}},
 	}}
 	answer, err := answerFromMemories(
@@ -3124,18 +3133,73 @@ func TestAnswerFromMemoriesRetriesTruncatedResponse(t *testing.T) {
 		*llm.requests[1].MaxTokens != lmeAnswerRetryMaxTokens {
 		t.Fatalf("retry max tokens = %v", llm.requests[1].MaxTokens)
 	}
+	if llm.requests[1].StructuredOutput != nil {
+		t.Fatalf("retry request should use a forced tool: %#v",
+			llm.requests[1].StructuredOutput)
+	}
+	answerTool, ok := llm.requests[1].Tools[lmeAnswerRepairToolName]
+	if !ok || answerTool.Declaration().InputSchema == nil ||
+		!slices.Equal(answerTool.Declaration().InputSchema.Required,
+			[]string{"answer"}) {
+		t.Fatalf("retry answer tool = %#v", llm.requests[1].Tools)
+	}
+	toolChoice, ok := llm.requests[1].
+		ExtraFields["tool_choice"].(map[string]any)
+	if !ok || toolChoice["type"] != "function" {
+		t.Fatalf("retry tool choice = %#v", llm.requests[1].ExtraFields)
+	}
 	if len(llm.requests[1].Messages) != 2 ||
 		llm.requests[1].Messages[0].Role != model.RoleSystem ||
 		!strings.Contains(llm.requests[1].Messages[0].Content,
-			"Repair the truncated draft") ||
+			lmeAnswerRepairToolName) ||
 		!strings.Contains(llm.requests[1].Messages[1].Content,
 			"How many tanks?") ||
 		!strings.Contains(llm.requests[1].Messages[1].Content,
 			"reasoning without a final answer") ||
 		!strings.Contains(llm.requests[1].Messages[1].Content,
-			"at most 128 words") {
+			"at most 128 words") ||
+		strings.Contains(llm.requests[1].Messages[1].Content,
+			"There are three tanks.") {
 		t.Fatalf("retry prompt does not enforce a concise final answer: %+v",
 			llm.requests[1].Messages)
+	}
+}
+
+func TestAnswerFromMemoriesRejectsMalformedStructuredRepair(t *testing.T) {
+	t.Parallel()
+
+	length := "length"
+	toolCalls := "tool_calls"
+	llm := &queuedAnswerModel{responses: []*model.Response{
+		{Choices: []model.Choice{{
+			Message:      model.NewAssistantMessage("partial"),
+			FinishReason: &length,
+		}}},
+		{Choices: []model.Choice{{
+			Message: model.Message{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					Type: "function",
+					Function: model.FunctionDefinitionParam{
+						Name:      lmeAnswerRepairToolName,
+						Arguments: []byte(`{"answer":""}`),
+					},
+				}},
+			},
+			FinishReason: &toolCalls,
+		}}},
+	}}
+	answer, err := answerFromMemories(
+		context.Background(), llm,
+		&lmeInstance{Question: "Which option?"}, nil,
+	)
+	if answer != `{"answer":""}` ||
+		!errors.Is(err, errLongMemEvalAnswerRepair) {
+		t.Fatalf("answer = %q, err = %v", answer, err)
+	}
+	if len(llm.requests) != lmeAnswerMaxAttempts {
+		t.Fatalf("requests = %d, want %d",
+			len(llm.requests), lmeAnswerMaxAttempts)
 	}
 }
 

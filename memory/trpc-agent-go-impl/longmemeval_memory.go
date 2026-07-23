@@ -40,6 +40,7 @@ import (
 	memorypgvector "trpc.group/trpc-go/trpc-agent-go/memory/pgvector"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 const (
@@ -62,6 +63,7 @@ const (
 	// while candidate builds can surface asynchronous extraction failures.
 	// Keep the key local so the same benchmark source builds against both.
 	lmeAutoMemoryLastErrorStateKey = "memory:last_extract_error"
+	lmeAnswerRepairToolName        = "submit_longmemeval_answer"
 )
 
 type lmeTurn struct {
@@ -1640,6 +1642,10 @@ var errLongMemEvalAnswerEmpty = errors.New(
 	"model returned an empty answer after retry",
 )
 
+var errLongMemEvalAnswerRepair = errors.New(
+	"model returned an invalid structured answer repair",
+)
+
 func answerFromMemories(ctx context.Context, llm model.Model, inst *lmeInstance, hits []memoryHit) (string, error) {
 	prompt := buildLongMemEvalAnswerPrompt(inst, hits)
 	var draft string
@@ -1647,13 +1653,14 @@ func answerFromMemories(ctx context.Context, llm model.Model, inst *lmeInstance,
 	for attempt := 0; attempt < lmeAnswerMaxAttempts; attempt++ {
 		req := newLongMemEvalAnswerRequest(prompt)
 		if attempt > 0 {
-			req = newLongMemEvalAnswerRetryRequest(prompt, draft)
+			req = newLongMemEvalAnswerRetryRequest(inst, prompt, draft)
 		}
 		respCh, err := llm.GenerateContent(ctx, req)
 		if err != nil {
 			return "", err
 		}
 		var out string
+		var repairArgs string
 		var delta strings.Builder
 		truncated := false
 		for resp := range respCh {
@@ -1675,6 +1682,22 @@ func answerFromMemories(ctx context.Context, llm model.Model, inst *lmeInstance,
 				if choice.Message.Content != "" {
 					out = choice.Message.Content
 				}
+				if attempt > 0 {
+					toolCalls := choice.Message.ToolCalls
+					if len(toolCalls) == 0 {
+						toolCalls = choice.Delta.ToolCalls
+					}
+					if len(toolCalls) > 0 {
+						args, err := longMemEvalAnswerRepairArguments(
+							toolCalls,
+						)
+						if err != nil {
+							return out, fmt.Errorf("%w: %v",
+								errLongMemEvalAnswerRepair, err)
+						}
+						repairArgs = args
+					}
+				}
 			}
 		}
 		if out == "" {
@@ -1685,6 +1708,24 @@ func answerFromMemories(ctx context.Context, llm model.Model, inst *lmeInstance,
 			draft = out
 			lastErr = errors.New("model answer reached the completion token limit")
 			continue
+		}
+		if attempt > 0 {
+			if truncated {
+				return out, errLongMemEvalAnswerTruncated
+			}
+			if repairArgs == "" {
+				return out, fmt.Errorf(
+					"%w: model did not call %s",
+					errLongMemEvalAnswerRepair,
+					lmeAnswerRepairToolName,
+				)
+			}
+			answer, err := parseLongMemEvalAnswerRepair(repairArgs)
+			if err != nil {
+				return repairArgs, fmt.Errorf("%w: %v",
+					errLongMemEvalAnswerRepair, err)
+			}
+			return answer, nil
 		}
 		if out != "" {
 			if truncated {
@@ -1700,6 +1741,51 @@ func answerFromMemories(ctx context.Context, llm model.Model, inst *lmeInstance,
 		}
 	}
 	return "", lastErr
+}
+
+func longMemEvalAnswerRepairArguments(
+	calls []model.ToolCall,
+) (string, error) {
+	if len(calls) != 1 {
+		return "", fmt.Errorf(
+			"expected exactly one answer tool call, got %d",
+			len(calls),
+		)
+	}
+	call := calls[0]
+	if call.Function.Name != lmeAnswerRepairToolName {
+		return "", fmt.Errorf(
+			"unexpected answer tool %q",
+			call.Function.Name,
+		)
+	}
+	if len(call.Function.Arguments) == 0 {
+		return "", errors.New("answer tool arguments are empty")
+	}
+	return string(call.Function.Arguments), nil
+}
+
+func parseLongMemEvalAnswerRepair(raw string) (string, error) {
+	var response struct {
+		Answer string `json:"answer"`
+	}
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&response); err != nil {
+		return "", fmt.Errorf("decode answer repair: %w", err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return "", errors.New("decode answer repair: multiple JSON values")
+		}
+		return "", fmt.Errorf("decode answer repair trailing data: %w", err)
+	}
+	response.Answer = strings.TrimSpace(response.Answer)
+	if response.Answer == "" {
+		return "", errors.New("answer repair omitted a non-empty answer")
+	}
+	return response.Answer, nil
 }
 
 func isLongMemEvalLengthFinishReason(reason string) bool {
@@ -1785,7 +1871,7 @@ func reanswerLongMemEvalResult(
 	result.Metadata["reanswered_at"] = time.Now().UTC().Format(time.RFC3339)
 	result.Metadata["reanswer_reuse_source_answers"] = reuseSourceAnswers
 	result.Metadata["answer_scoring"] = "raw model output; no retrieval-assisted answer post-processing"
-	result.Metadata["reanswer_note"] = "Answers regenerated from saved ranked retrieval hits; backend-specific similarity scores are not shown to the answer model. Responses ending with a length finish reason are retried once with the recorded larger token limit, and incomplete answers receive bounded execution retries."
+	result.Metadata["reanswer_note"] = "Answers regenerated from saved ranked retrieval hits; backend-specific similarity scores are not shown to the answer model. Truncated or empty responses are repaired once through the recorded structured-output contract, while transient provider failures receive bounded execution retries."
 	initializeLongMemEvalAnswerCacheMetadata(result.Metadata, answerCache)
 	clearLongMemEvalJudgeRunMetadata(result.Metadata)
 	for _, cr := range result.Cases {
@@ -2521,30 +2607,82 @@ func newLongMemEvalAnswerRequest(prompt string) *model.Request {
 	}
 }
 
-func newLongMemEvalAnswerRetryRequest(prompt, draft string) *model.Request {
-	userPrompt := fmt.Sprintf(`The previous response to the task below was
-truncated. Rewrite it as a complete final answer in at most 128 words. Preserve
-all names, dates, numbers, and requested list items that are supported by the
-task. For a scalar, date, name, count, or list, return only the requested value
-or values. Do not include analysis, reasoning, a preamble, uncertainty
-discussion, or markdown.
+func newLongMemEvalAnswerRetryRequest(
+	inst *lmeInstance,
+	prompt string,
+	draft string,
+) *model.Request {
+	var userPrompt string
+	if draft = strings.TrimSpace(draft); draft != "" {
+		userPrompt = fmt.Sprintf(`Distill the incomplete draft into the final
+answer it is converging to for the question. Do not solve the original task
+again. Return one JSON object with exactly one string field named "answer".
+The field value must be a complete answer in at most 128 words. Preserve the
+supported names, dates, numbers, and requested list items already identified
+by the draft. For a scalar, date, name, count, or list, put only the requested
+value or values in "answer". Do not put analysis, reasoning, a preamble,
+uncertainty discussion, or markdown in the field.
 
-<original-task>
-%s
-</original-task>
+Question date: %s
+Question type: %s
+Question: %s
 
-<truncated-draft>
+<incomplete-draft>
 %s
-</truncated-draft>`, prompt, strings.TrimSpace(draft))
+</incomplete-draft>`,
+			inst.QuestionDate, inst.QuestionType, inst.Question, draft)
+	} else {
+		userPrompt = fmt.Sprintf(`The previous response was empty. Answer the
+source task below. Return one JSON object with exactly one non-empty string
+field named "answer". Put only the concise final answer in the field, with no
+analysis, reasoning, preamble, uncertainty discussion, or markdown.
+
+<source-task>
+%s
+</source-task>`, prompt)
+	}
 	req := newLongMemEvalAnswerRequest(userPrompt)
 	maxTokens := lmeAnswerRetryMaxTokens
 	req.MaxTokens = &maxTokens
 	req.Messages = append([]model.Message{
 		model.NewSystemMessage(
-			"Repair the truncated draft. Output only the requested final answer. Never reveal analysis or reasoning.",
+			"Call submit_longmemeval_answer exactly once. Do not write text or reveal analysis or reasoning.",
 		),
 	}, req.Messages...)
+	req.Tools = map[string]tool.Tool{
+		lmeAnswerRepairToolName: lmeAnswerRepairTool{},
+	}
+	req.ExtraFields = map[string]any{
+		"tool_choice": map[string]any{
+			"type": "function",
+			"function": map[string]string{
+				"name": lmeAnswerRepairToolName,
+			},
+		},
+	}
 	return req
+}
+
+type lmeAnswerRepairTool struct{}
+
+func (lmeAnswerRepairTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{
+		Name: lmeAnswerRepairToolName,
+		Description: "Submit the concise final answer to the " +
+			"LongMemEval question.",
+		InputSchema: &tool.Schema{
+			Type:                 "object",
+			AdditionalProperties: false,
+			Properties: map[string]*tool.Schema{
+				"answer": {
+					Type: "string",
+					Description: "The final answer only, without " +
+						"analysis, reasoning, or markdown.",
+				},
+			},
+			Required: []string{"answer"},
+		},
+	}
 }
 
 func buildLongMemEvalAnswerPrompt(inst *lmeInstance, hits []memoryHit) string {

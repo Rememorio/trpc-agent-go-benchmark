@@ -220,6 +220,45 @@ func TestResolveLongMemEvalAnswerRetriesTransientFailure(t *testing.T) {
 	}
 }
 
+func TestResolveLongMemEvalAnswerDoesNotReplayMalformedRepair(t *testing.T) {
+	t.Parallel()
+
+	length := "length"
+	stop := "stop"
+	base := &queuedAnswerModel{responses: []*model.Response{
+		{Choices: []model.Choice{{
+			Message:      model.NewAssistantMessage("partial"),
+			FinishReason: &length,
+		}}},
+		{Choices: []model.Choice{{
+			Message:      model.NewAssistantMessage("not JSON"),
+			FinishReason: &stop,
+		}}},
+		{Choices: []model.Choice{{
+			Message: model.NewAssistantMessage("late answer"),
+		}}},
+	}}
+	tracker := &lmeTokenTracker{}
+	llm := &lmeTrackingModel{base: base, tracker: tracker}
+	cache, err := openLongMemEvalAnswerCache("")
+	if err != nil {
+		t.Fatalf("open cache: %v", err)
+	}
+	raw, _, _, attempts, _, err := resolveLongMemEvalAnswerWithRetries(
+		context.Background(), llm, tracker, "answer-model", "glm",
+		&lmeInstance{Question: "Which option?"}, nil, cache, "",
+	)
+	if raw != "not JSON" ||
+		!errors.Is(err, errLongMemEvalAnswerRepair) {
+		t.Fatalf("answer = %q, err = %v", raw, err)
+	}
+	if len(attempts) != 1 || len(base.requests) != lmeAnswerMaxAttempts ||
+		len(base.responses) != 1 {
+		t.Fatalf("attempts = %d, requests = %d, responses = %d",
+			len(attempts), len(base.requests), len(base.responses))
+	}
+}
+
 func TestResolveLongMemEvalAnswerDoesNotReplayEmptyAttempts(t *testing.T) {
 	t.Parallel()
 
@@ -238,7 +277,7 @@ func TestResolveLongMemEvalAnswerDoesNotReplayEmptyAttempts(t *testing.T) {
 		context.Background(), llm, tracker, "answer-model", "glm",
 		&lmeInstance{Question: "Which option?"}, nil, cache, "",
 	)
-	if raw != "" || !errors.Is(err, errLongMemEvalAnswerEmpty) {
+	if raw != "" || !errors.Is(err, errLongMemEvalAnswerRepair) {
 		t.Fatalf("answer = %q, err = %v", raw, err)
 	}
 	if len(attempts) != 1 || len(base.requests) != lmeAnswerMaxAttempts ||

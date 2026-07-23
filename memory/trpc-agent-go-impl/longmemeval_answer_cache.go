@@ -278,7 +278,8 @@ func resolveLongMemEvalAnswerWithRetries(
 			return raw, key, source, attempts, allUsage, ctx.Err()
 		}
 		if errors.Is(lastErr, errLongMemEvalAnswerTruncated) ||
-			errors.Is(lastErr, errLongMemEvalAnswerEmpty) {
+			errors.Is(lastErr, errLongMemEvalAnswerEmpty) ||
+			errors.Is(lastErr, errLongMemEvalAnswerRepair) {
 			return raw, key, source, attempts, allUsage, lastErr
 		}
 		existingAnswer = ""

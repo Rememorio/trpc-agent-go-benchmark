@@ -906,6 +906,13 @@ func TestValidateLongMemEvalProtocolRejectsInvalidContracts(t *testing.T) {
 			want: "answer generation contract",
 		},
 		{
+			name: "answer retry response format",
+			mutate: func(p *lmeProtocolProvenance) {
+				p.AnswerGeneration.RetryResponseFormat = ""
+			},
+			want: "answer retry response format is missing",
+		},
+		{
 			name: "judge generation",
 			mutate: func(p *lmeProtocolProvenance) {
 				p.JudgeGeneration.RepairMaxTokens = 0
@@ -922,5 +929,15 @@ func TestValidateLongMemEvalProtocolRejectsInvalidContracts(t *testing.T) {
 				t.Fatalf("error = %v, want containing %q", err, test.want)
 			}
 		})
+	}
+
+	legacy := valid
+	legacy.AnswerGeneration.RetryPromptVersion =
+		"lme-memory-answer-repair-v1"
+	legacy.AnswerGeneration.RetryStrategy =
+		"compress-truncated-draft"
+	legacy.AnswerGeneration.RetryResponseFormat = ""
+	if err := validateLongMemEvalProtocol(legacy); err != nil {
+		t.Fatalf("validate legacy answer repair protocol: %v", err)
 	}
 }
