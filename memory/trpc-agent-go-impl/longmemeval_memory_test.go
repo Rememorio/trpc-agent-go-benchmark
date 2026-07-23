@@ -1930,6 +1930,49 @@ func TestExtractionTraceEvidenceDistinguishesPersistence(t *testing.T) {
 	}
 }
 
+func TestAnswerTurnMemoryRetention(t *testing.T) {
+	t.Parallel()
+
+	br := &backendResult{
+		IngestTraces: []ingestTrace{
+			{
+				HasAnswer: true,
+				NewMemories: []memorySnapshot{
+					{ID: "retained", Memory: "stable answer detail"},
+					{ID: "mutated", Memory: "specific answer detail"},
+					{ID: "missing", Memory: "temporary answer detail"},
+				},
+			},
+			{
+				NewMemories: []memorySnapshot{{
+					ID:     "unlabeled",
+					Memory: "not from an answer-bearing turn",
+				}},
+			},
+		},
+		FinalMemories: []memorySnapshot{
+			{ID: "retained", Memory: "stable answer detail"},
+			{ID: "mutated", Memory: "generic summary"},
+			{ID: "unlabeled", Memory: "not from an answer-bearing turn"},
+		},
+	}
+	evidence := computeEvidenceMetrics(&lmeInstance{}, br, 30)
+	if evidence.AnswerTurnOutputMemories != 3 ||
+		evidence.AnswerTurnOutputRetained != 1 ||
+		evidence.AnswerTurnOutputMutated != 1 ||
+		evidence.AnswerTurnOutputMissing != 1 {
+		t.Fatalf("answer-turn retention counts = %+v", evidence)
+	}
+	if !slices.Equal(evidence.AnswerTurnOutputRetainedIDs,
+		[]string{"retained"}) ||
+		!slices.Equal(evidence.AnswerTurnOutputMutatedIDs,
+			[]string{"mutated"}) ||
+		!slices.Equal(evidence.AnswerTurnOutputMissingIDs,
+			[]string{"missing"}) {
+		t.Fatalf("answer-turn retention IDs = %+v", evidence)
+	}
+}
+
 func TestNormalizedFailureStageMigratesLegacyStages(t *testing.T) {
 	tests := []struct {
 		name   string

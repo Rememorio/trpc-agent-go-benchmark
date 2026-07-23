@@ -388,6 +388,13 @@ type evidenceMetrics struct {
 	ExtractionTraceTurnRecallAny  bool     `json:"extraction_trace_turn_recall_any"`
 	ExtractTurnRecallAny          bool     `json:"extract_turn_recall_any"`
 	RetrievalTurnRecallAny        bool     `json:"retrieval_turn_recall_any"`
+	AnswerTurnOutputMemories      int      `json:"answer_turn_output_memories"`
+	AnswerTurnOutputRetained      int      `json:"answer_turn_output_retained"`
+	AnswerTurnOutputMutated       int      `json:"answer_turn_output_mutated"`
+	AnswerTurnOutputMissing       int      `json:"answer_turn_output_missing"`
+	AnswerTurnOutputRetainedIDs   []string `json:"answer_turn_output_retained_ids,omitempty"`
+	AnswerTurnOutputMutatedIDs    []string `json:"answer_turn_output_mutated_ids,omitempty"`
+	AnswerTurnOutputMissingIDs    []string `json:"answer_turn_output_missing_ids,omitempty"`
 }
 
 type pgvectorBackend struct {
@@ -3095,7 +3102,7 @@ func saveCaseLog(
 	fmt.Fprintf(&b, "Backend: %s\nUserID: %s\nPairs: %d\nSnapshotTruncated: %v\nError: %s\nAnswerError: %s\n\n",
 		br.Backend, br.UserID, br.IngestedPairs, br.SnapshotTruncated, br.Error, br.AnswerError)
 	if br.Evidence != nil {
-		fmt.Fprintf(&b, "Evidence: stage=%s has_labels=%v abstention=%v has_extraction_trace=%v trace_any=%v extract_any=%v retrieval_any=%v retrieval_all=%v turn_trace_any=%v turn_extract_any=%v turn_retrieval_any=%v traced=%s extracted=%s retrieved=%s\n\n",
+		fmt.Fprintf(&b, "Evidence: stage=%s has_labels=%v abstention=%v has_extraction_trace=%v trace_any=%v extract_any=%v retrieval_any=%v retrieval_all=%v turn_trace_any=%v turn_extract_any=%v turn_retrieval_any=%v answer_outputs=%d retained=%d mutated=%d missing=%d traced=%s extracted=%s retrieved=%s\n\n",
 			br.FailureStage,
 			br.Evidence.HasEvidenceLabels,
 			br.Evidence.IsAbstention,
@@ -3107,6 +3114,10 @@ func saveCaseLog(
 			br.Evidence.ExtractionTraceTurnRecallAny,
 			br.Evidence.ExtractTurnRecallAny,
 			br.Evidence.RetrievalTurnRecallAny,
+			br.Evidence.AnswerTurnOutputMemories,
+			br.Evidence.AnswerTurnOutputRetained,
+			br.Evidence.AnswerTurnOutputMutated,
+			br.Evidence.AnswerTurnOutputMissing,
 			strings.Join(br.Evidence.ExtractionTraceSourceSessions, ","),
 			strings.Join(br.Evidence.ExtractedSourceSessions, ","),
 			strings.Join(br.Evidence.RetrievedSourceSessions, ","))
@@ -3784,6 +3795,13 @@ func computeEvidenceMetrics(inst *lmeInstance, br *backendResult, topK int) *evi
 	ev.RetrievedSourceSessions = matchingSourceSessionsFromHits(br.Retrieval, answerSet)
 	ev.ExtractTurnRecallAny = hasAnswerSourceSnapshot(br.FinalMemories)
 	ev.RetrievalTurnRecallAny = hasAnswerSourceHit(br.Retrieval)
+	ev.AnswerTurnOutputMemories,
+		ev.AnswerTurnOutputRetainedIDs,
+		ev.AnswerTurnOutputMutatedIDs,
+		ev.AnswerTurnOutputMissingIDs = answerTurnMemoryRetention(br)
+	ev.AnswerTurnOutputRetained = len(ev.AnswerTurnOutputRetainedIDs)
+	ev.AnswerTurnOutputMutated = len(ev.AnswerTurnOutputMutatedIDs)
+	ev.AnswerTurnOutputMissing = len(ev.AnswerTurnOutputMissingIDs)
 	if !ev.HasEvidenceLabels {
 		return ev
 	}
@@ -3794,6 +3812,48 @@ func computeEvidenceMetrics(inst *lmeInstance, br *backendResult, topK int) *evi
 	ev.RetrievalRecallAny = intersects(retrievedSet, answerSet)
 	ev.RetrievalRecallAll = containsAll(retrievedSet, answerSet)
 	return ev
+}
+
+func answerTurnMemoryRetention(
+	br *backendResult,
+) (int, []string, []string, []string) {
+	if br == nil {
+		return 0, nil, nil, nil
+	}
+	answerOutputs := make(map[string]string)
+	for _, trace := range br.IngestTraces {
+		if !trace.HasAnswer {
+			continue
+		}
+		for _, mem := range trace.NewMemories {
+			answerOutputs[memoryIdentity(mem)] = strings.TrimSpace(mem.Memory)
+		}
+	}
+	if len(answerOutputs) == 0 {
+		return 0, nil, nil, nil
+	}
+	final := make(map[string]string, len(br.FinalMemories))
+	for _, mem := range br.FinalMemories {
+		final[memoryIdentity(mem)] = strings.TrimSpace(mem.Memory)
+	}
+	var retained []string
+	var mutated []string
+	var missing []string
+	for id, text := range answerOutputs {
+		finalText, ok := final[id]
+		switch {
+		case !ok:
+			missing = append(missing, id)
+		case finalText == text:
+			retained = append(retained, id)
+		default:
+			mutated = append(mutated, id)
+		}
+	}
+	sort.Strings(retained)
+	sort.Strings(mutated)
+	sort.Strings(missing)
+	return len(answerOutputs), retained, mutated, missing
 }
 
 func extractionTraceEvidence(
