@@ -53,6 +53,13 @@ type lmeBackendAnalysis struct {
 	ErrorCounts    map[string]int
 }
 
+type lmeMemoryResponseCacheComparisonMode int
+
+const (
+	lmeMemoryResponseCachesShared lmeMemoryResponseCacheComparisonMode = iota
+	lmeMemoryResponseCachesIndependent
+)
+
 type lmeCompareRow struct {
 	QuestionID              string
 	QuestionType            string
@@ -189,6 +196,15 @@ func writeLongMemEvalComparisonTSV(outputDir, name string, rows []lmeCompareRow)
 }
 
 func validateLongMemEvalComparison(baseline, candidate *runResult) error {
+	return validateLongMemEvalComparisonWithMemoryResponseCaches(
+		baseline, candidate, lmeMemoryResponseCachesShared,
+	)
+}
+
+func validateLongMemEvalComparisonWithMemoryResponseCaches(
+	baseline, candidate *runResult,
+	cacheMode lmeMemoryResponseCacheComparisonMode,
+) error {
 	if baseline == nil || candidate == nil {
 		return errors.New("LongMemEval comparison results must not be nil")
 	}
@@ -303,7 +319,6 @@ func validateLongMemEvalComparison(baseline, candidate *runResult) error {
 		for _, key := range []string{
 			"model_response_cache_format_version",
 			"model_response_cache_shared",
-			"model_response_cache_ledger_id",
 			"model_response_cache_errors",
 			"user_scope",
 			"user_scope_explicit",
@@ -312,6 +327,16 @@ func validateLongMemEvalComparison(baseline, candidate *runResult) error {
 				baseline.Metadata,
 				candidate.Metadata,
 				key,
+				true,
+			); err != nil {
+				return err
+			}
+		}
+		if cacheMode == lmeMemoryResponseCachesShared {
+			if err := compareLongMemEvalMetadataValue(
+				baseline.Metadata,
+				candidate.Metadata,
+				"model_response_cache_ledger_id",
 				true,
 			); err != nil {
 				return err
@@ -354,13 +379,22 @@ func validateLongMemEvalComparison(baseline, candidate *runResult) error {
 		for _, key := range []string{
 			"embedding_response_cache_format_version",
 			"embedding_response_cache_shared",
-			"embedding_response_cache_ledger_id",
 			"embedding_response_cache_errors",
 		} {
 			if err := compareLongMemEvalMetadataValue(
 				baseline.Metadata,
 				candidate.Metadata,
 				key,
+				true,
+			); err != nil {
+				return err
+			}
+		}
+		if cacheMode == lmeMemoryResponseCachesShared {
+			if err := compareLongMemEvalMetadataValue(
+				baseline.Metadata,
+				candidate.Metadata,
+				"embedding_response_cache_ledger_id",
 				true,
 			); err != nil {
 				return err

@@ -256,7 +256,9 @@ func loadLongMemEvalReplicateComparison(
 		if err != nil {
 			return manifest, manifestDigest, nil, fmt.Errorf("load replicate %q candidate: %w", spec.Name, err)
 		}
-		if err := validateLongMemEvalComparison(baseline, candidate); err != nil {
+		if err := validateLongMemEvalReplicateComparison(
+			baseline, candidate,
+		); err != nil {
 			return manifest, manifestDigest, nil, fmt.Errorf("validate replicate %q comparison: %w", spec.Name, err)
 		}
 		if err := validateLongMemEvalReplicateKind(spec, baseline, candidate); err != nil {
@@ -310,6 +312,81 @@ func loadLongMemEvalReplicateComparison(
 		})
 	}
 	return manifest, manifestDigest, pairs, nil
+}
+
+func validateLongMemEvalReplicateComparison(
+	baseline, candidate *runResult,
+) error {
+	if err := validateLongMemEvalIndependentMemoryResponseCaches(
+		baseline, candidate,
+	); err != nil {
+		return err
+	}
+	return validateLongMemEvalComparisonWithMemoryResponseCaches(
+		baseline, candidate, lmeMemoryResponseCachesIndependent,
+	)
+}
+
+func validateLongMemEvalIndependentMemoryResponseCaches(
+	baseline, candidate *runResult,
+) error {
+	if baseline == nil || candidate == nil {
+		return errors.New("LongMemEval replicate comparison results must not be nil")
+	}
+	for _, prefix := range []string{
+		"model_response_cache",
+		"embedding_response_cache",
+	} {
+		ledgerKey := prefix + "_ledger_id"
+		baselineLedger, baselineOK := lmeMetadataString(
+			baseline.Metadata, ledgerKey,
+		)
+		candidateLedger, candidateOK := lmeMetadataString(
+			candidate.Metadata, ledgerKey,
+		)
+		if !baselineOK || strings.TrimSpace(baselineLedger) == "" ||
+			!candidateOK || strings.TrimSpace(candidateLedger) == "" {
+			return fmt.Errorf(
+				"strict LongMemEval replicate comparison requires "+
+					"metadata %q in both results",
+				ledgerKey,
+			)
+		}
+		if baselineLedger == candidateLedger {
+			return fmt.Errorf(
+				"strict LongMemEval replicate comparison requires "+
+					"independent %s ledgers, both use %q",
+				strings.ReplaceAll(prefix, "_", " "), baselineLedger,
+			)
+		}
+		initialKey := prefix + "_initial_entries"
+		for _, result := range []struct {
+			name     string
+			metadata map[string]any
+		}{
+			{name: "baseline", metadata: baseline.Metadata},
+			{name: "candidate", metadata: candidate.Metadata},
+		} {
+			initial, ok := longMemEvalMetadataInt(
+				result.metadata[initialKey],
+			)
+			if !ok {
+				return fmt.Errorf(
+					"strict LongMemEval replicate comparison "+
+						"metadata %q is not an integer in %s",
+					initialKey, result.name,
+				)
+			}
+			if initial != 0 {
+				return fmt.Errorf(
+					"strict LongMemEval replicate comparison "+
+						"requires %s %s to be 0, got %d",
+					result.name, initialKey, initial,
+				)
+			}
+		}
+	}
+	return nil
 }
 
 func validateLongMemEvalReplicateManifest(manifest lmeReplicateComparisonManifest) error {

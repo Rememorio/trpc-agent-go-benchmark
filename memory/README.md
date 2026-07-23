@@ -554,7 +554,11 @@ the input files. Paths are resolved relative to the manifest:
 
 The first entry is the primary ingestion run. Later entries must be produced
 with `-lme-reanswer-reuse-source-answers=false`; every entry must start with
-empty, distinct answer and judge cache ledgers. The aggregator verifies that ingestion,
+empty, distinct answer and judge cache ledgers. The baseline and candidate
+memory source runs must also use separate, initially empty model and embedding
+response ledgers. This prevents arm order from changing provider-observed
+memory cost; cache-independent logical usage remains the promotion-gate basis.
+The aggregator verifies that ingestion,
 persisted memories, retrieval hits, and memory-layer usage are byte-stable after
 normalizing answer and judge fields. It then reports primary accuracy, majority
 accuracy, total correct answer replicates, per-type results, instability, and

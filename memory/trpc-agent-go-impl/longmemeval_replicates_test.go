@@ -559,6 +559,91 @@ func TestValidateLongMemEvalReplicateFreshCaches(t *testing.T) {
 	}
 }
 
+func TestValidateLongMemEvalReplicateComparisonRequiresIndependentFreshMemoryCaches(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	newPair := func() (*runResult, *runResult) {
+		baseline := longMemEvalReplicateFixtureResult(
+			"upstream-main",
+			"answer-ledger",
+			"judge-ledger",
+			lmeReplicateKindIndependentReanswer,
+			map[string][2]bool{
+				"pgvector": {true, true},
+				"mem0":     {true, true},
+			},
+		)
+		candidate := longMemEvalReplicateFixtureResult(
+			"candidate-2196",
+			"answer-ledger",
+			"judge-ledger",
+			lmeReplicateKindIndependentReanswer,
+			map[string][2]bool{"pgvector": {true, true}},
+		)
+		return baseline, candidate
+	}
+
+	baseline, candidate := newPair()
+	if err := validateLongMemEvalReplicateComparison(
+		baseline, candidate,
+	); err != nil {
+		t.Fatalf("valid independent memory caches: %v", err)
+	}
+
+	for _, test := range []struct {
+		name      string
+		mutate    func(*runResult, *runResult)
+		wantError string
+	}{
+		{
+			name: "shared model ledger",
+			mutate: func(baseline, candidate *runResult) {
+				candidate.Metadata["model_response_cache_ledger_id"] =
+					baseline.Metadata["model_response_cache_ledger_id"]
+			},
+			wantError: "independent model response cache ledgers",
+		},
+		{
+			name: "shared embedding ledger",
+			mutate: func(baseline, candidate *runResult) {
+				candidate.Metadata["embedding_response_cache_ledger_id"] =
+					baseline.Metadata["embedding_response_cache_ledger_id"]
+			},
+			wantError: "independent embedding response cache ledgers",
+		},
+		{
+			name: "nonempty candidate model ledger",
+			mutate: func(_, candidate *runResult) {
+				candidate.Metadata["model_response_cache_initial_entries"] = 1
+			},
+			wantError: "candidate model_response_cache_initial_entries to be 0",
+		},
+		{
+			name: "missing baseline embedding ledger",
+			mutate: func(baseline, _ *runResult) {
+				delete(
+					baseline.Metadata,
+					"embedding_response_cache_ledger_id",
+				)
+			},
+			wantError: "embedding_response_cache_ledger_id",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			baseline, candidate := newPair()
+			test.mutate(baseline, candidate)
+			err := validateLongMemEvalReplicateComparison(
+				baseline, candidate,
+			)
+			if err == nil || !strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf("validation error = %v, want %q", err, test.wantError)
+			}
+		})
+	}
+}
+
 func TestValidateLongMemEvalReplicateLogicalUsage(t *testing.T) {
 	t.Parallel()
 
@@ -750,8 +835,23 @@ func longMemEvalReplicateFixtureResult(
 	metadata["judge_cache_ledger_id"] = judgeLedger
 	metadata["judge_cache_initial_entries"] = 0
 	metadata["judge_cache_logical_usage_missing_hits"] = 0
+	metadata["model_response_cache_format_version"] =
+		lmeModelCacheFormatVersion
+	metadata["model_response_cache_shared"] = true
+	metadata["model_response_cache_ledger_id"] =
+		"model-ledger-" + implementation
 	metadata["model_response_cache_initial_entries"] = 0
 	metadata["model_response_cache_hits"] = 0
+	metadata["model_response_cache_errors"] = 0
+	metadata["embedding_response_cache_format_version"] =
+		lmeEmbeddingCacheFormatVersion
+	metadata["embedding_response_cache_shared"] = true
+	metadata["embedding_response_cache_ledger_id"] =
+		"embedding-ledger-" + implementation
+	metadata["embedding_response_cache_initial_entries"] = 0
+	metadata["embedding_response_cache_errors"] = 0
+	metadata["user_scope"] = "replicate-fixture"
+	metadata["user_scope_explicit"] = true
 	if kind == lmeReplicateKindIndependentReanswer {
 		metadata["reanswer_model"] = "answer-model"
 		metadata["reanswer_model_variant"] = "glm"
