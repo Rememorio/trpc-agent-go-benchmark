@@ -183,11 +183,19 @@ func TestMem0OSSReadSnapshotProvenance(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"results": []map[string]any{
 				{
-					"id": "keep",
+					"id":            "current-shape",
+					"attributed_to": "assistant",
 					"metadata": map[string]any{
 						"trpc_app_name":  "lme-memory",
 						"source_session": "session-1",
 						"has_answer":     true,
+					},
+				},
+				{
+					"id": "legacy-shape",
+					"metadata": map[string]any{
+						"trpc_app_name":  "lme-memory",
+						"source_session": "session-2",
 						"attributed_to":  "assistant",
 					},
 				},
@@ -215,16 +223,91 @@ func TestMem0OSSReadSnapshotProvenance(t *testing.T) {
 		t.Fatalf("read provenance: %v", err)
 	}
 	if truncated {
-		t.Fatal("two-record response was reported as truncated")
+		t.Fatal("small response was reported as truncated")
 	}
-	if len(provenance) != 1 {
-		t.Fatalf("provenance count = %d, want 1", len(provenance))
+	if len(provenance) != 2 {
+		t.Fatalf("provenance count = %d, want 2", len(provenance))
 	}
-	item := provenance["keep"]
+	item := provenance["current-shape"]
 	if !item.SourceHasAnswer ||
 		strings.Join(item.SourceSessions, ",") != "session-1" ||
 		item.AttributedTo != lmeAttributionAssistant {
 		t.Fatalf("provenance = %+v", item)
+	}
+	legacy := provenance["legacy-shape"]
+	if legacy.SourceHasAnswer ||
+		strings.Join(legacy.SourceSessions, ",") != "session-2" ||
+		legacy.AttributedTo != lmeAttributionAssistant {
+		t.Fatalf("legacy provenance = %+v", legacy)
+	}
+}
+
+func TestLongMemEvalMem0RecordAttribution(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		topLevel  string
+		metadata  map[string]any
+		want      string
+		wantError string
+	}{
+		{
+			name:     "current top-level response",
+			topLevel: "assistant",
+			metadata: map[string]any{},
+			want:     lmeAttributionAssistant,
+		},
+		{
+			name:     "legacy metadata response",
+			metadata: map[string]any{"attributed_to": "user"},
+			want:     lmeAttributionUser,
+		},
+		{
+			name:     "matching values",
+			topLevel: "assistant",
+			metadata: map[string]any{"attributed_to": "assistant"},
+			want:     lmeAttributionAssistant,
+		},
+		{
+			name:      "conflicting values",
+			topLevel:  "assistant",
+			metadata:  map[string]any{"attributed_to": "user"},
+			wantError: "conflicting attributed_to",
+		},
+		{
+			name:      "invalid top-level value",
+			topLevel:  "system",
+			metadata:  map[string]any{},
+			wantError: "invalid top-level attributed_to",
+		},
+		{
+			name:      "invalid metadata type",
+			metadata:  map[string]any{"attributed_to": true},
+			wantError: "want string",
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := longMemEvalMem0RecordAttribution(
+				test.topLevel,
+				test.metadata,
+			)
+			if test.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), test.wantError) {
+					t.Fatalf("error = %v, want %q", err, test.wantError)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("attribution: %v", err)
+			}
+			if got != test.want {
+				t.Fatalf("attribution = %q, want %q", got, test.want)
+			}
+		})
 	}
 }
 

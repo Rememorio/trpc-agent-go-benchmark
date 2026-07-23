@@ -364,8 +364,9 @@ func (b *mem0Backend) ReadSnapshotProvenance(
 	}
 	var payload struct {
 		Results []struct {
-			ID       string         `json:"id"`
-			Metadata map[string]any `json:"metadata"`
+			ID           string         `json:"id"`
+			AttributedTo string         `json:"attributed_to"`
+			Metadata     map[string]any `json:"metadata"`
 		} `json:"results"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
@@ -382,14 +383,62 @@ func (b *mem0Backend) ReadSnapshotProvenance(
 			continue
 		}
 		hasAnswer, _ := record.Metadata["has_answer"].(bool)
-		attributedTo, _ := record.Metadata["attributed_to"].(string)
+		attributedTo, err := longMemEvalMem0RecordAttribution(
+			record.AttributedTo,
+			record.Metadata,
+		)
+		if err != nil {
+			return nil, false, fmt.Errorf("memory %q: %w", record.ID, err)
+		}
 		out[record.ID] = lmeSnapshotProvenance{
 			SourceSessions:  []string{source},
 			SourceHasAnswer: hasAnswer,
-			AttributedTo:    normalizeMemoryAttribution(attributedTo),
+			AttributedTo:    attributedTo,
 		}
 	}
 	return out, len(payload.Results) >= lmeMem0OSSSnapshotLimit, nil
+}
+
+func longMemEvalMem0RecordAttribution(
+	topLevel string,
+	metadata map[string]any,
+) (string, error) {
+	topLevel = strings.TrimSpace(topLevel)
+	topLevelNormalized := normalizeMemoryAttribution(topLevel)
+	if topLevel != "" && topLevelNormalized == "" {
+		return "", fmt.Errorf("invalid top-level attributed_to %q", topLevel)
+	}
+
+	var metadataValue string
+	if raw, ok := metadata["attributed_to"]; ok && raw != nil {
+		value, ok := raw.(string)
+		if !ok {
+			return "", fmt.Errorf(
+				"metadata attributed_to has type %T, want string",
+				raw,
+			)
+		}
+		metadataValue = strings.TrimSpace(value)
+	}
+	metadataNormalized := normalizeMemoryAttribution(metadataValue)
+	if metadataValue != "" && metadataNormalized == "" {
+		return "", fmt.Errorf(
+			"invalid metadata attributed_to %q",
+			metadataValue,
+		)
+	}
+	if topLevelNormalized != "" && metadataNormalized != "" &&
+		topLevelNormalized != metadataNormalized {
+		return "", fmt.Errorf(
+			"conflicting attributed_to values: top-level=%q metadata=%q",
+			topLevel,
+			metadataValue,
+		)
+	}
+	if topLevelNormalized != "" {
+		return topLevelNormalized, nil
+	}
+	return metadataNormalized, nil
 }
 
 func longMemEvalMem0RecordMatchesApp(metadata map[string]any, appName string) bool {
