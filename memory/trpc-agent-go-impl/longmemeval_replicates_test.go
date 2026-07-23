@@ -67,6 +67,34 @@ func TestCompareLongMemEvalReplicates(t *testing.T) {
 	}
 }
 
+func TestCompareLongMemEvalIndependentReanswers(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	manifestPath := writeLongMemEvalReplicateFixture(
+		t, dir, lmeReplicateKindIndependentReanswer,
+	)
+	outputDir := filepath.Join(dir, "output")
+	if err := compareLongMemEvalReplicates(manifestPath, outputDir); err != nil {
+		t.Fatalf("compare independent reanswers: %v", err)
+	}
+
+	data, err := os.ReadFile(
+		filepath.Join(outputDir, "replicate_comparison.json"),
+	)
+	if err != nil {
+		t.Fatalf("read replicate comparison: %v", err)
+	}
+	var comparison lmeReplicateComparison
+	if err := json.Unmarshal(data, &comparison); err != nil {
+		t.Fatalf("decode replicate comparison: %v", err)
+	}
+	if comparison.ReplicateCount != 3 ||
+		comparison.Arms[lmeReplicateArmPGVectorCandidate].MajorityCorrect != 2 {
+		t.Fatalf("unexpected comparison: %+v", comparison)
+	}
+}
+
 func TestReplicateGateUsesLogicalEmbeddingRequests(t *testing.T) {
 	t.Parallel()
 
@@ -257,7 +285,8 @@ func TestValidateLongMemEvalReplicateManifest(t *testing.T) {
 	}{
 		{name: "schema", mutate: func(m *lmeReplicateComparisonManifest) { m.SchemaVersion++ }, wantError: "schema version"},
 		{name: "even count", mutate: func(m *lmeReplicateComparisonManifest) { m.Replicates = m.Replicates[:2] }, wantError: "odd count"},
-		{name: "primary kind", mutate: func(m *lmeReplicateComparisonManifest) { m.Replicates[0].Kind = lmeReplicateKindIndependentReanswer }, wantError: "want \"primary\""},
+		{name: "unsupported first kind", mutate: func(m *lmeReplicateComparisonManifest) { m.Replicates[0].Kind = "unsupported" }, wantError: "want \"primary\" or \"independent-reanswer\""},
+		{name: "later primary kind", mutate: func(m *lmeReplicateComparisonManifest) { m.Replicates[1].Kind = lmeReplicateKindPrimary }, wantError: "want \"independent-reanswer\""},
 		{name: "duplicate name", mutate: func(m *lmeReplicateComparisonManifest) { m.Replicates[1].Name = "r1" }, wantError: "duplicated"},
 		{name: "gate", mutate: func(m *lmeReplicateComparisonManifest) { m.Gate.JudgeRuns = 2 }, wantError: "invalid promotion gate"},
 	} {
@@ -273,6 +302,16 @@ func TestValidateLongMemEvalReplicateManifest(t *testing.T) {
 	}
 	if err := validateLongMemEvalReplicateManifest(valid); err != nil {
 		t.Fatalf("valid manifest: %v", err)
+	}
+	allIndependent := valid
+	allIndependent.Replicates = append(
+		[]lmeReplicateComparisonPair(nil),
+		valid.Replicates...,
+	)
+	allIndependent.Replicates[0].Kind =
+		lmeReplicateKindIndependentReanswer
+	if err := validateLongMemEvalReplicateManifest(allIndependent); err != nil {
+		t.Fatalf("all-independent manifest: %v", err)
 	}
 }
 
@@ -330,9 +369,17 @@ func TestValidateLongMemEvalReplicateFreshCaches(t *testing.T) {
 	}
 }
 
-func writeLongMemEvalReplicateFixture(t *testing.T, dir string) string {
+func writeLongMemEvalReplicateFixture(
+	t *testing.T,
+	dir string,
+	firstKind ...string,
+) string {
 	t.Helper()
 
+	initialKind := lmeReplicateKindPrimary
+	if len(firstKind) > 0 {
+		initialKind = firstKind[0]
+	}
 	correctness := []struct {
 		main      [2]bool
 		mem0      [2]bool
@@ -355,7 +402,7 @@ func writeLongMemEvalReplicateFixture(t *testing.T, dir string) string {
 		name := "replicate-" + string(rune('1'+index))
 		kind := lmeReplicateKindIndependentReanswer
 		if index == 0 {
-			kind = lmeReplicateKindPrimary
+			kind = initialKind
 		}
 		replicateDir := filepath.Join(dir, name)
 		if err := os.MkdirAll(replicateDir, 0755); err != nil {

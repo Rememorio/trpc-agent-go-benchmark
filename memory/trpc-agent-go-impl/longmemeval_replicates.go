@@ -314,12 +314,26 @@ func validateLongMemEvalReplicateManifest(manifest lmeReplicateComparisonManifes
 		if strings.TrimSpace(replicate.BaselineResults) == "" || strings.TrimSpace(replicate.CandidateResults) == "" {
 			return fmt.Errorf("LongMemEval replicate %q has an empty results path", replicate.Name)
 		}
-		wantKind := lmeReplicateKindIndependentReanswer
 		if index == 0 {
-			wantKind = lmeReplicateKindPrimary
+			if replicate.Kind != lmeReplicateKindPrimary &&
+				replicate.Kind != lmeReplicateKindIndependentReanswer {
+				return fmt.Errorf(
+					"LongMemEval first replicate %q kind is %q, want %q or %q",
+					replicate.Name,
+					replicate.Kind,
+					lmeReplicateKindPrimary,
+					lmeReplicateKindIndependentReanswer,
+				)
+			}
+			continue
 		}
-		if replicate.Kind != wantKind {
-			return fmt.Errorf("LongMemEval replicate %q kind is %q, want %q", replicate.Name, replicate.Kind, wantKind)
+		if replicate.Kind != lmeReplicateKindIndependentReanswer {
+			return fmt.Errorf(
+				"LongMemEval replicate %q kind is %q, want %q",
+				replicate.Name,
+				replicate.Kind,
+				lmeReplicateKindIndependentReanswer,
+			)
 		}
 	}
 	gate := manifest.Gate
