@@ -1158,6 +1158,33 @@ func TestPrepareLongMemEvalMem0ConfiguresAndSanitizesRuntime(t *testing.T) {
 	}
 }
 
+func TestValidateLongMemEvalAttributionBackendsRejectsMem0Cloud(t *testing.T) {
+	oldCloud := *flagMem0Cloud
+	t.Cleanup(func() {
+		*flagMem0Cloud = oldCloud
+	})
+
+	*flagMem0Cloud = true
+	err := validateLongMemEvalAttributionBackends(
+		[]string{"pgvector", "mem0"},
+	)
+	if err == nil || !strings.Contains(err.Error(), "self-hosted Mem0 OSS") {
+		t.Fatalf("Mem0 Cloud attribution error = %v", err)
+	}
+	if err := validateLongMemEvalAttributionBackends(
+		[]string{"pgvector"},
+	); err != nil {
+		t.Fatalf("pgvector attribution validation: %v", err)
+	}
+
+	*flagMem0Cloud = false
+	if err := validateLongMemEvalAttributionBackends(
+		[]string{"mem0"},
+	); err != nil {
+		t.Fatalf("self-hosted Mem0 attribution validation: %v", err)
+	}
+}
+
 func TestPrepareLongMemEvalMem0Failures(t *testing.T) {
 	oldHost := *flagMem0Host
 	oldCloud := *flagMem0Cloud

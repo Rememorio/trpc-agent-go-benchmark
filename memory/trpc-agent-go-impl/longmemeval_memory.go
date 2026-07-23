@@ -777,6 +777,16 @@ func getMem0Host() string {
 	return strings.TrimRight(host, "/")
 }
 
+func validateLongMemEvalAttributionBackends(backends []string) error {
+	if !*flagMem0Cloud || !containsString(backends, "mem0") {
+		return nil
+	}
+	return errors.New(
+		"LongMemEval memory attribution requires self-hosted Mem0 OSS; " +
+			"the Mem0 Cloud adapter does not expose persisted attributed_to metadata",
+	)
+}
+
 func prepareLongMemEvalMem0(
 	ctx context.Context,
 	backends []string,
@@ -995,6 +1005,10 @@ func runLongMemEvalMemory(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	backends := parseMemoryBackends(*flagMemoryBackends)
+	if err := validateLongMemEvalAttributionBackends(backends); err != nil {
+		return err
+	}
 
 	modelName := getModelName()
 	modelVariant := getModelVariant()
@@ -1016,7 +1030,6 @@ func runLongMemEvalMemory(ctx context.Context) error {
 		return err
 	}
 
-	backends := parseMemoryBackends(*flagMemoryBackends)
 	mem0Implementation := ""
 	for _, backend := range backends {
 		if backend != "mem0" {
