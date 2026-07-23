@@ -3960,13 +3960,15 @@ func answerTurnMemoryRetention(
 	if br == nil {
 		return 0, nil, nil, nil
 	}
+	// A later answer turn can mutate the same lineage. Keep each distinct
+	// content state so the earlier answer-bearing evidence remains visible.
 	answerOutputs := make(map[string]memorySnapshot)
 	for _, trace := range br.IngestTraces {
 		if !trace.HasAnswer {
 			continue
 		}
 		for _, mem := range trace.NewMemories {
-			answerOutputs[memoryLineageIdentity(mem)] = mem
+			answerOutputs[memoryOutputStateIdentity(mem)] = mem
 		}
 	}
 	if len(answerOutputs) == 0 {
@@ -3979,7 +3981,8 @@ func answerTurnMemoryRetention(
 	var retained []string
 	var mutated []string
 	var missing []string
-	for lineage, output := range answerOutputs {
+	for _, output := range answerOutputs {
+		lineage := memoryLineageIdentity(output)
 		id := output.ID
 		if id == "" {
 			id = lineage
@@ -3999,6 +4002,11 @@ func answerTurnMemoryRetention(
 	sort.Strings(mutated)
 	sort.Strings(missing)
 	return len(answerOutputs), retained, mutated, missing
+}
+
+func memoryOutputStateIdentity(mem memorySnapshot) string {
+	return memoryLineageIdentity(mem) + "\x00content:" +
+		normalizedLongMemEvalComparisonText(mem.Memory)
 }
 
 func memoryLineageIdentity(mem memorySnapshot) string {

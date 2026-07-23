@@ -2033,16 +2033,16 @@ func TestAnswerTurnMemoryRetention(t *testing.T) {
 		},
 	}
 	evidence := computeEvidenceMetrics(&lmeInstance{}, br, 30)
-	if evidence.AnswerTurnOutputMemories != 4 ||
+	if evidence.AnswerTurnOutputMemories != 5 ||
 		evidence.AnswerTurnOutputRetained != 2 ||
-		evidence.AnswerTurnOutputMutated != 1 ||
+		evidence.AnswerTurnOutputMutated != 2 ||
 		evidence.AnswerTurnOutputMissing != 1 {
 		t.Fatalf("answer-turn retention counts = %+v", evidence)
 	}
 	if !slices.Equal(evidence.AnswerTurnOutputRetainedIDs,
 		[]string{"enriched-after", "retained"}) ||
 		!slices.Equal(evidence.AnswerTurnOutputMutatedIDs,
-			[]string{"mutated-before"}) ||
+			[]string{"enriched-before", "mutated-before"}) ||
 		!slices.Equal(evidence.AnswerTurnOutputMissingIDs,
 			[]string{"missing"}) {
 		t.Fatalf("answer-turn retention IDs = %+v", evidence)
