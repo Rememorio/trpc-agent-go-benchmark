@@ -150,15 +150,7 @@ func (t *lmeTokenTracker) Record(u *model.Usage) {
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.usage.PromptTokens += u.PromptTokens
-	t.usage.CompletionTokens += u.CompletionTokens
-	t.usage.TotalTokens += u.TotalTokens
-	t.usage.CachedTokens += u.PromptTokensDetails.CachedTokens
-	t.usage.CacheCreationTokens += u.PromptTokensDetails.CacheCreationTokens
-	t.usage.CacheReadTokens += u.PromptTokensDetails.CacheReadTokens
-	t.usage.ReasoningTokens += u.CompletionTokensDetails.ReasoningTokens
-	t.usage.LLMCalls++
-	t.usage.setCacheHitRate()
+	t.usage.Add(longMemEvalModelUsage(u))
 }
 
 func (t *lmeTokenTracker) Snapshot() lmeTokenUsage {
@@ -217,12 +209,14 @@ func (m *lmeTrackingModel) GenerateContent(
 		}
 		cacheIdentity = identity
 		call.CacheKey = key
-		responses, source, ok, err := m.responseCache.Lookup(key)
+		responses, source, logicalUsage, ok, err :=
+			m.responseCache.Lookup(key)
 		if err != nil {
 			return nil, err
 		}
 		if ok {
 			call.Source = source
+			call.LogicalTokenUsage = logicalUsage
 			return m.replayLongMemEvalModelResponses(responses, call), nil
 		}
 	}
@@ -254,6 +248,7 @@ func (m *lmeTrackingModel) GenerateContent(
 			responses = append(responses, cloneLongMemEvalModelResponse(resp))
 			if resp != nil && resp.Usage != nil {
 				m.tracker.Record(resp.Usage)
+				addLongMemEvalModelCallUsage(&call, resp.Usage)
 			}
 			trackLongMemEvalModelResponse(&call, resp)
 			if resp != nil && resp.Error != nil {
@@ -300,6 +295,39 @@ func (m *lmeTrackingModel) replayLongMemEvalModelResponses(
 		}
 	}()
 	return out
+}
+
+func longMemEvalModelUsage(usage *model.Usage) lmeTokenUsage {
+	if usage == nil {
+		return lmeTokenUsage{}
+	}
+	result := lmeTokenUsage{
+		PromptTokens:        usage.PromptTokens,
+		CompletionTokens:    usage.CompletionTokens,
+		TotalTokens:         usage.TotalTokens,
+		CachedTokens:        usage.PromptTokensDetails.CachedTokens,
+		CacheCreationTokens: usage.PromptTokensDetails.CacheCreationTokens,
+		CacheReadTokens:     usage.PromptTokensDetails.CacheReadTokens,
+		ReasoningTokens:     usage.CompletionTokensDetails.ReasoningTokens,
+		LLMCalls:            1,
+	}
+	result.setCacheHitRate()
+	return result
+}
+
+func addLongMemEvalModelCallUsage(
+	call *lmeModelCallTrace,
+	usage *model.Usage,
+) {
+	if call == nil || usage == nil {
+		return
+	}
+	current := longMemEvalModelUsage(usage)
+	if call.LogicalTokenUsage == nil {
+		call.LogicalTokenUsage = &current
+		return
+	}
+	call.LogicalTokenUsage.Add(current)
 }
 
 func trackLongMemEvalModelResponse(

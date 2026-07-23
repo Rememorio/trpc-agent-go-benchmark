@@ -212,13 +212,14 @@ type extractionTrace struct {
 }
 
 type lmeModelCallTrace struct {
-	Content      string             `json:"content,omitempty"`
-	ToolCalls    []lmeToolCallTrace `json:"tool_calls,omitempty"`
-	FinishReason string             `json:"finish_reason,omitempty"`
-	Source       string             `json:"source,omitempty"`
-	CacheKey     string             `json:"cache_key,omitempty"`
-	CacheError   string             `json:"cache_error,omitempty"`
-	Error        string             `json:"error,omitempty"`
+	Content           string             `json:"content,omitempty"`
+	ToolCalls         []lmeToolCallTrace `json:"tool_calls,omitempty"`
+	FinishReason      string             `json:"finish_reason,omitempty"`
+	Source            string             `json:"source,omitempty"`
+	CacheKey          string             `json:"cache_key,omitempty"`
+	LogicalTokenUsage *lmeTokenUsage     `json:"logical_token_usage,omitempty"`
+	CacheError        string             `json:"cache_error,omitempty"`
+	Error             string             `json:"error,omitempty"`
 }
 
 type lmeToolCallTrace struct {

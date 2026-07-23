@@ -174,7 +174,9 @@ func TestLongMemEvalTrackingModelPersistsAndReplaysResponse(t *testing.T) {
 	}
 	firstCalls := tracker.SnapshotCalls()
 	if len(firstCalls) != 1 || firstCalls[0].Source != lmeModelCallSourceModel ||
-		firstCalls[0].CacheKey == "" || firstCalls[0].CacheError != "" {
+		firstCalls[0].CacheKey == "" || firstCalls[0].CacheError != "" ||
+		firstCalls[0].LogicalTokenUsage == nil ||
+		firstCalls[0].LogicalTokenUsage.TotalTokens != 12 {
 		t.Fatalf("first-call trace = %#v", firstCalls)
 	}
 
@@ -223,7 +225,9 @@ func TestLongMemEvalTrackingModelPersistsAndReplaysResponse(t *testing.T) {
 	if len(replayCalls) != 1 ||
 		replayCalls[0].Source != lmeModelCallSourcePersistent ||
 		replayCalls[0].CacheKey != firstCalls[0].CacheKey ||
-		replayCalls[0].ToolCalls[0].Name != "memory_add" {
+		replayCalls[0].ToolCalls[0].Name != "memory_add" ||
+		replayCalls[0].LogicalTokenUsage == nil ||
+		replayCalls[0].LogicalTokenUsage.TotalTokens != 12 {
 		t.Fatalf("replay trace = %#v", replayCalls)
 	}
 	hits, misses, cacheErrors := reopened.Stats()

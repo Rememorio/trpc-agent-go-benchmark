@@ -175,21 +175,22 @@ func (c *longMemEvalModelResponseCache) Stats() (hits, misses, errors int) {
 
 func (c *longMemEvalModelResponseCache) Lookup(
 	key string,
-) ([]*model.Response, string, bool, error) {
+) ([]*model.Response, string, *lmeTokenUsage, bool, error) {
 	if c == nil {
-		return nil, "", false, nil
+		return nil, "", nil, false, nil
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	entry, ok := c.file.Entries[key]
 	if !ok {
 		c.misses++
-		return nil, "", false, nil
+		return nil, "", nil, false, nil
 	}
+	logicalUsage := longMemEvalModelResponseUsage(entry.Responses)
 	responses, err := cloneLongMemEvalModelResponses(entry.Responses, true)
 	if err != nil {
 		c.errors++
-		return nil, "", false, fmt.Errorf(
+		return nil, "", nil, false, fmt.Errorf(
 			"clone LongMemEval cached model responses: %w", err,
 		)
 	}
@@ -198,7 +199,7 @@ func (c *longMemEvalModelResponseCache) Lookup(
 		source = lmeModelCallSourcePersistent
 	}
 	c.hits++
-	return responses, source, true, nil
+	return responses, source, tokenUsagePtr(logicalUsage), true, nil
 }
 
 func (c *longMemEvalModelResponseCache) Put(
@@ -372,6 +373,18 @@ func cloneLongMemEvalModelResponses(
 	return cloned, nil
 }
 
+func longMemEvalModelResponseUsage(
+	responses []*model.Response,
+) lmeTokenUsage {
+	var usage lmeTokenUsage
+	for _, response := range responses {
+		if response != nil && response.Usage != nil {
+			usage.Add(longMemEvalModelUsage(response.Usage))
+		}
+	}
+	return usage
+}
+
 func initializeLongMemEvalModelResponseCacheMetadata(
 	metadata map[string]any,
 	cache *longMemEvalModelResponseCache,
@@ -386,7 +399,7 @@ func initializeLongMemEvalModelResponseCacheMetadata(
 		metadata["model_response_cache_ledger_id"] = ledgerID
 	}
 	metadata["model_response_cache_initial_entries"] = cache.Len()
-	metadata["model_response_cache_note"] = "Identical primary-run model requests share a content-addressed response stream; request prompts and headers are represented only by a hash, and cache hits contribute zero model calls and tokens."
+	metadata["model_response_cache_note"] = "Identical primary-run model requests share a content-addressed response stream; request prompts and headers are represented only by a hash. Cache hits contribute zero provider calls and tokens, while each model-call trace retains the cached response's original logical_token_usage."
 }
 
 func updateLongMemEvalModelResponseCacheMetadata(

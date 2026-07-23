@@ -47,6 +47,8 @@ func TestCompareLongMemEvalReplicates(t *testing.T) {
 			main, mem0, candidate)
 	}
 	if candidate.MemoryTokenUsage.TotalTokens != 240 ||
+		candidate.MemoryLogicalTokenUsage.TotalTokens != 240 ||
+		!candidate.MemoryLogicalUsageComplete ||
 		candidate.MemoryEmbeddingUsage.TotalTokens != 30 ||
 		candidate.FinalMemories != 12 {
 		t.Fatalf("unexpected candidate source cost: %+v", candidate)
@@ -102,7 +104,9 @@ func TestReplicateGateUsesLogicalEmbeddingRequests(t *testing.T) {
 		return &lmeReplicateArm{
 			Name: name, Cases: 2, MajorityCorrect: majority,
 			CorrectReplicates: correct, ProviderUsageReportedCases: 2,
-			MemoryTokenUsage: lmeTokenUsage{TotalTokens: 100},
+			MemoryTokenUsage:           lmeTokenUsage{TotalTokens: 100},
+			MemoryLogicalTokenUsage:    lmeTokenUsage{TotalTokens: 100},
+			MemoryLogicalUsageComplete: true,
 			MemoryEmbeddingUsage: lmeEmbeddingUsage{
 				Requests: requests, TotalTokens: providerTokens,
 			},
@@ -137,6 +141,66 @@ func TestReplicateGateUsesLogicalEmbeddingRequests(t *testing.T) {
 		}
 	}
 	t.Fatal("logical embedding request check is missing")
+}
+
+func TestReplicateGateRejectsIncompleteLogicalTokenCosts(t *testing.T) {
+	t.Parallel()
+
+	arm := func(name string) *lmeReplicateArm {
+		return &lmeReplicateArm{
+			Name: name, Cases: 2, MajorityCorrect: 1,
+			CorrectReplicates: 3, ProviderUsageReportedCases: 2,
+			MemoryTokenUsage:           lmeTokenUsage{TotalTokens: 100},
+			MemoryLogicalTokenUsage:    lmeTokenUsage{TotalTokens: 100},
+			MemoryLogicalUsageComplete: true,
+			MemoryEmbeddingUsage:       lmeEmbeddingUsage{Requests: 100},
+			FinalMemories:              10,
+			ByType: map[string]*lmeReplicateTypeSummary{
+				"single-session-user": {MajorityCorrect: 1},
+			},
+		}
+	}
+	main := arm(lmeReplicateArmPGVectorMain)
+	mem0 := arm(lmeReplicateArmMem0OSS)
+	candidate := arm(lmeReplicateArmPGVectorCandidate)
+	candidate.MajorityCorrect = 2
+	candidate.CorrectReplicates = 6
+	candidate.MemoryTokenUsage.TotalTokens = 1
+	candidate.MemoryLogicalTokenUsage = lmeTokenUsage{}
+	candidate.MemoryLogicalUsageComplete = false
+	candidate.MemoryModelRequests = 100
+	candidate.MemoryLogicalUsageMissing = 100
+	candidate.ModelCacheInitialKnown = true
+	candidate.ModelCacheInitialEntries = 200
+	candidate.MemoryModelCacheHits = 100
+
+	result := evaluateLongMemEvalReplicateGate(
+		&lmeReplicateComparison{Arms: map[string]*lmeReplicateArm{
+			lmeReplicateArmPGVectorMain:      main,
+			lmeReplicateArmMem0OSS:           mem0,
+			lmeReplicateArmPGVectorCandidate: candidate,
+		}},
+		lmeReplicatePromotionGate{
+			ExpectedCases: 2, JudgeRuns: 3, PerTypeMaxDeficit: 1,
+			MemoryLLMTokenRatioMaximum:         1.55,
+			MemoryEmbeddingRequestRatioMaximum: 2,
+			FinalMemoryCountRatioMaximum:       3,
+		},
+	)
+	if result.Passed {
+		t.Fatal("gate passed despite incomparable token costs")
+	}
+	for _, check := range result.Checks {
+		if check.Name != "candidate_memory_llm_tokens_vs_main" {
+			continue
+		}
+		if check.Passed ||
+			!strings.Contains(check.Actual, "candidate missing=100/100") {
+			t.Fatalf("token comparability check = %+v", check)
+		}
+		return
+	}
+	t.Fatal("token comparability check is missing")
 }
 
 func TestLongMemEvalReplicateValidationRejectsDrift(t *testing.T) {
@@ -369,6 +433,44 @@ func TestValidateLongMemEvalReplicateFreshCaches(t *testing.T) {
 	}
 }
 
+func TestReplicateSourceCostRetainsCachedLogicalUsage(t *testing.T) {
+	t.Parallel()
+
+	result := longMemEvalReplicateFixtureResult(
+		"candidate-2196",
+		"answer-ledger",
+		"judge-ledger",
+		lmeReplicateKindIndependentReanswer,
+		map[string][2]bool{"pgvector": {true, true}},
+	)
+	for _, cr := range result.Cases {
+		br := cr.BackendResults["pgvector"]
+		call := &br.IngestTraces[0].Extraction.ModelCalls[0]
+		call.Source = lmeModelCallSourcePersistent
+		br.TokenUsage = &lmeTokenUsage{
+			PromptTokens:     br.AnswerUsage.PromptTokens,
+			CompletionTokens: br.AnswerUsage.CompletionTokens,
+			TotalTokens:      br.AnswerUsage.TotalTokens,
+			LLMCalls:         br.AnswerUsage.LLMCalls,
+		}
+	}
+
+	arm := &lmeReplicateArm{}
+	if err := addLongMemEvalReplicateSourceCost(
+		arm, result, "pgvector",
+	); err != nil {
+		t.Fatalf("add source cost: %v", err)
+	}
+	if arm.MemoryTokenUsage.TotalTokens != 0 ||
+		arm.MemoryLogicalTokenUsage.TotalTokens != 240 ||
+		arm.MemoryModelRequests != 2 ||
+		arm.MemoryModelCacheHits != 2 ||
+		!arm.MemoryLogicalUsageComplete ||
+		arm.MemoryLogicalUsageMissing != 0 {
+		t.Fatalf("cached source cost = %+v", arm)
+	}
+}
+
 func writeLongMemEvalReplicateFixture(
 	t *testing.T,
 	dir string,
@@ -454,6 +556,8 @@ func longMemEvalReplicateFixtureResult(
 	metadata["answer_cache_initial_entries"] = 0
 	metadata["judge_cache_ledger_id"] = judgeLedger
 	metadata["judge_cache_initial_entries"] = 0
+	metadata["model_response_cache_initial_entries"] = 0
+	metadata["model_response_cache_hits"] = 0
 	if kind == lmeReplicateKindIndependentReanswer {
 		metadata["reanswer_model"] = "answer-model"
 		metadata["reanswer_model_variant"] = "glm"
@@ -518,6 +622,18 @@ func longMemEvalReplicateFixtureBackend(
 	return &backendResult{
 		Backend: backend, UserID: backend + "-" + questionID, SessionID: "session-" + questionID,
 		IngestedPairs: 1,
+		IngestTraces: []ingestTrace{{
+			Extraction: &extractionTrace{
+				ModelCalls: []lmeModelCallTrace{{
+					Source: lmeModelCallSourceModel,
+					LogicalTokenUsage: &lmeTokenUsage{
+						PromptTokens: memoryTokens,
+						TotalTokens:  memoryTokens,
+						LLMCalls:     1,
+					},
+				}},
+			},
+		}},
 		FinalMemories: memories,
 		Retrieval:     []memoryHit{{ID: questionID + "-hit", Memory: "stable answer evidence", Score: 0.9}},
 		Answer:        answer, RawAnswer: answer, AnswerSource: lmeAnswerSourceModel,

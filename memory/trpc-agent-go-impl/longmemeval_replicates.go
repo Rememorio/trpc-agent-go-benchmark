@@ -99,6 +99,14 @@ type lmeReplicateArm struct {
 	JudgeErrors                int                                 `json:"judge_errors"`
 	ProviderUsageReportedCases int                                 `json:"provider_usage_reported_cases"`
 	MemoryTokenUsage           lmeTokenUsage                       `json:"memory_token_usage"`
+	MemoryTokenUsageBasis      string                              `json:"memory_token_usage_basis"`
+	MemoryLogicalTokenUsage    lmeTokenUsage                       `json:"memory_logical_token_usage"`
+	MemoryLogicalUsageComplete bool                                `json:"memory_logical_usage_complete"`
+	MemoryLogicalUsageMissing  int                                 `json:"memory_logical_usage_missing_calls"`
+	ModelCacheInitialEntries   int                                 `json:"model_response_cache_initial_entries"`
+	ModelCacheInitialKnown     bool                                `json:"model_response_cache_initial_entries_known"`
+	MemoryModelRequests        int                                 `json:"memory_model_requests"`
+	MemoryModelCacheHits       int                                 `json:"memory_model_response_cache_hits"`
 	MemoryEmbeddingUsage       lmeEmbeddingUsage                   `json:"memory_embedding_usage"`
 	FinalMemories              int                                 `json:"final_memories"`
 	IngestDurationMs           int64                               `json:"ingest_duration_ms"`
@@ -692,6 +700,11 @@ func longMemEvalReplicateMemoryLayerUsage(br *backendResult) (lmeTokenUsage, err
 }
 
 func addLongMemEvalReplicateSourceCost(arm *lmeReplicateArm, result *runResult, backend string) error {
+	arm.MemoryTokenUsageBasis = "provider-observed"
+	arm.ModelCacheInitialEntries, arm.ModelCacheInitialKnown =
+		longMemEvalMetadataInt(
+			result.Metadata["model_response_cache_initial_entries"],
+		)
 	for _, cr := range result.Cases {
 		if cr == nil {
 			continue
@@ -705,6 +718,26 @@ func addLongMemEvalReplicateSourceCost(arm *lmeReplicateArm, result *runResult, 
 			return fmt.Errorf("source case %q backend %q usage: %w", cr.QuestionID, backend, err)
 		}
 		arm.MemoryTokenUsage.Add(memoryUsage)
+		for _, trace := range br.IngestTraces {
+			if trace.Extraction == nil {
+				continue
+			}
+			for _, call := range trace.Extraction.ModelCalls {
+				arm.MemoryModelRequests++
+				if call.LogicalTokenUsage == nil {
+					arm.MemoryLogicalUsageMissing++
+				} else {
+					arm.MemoryLogicalTokenUsage.Add(
+						*call.LogicalTokenUsage,
+					)
+				}
+				switch call.Source {
+				case lmeModelCallSourceCurrentRun,
+					lmeModelCallSourcePersistent:
+					arm.MemoryModelCacheHits++
+				}
+			}
+		}
 		arm.MemoryEmbeddingUsage.Add(*br.EmbeddingUsage)
 		arm.FinalMemories += len(br.FinalMemories)
 		arm.IngestDurationMs += br.IngestDuration
@@ -712,6 +745,18 @@ func addLongMemEvalReplicateSourceCost(arm *lmeReplicateArm, result *runResult, 
 		if br.ProviderUsageReported {
 			arm.ProviderUsageReportedCases++
 		}
+	}
+	// Mem0 reports complete usage from its own server and is not served by
+	// the benchmark's model-response cache. PGVector logical usage is
+	// reconstructed per request from either the provider response or the
+	// original usage retained in a response-cache entry.
+	if backend == "mem0" {
+		arm.MemoryLogicalTokenUsage = arm.MemoryTokenUsage
+		arm.MemoryLogicalUsageComplete = true
+	} else {
+		arm.MemoryLogicalUsageComplete =
+			arm.MemoryModelRequests > 0 &&
+				arm.MemoryLogicalUsageMissing == 0
 	}
 	return nil
 }
@@ -777,9 +822,30 @@ func evaluateLongMemEvalReplicateGate(
 			fmt.Sprintf("candidate=%d main=%d mem0=%d deficit=%d", candidateCorrect, mainCorrect, mem0Correct, deficit),
 			fmt.Sprintf("deficit <= %d and candidate nonzero when a baseline is nonzero", gate.PerTypeMaxDeficit))
 	}
-	addLongMemEvalReplicateRatioCheck(&result, "candidate_memory_llm_tokens_vs_main",
-		candidate.MemoryTokenUsage.TotalTokens, main.MemoryTokenUsage.TotalTokens,
-		gate.MemoryLLMTokenRatioMaximum)
+	if main.MemoryLogicalUsageComplete &&
+		candidate.MemoryLogicalUsageComplete {
+		addLongMemEvalReplicateRatioCheck(
+			&result,
+			"candidate_memory_llm_tokens_vs_main",
+			candidate.MemoryLogicalTokenUsage.TotalTokens,
+			main.MemoryLogicalTokenUsage.TotalTokens,
+			gate.MemoryLLMTokenRatioMaximum,
+		)
+	} else {
+		add(
+			"candidate_memory_llm_tokens_vs_main",
+			false,
+			fmt.Sprintf(
+				"logical usage incomplete: main missing=%d/%d; "+
+					"candidate missing=%d/%d",
+				main.MemoryLogicalUsageMissing,
+				main.MemoryModelRequests,
+				candidate.MemoryLogicalUsageMissing,
+				candidate.MemoryModelRequests,
+			),
+			"complete logical token usage for both PGVector arms",
+		)
+	}
 	addLongMemEvalReplicateRatioCheck(&result, "candidate_memory_embedding_requests_vs_main",
 		candidate.MemoryEmbeddingUsage.Requests, main.MemoryEmbeddingUsage.Requests,
 		gate.MemoryEmbeddingRequestRatioMaximum)
@@ -838,14 +904,17 @@ func formatLongMemEvalReplicateComparisonMarkdown(comparison *lmeReplicateCompar
 		gateStatus = "PASS"
 	}
 	fmt.Fprintf(&b, "- Promotion gate: **%s**\n\n", gateStatus)
-	b.WriteString("| Arm | Primary | Majority | Correct replicates | Unstable | Memory LLM tokens | Embedding requests | Embedding provider calls | Embedding provider tokens | Memories |\n")
-	b.WriteString("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
+	b.WriteString("| Arm | Primary | Majority | Correct replicates | Unstable | Provider-observed memory LLM tokens | Logical memory LLM tokens | Memory model cache hits | Logical cost complete | Embedding requests | Embedding provider calls | Embedding provider tokens | Memories |\n")
+	b.WriteString("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | :---: | ---: | ---: | ---: | ---: |\n")
 	for _, name := range []string{lmeReplicateArmPGVectorMain, lmeReplicateArmMem0OSS, lmeReplicateArmPGVectorCandidate} {
 		arm := comparison.Arms[name]
-		fmt.Fprintf(&b, "| %s | %d/%d | %d/%d | %d/%d | %d | %d | %d | %d | %d | %d |\n",
+		fmt.Fprintf(&b, "| %s | %d/%d | %d/%d | %d/%d | %d | %d | %d | %d | %t | %d | %d | %d | %d |\n",
 			name, arm.PrimaryCorrect, arm.Cases, arm.MajorityCorrect, arm.Cases,
 			arm.CorrectReplicates, arm.TotalAnswerReplicates, arm.UnstableCases,
-			arm.MemoryTokenUsage.TotalTokens, arm.MemoryEmbeddingUsage.Requests,
+			arm.MemoryTokenUsage.TotalTokens,
+			arm.MemoryLogicalTokenUsage.TotalTokens,
+			arm.MemoryModelCacheHits, arm.MemoryLogicalUsageComplete,
+			arm.MemoryEmbeddingUsage.Requests,
 			arm.MemoryEmbeddingUsage.Calls, arm.MemoryEmbeddingUsage.TotalTokens,
 			arm.FinalMemories)
 	}
