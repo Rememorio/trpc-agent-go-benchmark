@@ -615,7 +615,9 @@ func longMemEvalReplicateSourceDigest(result *runResult, backend string) (string
 	for key, value := range result.Metadata {
 		if strings.HasPrefix(key, "answer_cache_") || key == "answer_execution" ||
 			strings.HasPrefix(key, "reanswer_") ||
-			strings.HasPrefix(key, "judge_") || key == "reanswered_at" || key == "judged_at" {
+			strings.HasPrefix(key, "judge_") ||
+			key == "logical_usage_hydration" ||
+			key == "reanswered_at" || key == "judged_at" {
 			continue
 		}
 		metadata[key] = value

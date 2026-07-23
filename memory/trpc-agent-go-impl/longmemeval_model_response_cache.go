@@ -173,6 +173,22 @@ func (c *longMemEvalModelResponseCache) Stats() (hits, misses, errors int) {
 	return c.hits, c.misses, c.errors
 }
 
+func (c *longMemEvalModelResponseCache) LogicalUsage(
+	key string,
+) (lmeTokenUsage, bool) {
+	if c == nil {
+		return lmeTokenUsage{}, false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry, ok := c.file.Entries[key]
+	if !ok {
+		return lmeTokenUsage{}, false
+	}
+	usage := longMemEvalModelResponseUsage(entry.Responses)
+	return usage, !usage.IsZero()
+}
+
 func (c *longMemEvalModelResponseCache) Lookup(
 	key string,
 ) ([]*model.Response, string, *lmeTokenUsage, bool, error) {

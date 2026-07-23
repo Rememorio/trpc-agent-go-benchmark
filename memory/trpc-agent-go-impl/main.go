@@ -227,6 +227,11 @@ var (
 		"",
 		"Analyze an existing LongMemEval results.json and write analysis files",
 	)
+	flagLMEHydrateLogicalUsageResults = flag.String(
+		"lme-hydrate-logical-usage-results",
+		"",
+		"Backfill cached extraction token usage in an existing LongMemEval results.json",
+	)
 	flagLMEReanswerResults = flag.String(
 		"lme-reanswer-results",
 		"",

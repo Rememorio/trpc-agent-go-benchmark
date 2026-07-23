@@ -884,6 +884,13 @@ func runLongMemEvalMemory(ctx context.Context) error {
 			path, longMemEvalAnalysisOutputDir(path),
 		)
 	}
+	if path := strings.TrimSpace(
+		*flagLMEHydrateLogicalUsageResults,
+	); path != "" {
+		return hydrateLongMemEvalLogicalUsage(
+			path, longMemEvalAnalysisOutputDir(path),
+		)
+	}
 	if path := strings.TrimSpace(*flagLMEJudgeResults); path != "" {
 		return judgeLongMemEvalResults(ctx, path, longMemEvalAnalysisOutputDir(path))
 	}
