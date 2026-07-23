@@ -50,6 +50,7 @@ func TestCompareLongMemEvalReplicates(t *testing.T) {
 		candidate.MemoryLogicalTokenUsage.TotalTokens != 240 ||
 		!candidate.MemoryLogicalUsageComplete ||
 		candidate.MemoryEmbeddingUsage.TotalTokens != 30 ||
+		candidate.IngestedPairs != 2 ||
 		candidate.FinalMemories != 12 {
 		t.Fatalf("unexpected candidate source cost: %+v", candidate)
 	}
@@ -201,6 +202,111 @@ func TestReplicateGateRejectsIncompleteLogicalTokenCosts(t *testing.T) {
 		return
 	}
 	t.Fatal("token comparability check is missing")
+}
+
+func TestReplicateGateRejectsIngestionPairMismatch(t *testing.T) {
+	t.Parallel()
+
+	arm := func(
+		name string,
+		majority, correct, pairs int,
+	) *lmeReplicateArm {
+		return &lmeReplicateArm{
+			Name: name, Cases: 2, MajorityCorrect: majority,
+			CorrectReplicates: correct, ProviderUsageReportedCases: 2,
+			MemoryTokenUsage:           lmeTokenUsage{TotalTokens: 100},
+			MemoryLogicalTokenUsage:    lmeTokenUsage{TotalTokens: 100},
+			MemoryLogicalUsageComplete: true,
+			MemoryEmbeddingUsage:       lmeEmbeddingUsage{Requests: 100},
+			IngestedPairs:              pairs,
+			FinalMemories:              10,
+			ByType: map[string]*lmeReplicateTypeSummary{
+				"single-session-user": {MajorityCorrect: majority},
+			},
+		}
+	}
+	main := arm(lmeReplicateArmPGVectorMain, 0, 0, 2)
+	mem0 := arm(lmeReplicateArmMem0OSS, 0, 0, 2)
+	candidate := arm(lmeReplicateArmPGVectorCandidate, 2, 6, 1)
+	caseSummary := func(mainPairs, mem0Pairs, candidatePairs int) lmeReplicateCase {
+		return lmeReplicateCase{
+			QuestionType: "single-session-user",
+			Arms: map[string]lmeReplicateCaseArmSummary{
+				lmeReplicateArmPGVectorMain: {
+					IngestedPairs: mainPairs,
+				},
+				lmeReplicateArmMem0OSS: {
+					IngestedPairs: mem0Pairs,
+				},
+				lmeReplicateArmPGVectorCandidate: {
+					IngestedPairs: candidatePairs,
+				},
+			},
+		}
+	}
+	comparison := &lmeReplicateComparison{
+		Arms: map[string]*lmeReplicateArm{
+			lmeReplicateArmPGVectorMain:      main,
+			lmeReplicateArmMem0OSS:           mem0,
+			lmeReplicateArmPGVectorCandidate: candidate,
+		},
+		Cases: []lmeReplicateCase{
+			caseSummary(1, 1, 1),
+			caseSummary(1, 1, 0),
+		},
+	}
+	result := evaluateLongMemEvalReplicateGate(
+		comparison,
+		lmeReplicatePromotionGate{
+			ExpectedCases: 2, JudgeRuns: 3, PerTypeMaxDeficit: 0,
+			MemoryLLMTokenRatioMaximum:         1.55,
+			MemoryEmbeddingRequestRatioMaximum: 2,
+			FinalMemoryCountRatioMaximum:       3,
+		},
+	)
+	if result.Passed {
+		t.Fatal("gate passed despite missing candidate ingestion pair")
+	}
+	for _, check := range result.Checks {
+		if check.Name != lmeReplicateArmPGVectorCandidate+
+			"_ingested_pairs" {
+			continue
+		}
+		if check.Passed ||
+			check.Actual !=
+				"total=1 main_total=2 mismatched_cases=1" {
+			t.Fatalf("candidate ingestion check = %+v", check)
+		}
+		return
+	}
+	t.Fatal("candidate ingestion check is missing")
+}
+
+func TestReplicateSourceCostRejectsInconsistentIngestionTraceCount(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	result := longMemEvalReplicateFixtureResult(
+		"candidate-2196",
+		"answer-ledger",
+		"judge-ledger",
+		lmeReplicateKindIndependentReanswer,
+		map[string][2]bool{"pgvector": {true, true}},
+	)
+	result.Cases[0].BackendResults["pgvector"].IngestedPairs = 2
+	err := addLongMemEvalReplicateSourceCost(
+		&lmeReplicateArm{},
+		result,
+		"pgvector",
+	)
+	if err == nil ||
+		!strings.Contains(
+			err.Error(),
+			"records 2 ingested pairs but has 1 ingestion traces",
+		) {
+		t.Fatalf("source cost error = %v", err)
+	}
 }
 
 func TestLongMemEvalReplicateValidationRejectsDrift(t *testing.T) {

@@ -108,6 +108,7 @@ type lmeReplicateArm struct {
 	MemoryModelRequests        int                                 `json:"memory_model_requests"`
 	MemoryModelCacheHits       int                                 `json:"memory_model_response_cache_hits"`
 	MemoryEmbeddingUsage       lmeEmbeddingUsage                   `json:"memory_embedding_usage"`
+	IngestedPairs              int                                 `json:"ingested_pairs"`
 	FinalMemories              int                                 `json:"final_memories"`
 	IngestDurationMs           int64                               `json:"ingest_duration_ms"`
 	SearchDurationMs           int64                               `json:"search_duration_ms"`
@@ -132,6 +133,7 @@ type lmeReplicateCaseArmSummary struct {
 	PrimaryCorrect    bool     `json:"primary_correct"`
 	MajorityCorrect   bool     `json:"majority_correct"`
 	CorrectReplicates int      `json:"correct_replicates"`
+	IngestedPairs     int      `json:"ingested_pairs"`
 	Stages            []string `json:"stages"`
 }
 
@@ -505,6 +507,7 @@ func aggregateLongMemEvalReplicateArm(
 	caseStages := make(map[string][]string)
 	caseTypes := make(map[string]string)
 	casePrimary := make(map[string]bool)
+	caseIngestedPairs := make(map[string]int)
 	var sourceDigest string
 	for replicateIndex, pair := range pairs {
 		result := pair.Baseline
@@ -542,6 +545,7 @@ func aggregateLongMemEvalReplicateArm(
 			}
 			if replicateIndex == 0 {
 				casePrimary[cr.QuestionID] = correct
+				caseIngestedPairs[cr.QuestionID] = br.IngestedPairs
 			}
 			caseTypes[cr.QuestionID] = cr.QuestionType
 			caseStages[cr.QuestionID] = append(caseStages[cr.QuestionID],
@@ -599,7 +603,9 @@ func aggregateLongMemEvalReplicateArm(
 			Arms: map[string]lmeReplicateCaseArmSummary{
 				armName: {
 					PrimaryCorrect: casePrimary[id], MajorityCorrect: majority,
-					CorrectReplicates: correct, Stages: caseStages[id],
+					CorrectReplicates: correct,
+					IngestedPairs:     caseIngestedPairs[id],
+					Stages:            caseStages[id],
 				},
 			},
 		})
@@ -715,6 +721,20 @@ func addLongMemEvalReplicateSourceCost(arm *lmeReplicateArm, result *runResult, 
 		if br == nil {
 			return fmt.Errorf("source case %q is missing backend %q", cr.QuestionID, backend)
 		}
+		if br.IngestedPairs <= 0 {
+			return fmt.Errorf(
+				"source case %q backend %q has no ingested pairs",
+				cr.QuestionID, backend,
+			)
+		}
+		if br.IngestedPairs != len(br.IngestTraces) {
+			return fmt.Errorf(
+				"source case %q backend %q records %d ingested pairs "+
+					"but has %d ingestion traces",
+				cr.QuestionID, backend,
+				br.IngestedPairs, len(br.IngestTraces),
+			)
+		}
 		memoryUsage, err := longMemEvalReplicateMemoryLayerUsage(br)
 		if err != nil {
 			return fmt.Errorf("source case %q backend %q usage: %w", cr.QuestionID, backend, err)
@@ -741,6 +761,7 @@ func addLongMemEvalReplicateSourceCost(arm *lmeReplicateArm, result *runResult, 
 			}
 		}
 		arm.MemoryEmbeddingUsage.Add(*br.EmbeddingUsage)
+		arm.IngestedPairs += br.IngestedPairs
 		arm.FinalMemories += len(br.FinalMemories)
 		arm.IngestDurationMs += br.IngestDuration
 		arm.SearchDurationMs += br.SearchDuration
@@ -790,6 +811,9 @@ func evaluateLongMemEvalReplicateGate(
 				arm.MemoryTokenUsage.UsageMissingCalls, arm.MemoryEmbeddingUsage.UsageMissingCalls),
 			"reported for every case with zero missing calls")
 	}
+	addLongMemEvalReplicateIngestionChecks(
+		&result, comparison, main, mem0, candidate,
+	)
 	add("candidate_majority_vs_main", candidate.MajorityCorrect > main.MajorityCorrect,
 		fmt.Sprintf("%d > %d", candidate.MajorityCorrect, main.MajorityCorrect), "strictly greater")
 	add("candidate_majority_vs_mem0", candidate.MajorityCorrect > mem0.MajorityCorrect,
@@ -856,6 +880,58 @@ func evaluateLongMemEvalReplicateGate(
 	return result
 }
 
+func addLongMemEvalReplicateIngestionChecks(
+	result *lmeReplicateGateResult,
+	comparison *lmeReplicateComparison,
+	main *lmeReplicateArm,
+	others ...*lmeReplicateArm,
+) {
+	add := func(name string, passed bool, actual, requirement string) {
+		result.Checks = append(result.Checks, lmeReplicateGateCheck{
+			Name: name, Passed: passed, Actual: actual,
+			Requirement: requirement,
+		})
+		result.Passed = result.Passed && passed
+	}
+	mainInvalid := 0
+	for _, item := range comparison.Cases {
+		source, ok := item.Arms[main.Name]
+		if !ok || source.IngestedPairs <= 0 {
+			mainInvalid++
+		}
+	}
+	add(
+		main.Name+"_ingested_pairs",
+		main.IngestedPairs > 0 && mainInvalid == 0,
+		fmt.Sprintf(
+			"total=%d nonpositive_or_missing_cases=%d",
+			main.IngestedPairs, mainInvalid,
+		),
+		"positive for every case",
+	)
+	for _, arm := range others {
+		mismatched := 0
+		for _, item := range comparison.Cases {
+			source, sourceOK := item.Arms[main.Name]
+			actual, actualOK := item.Arms[arm.Name]
+			if !sourceOK || !actualOK ||
+				actual.IngestedPairs != source.IngestedPairs {
+				mismatched++
+			}
+		}
+		add(
+			arm.Name+"_ingested_pairs",
+			arm.IngestedPairs == main.IngestedPairs &&
+				mismatched == 0,
+			fmt.Sprintf(
+				"total=%d main_total=%d mismatched_cases=%d",
+				arm.IngestedPairs, main.IngestedPairs, mismatched,
+			),
+			"same total and per-case counts as pgvector_main",
+		)
+	}
+}
+
 func lmeReplicateTypeMajority(summary *lmeReplicateTypeSummary) int {
 	if summary == nil {
 		return 0
@@ -906,13 +982,14 @@ func formatLongMemEvalReplicateComparisonMarkdown(comparison *lmeReplicateCompar
 		gateStatus = "PASS"
 	}
 	fmt.Fprintf(&b, "- Promotion gate: **%s**\n\n", gateStatus)
-	b.WriteString("| Arm | Primary | Majority | Correct replicates | Unstable | Provider-observed memory LLM tokens | Logical memory LLM tokens | Memory model cache hits | Logical cost complete | Embedding requests | Embedding provider calls | Embedding provider tokens | Memories |\n")
-	b.WriteString("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | :---: | ---: | ---: | ---: | ---: |\n")
+	b.WriteString("| Arm | Primary | Majority | Correct replicates | Unstable | Pairs | Provider-observed memory LLM tokens | Logical memory LLM tokens | Memory model cache hits | Logical cost complete | Embedding requests | Embedding provider calls | Embedding provider tokens | Memories |\n")
+	b.WriteString("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | :---: | ---: | ---: | ---: | ---: |\n")
 	for _, name := range []string{lmeReplicateArmPGVectorMain, lmeReplicateArmMem0OSS, lmeReplicateArmPGVectorCandidate} {
 		arm := comparison.Arms[name]
-		fmt.Fprintf(&b, "| %s | %d/%d | %d/%d | %d/%d | %d | %d | %d | %d | %t | %d | %d | %d | %d |\n",
+		fmt.Fprintf(&b, "| %s | %d/%d | %d/%d | %d/%d | %d | %d | %d | %d | %d | %t | %d | %d | %d | %d |\n",
 			name, arm.PrimaryCorrect, arm.Cases, arm.MajorityCorrect, arm.Cases,
 			arm.CorrectReplicates, arm.TotalAnswerReplicates, arm.UnstableCases,
+			arm.IngestedPairs,
 			arm.MemoryTokenUsage.TotalTokens,
 			arm.MemoryLogicalTokenUsage.TotalTokens,
 			arm.MemoryModelCacheHits, arm.MemoryLogicalUsageComplete,
