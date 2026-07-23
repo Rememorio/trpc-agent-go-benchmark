@@ -14,7 +14,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -276,11 +275,6 @@ func resolveLongMemEvalAnswerWithRetries(
 		}
 		if ctx.Err() != nil {
 			return raw, key, source, attempts, allUsage, ctx.Err()
-		}
-		if errors.Is(lastErr, errLongMemEvalAnswerTruncated) ||
-			errors.Is(lastErr, errLongMemEvalAnswerEmpty) ||
-			errors.Is(lastErr, errLongMemEvalAnswerRepair) {
-			return raw, key, source, attempts, allUsage, lastErr
 		}
 		existingAnswer = ""
 	}

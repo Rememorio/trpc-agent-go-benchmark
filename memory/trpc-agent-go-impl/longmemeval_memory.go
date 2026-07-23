@@ -1638,10 +1638,6 @@ var errLongMemEvalAnswerTruncated = errors.New(
 	"model answer remained truncated after repair",
 )
 
-var errLongMemEvalAnswerEmpty = errors.New(
-	"model returned an empty answer after retry",
-)
-
 var errLongMemEvalAnswerRepair = errors.New(
 	"model returned an invalid structured answer repair",
 )
@@ -1734,9 +1730,7 @@ func answerFromMemories(ctx context.Context, llm model.Model, inst *lmeInstance,
 			return out, nil
 		}
 		lastErr = errors.New("model returned empty answer")
-		if attempt+1 == lmeAnswerMaxAttempts {
-			lastErr = errLongMemEvalAnswerEmpty
-		} else {
+		if attempt+1 < lmeAnswerMaxAttempts {
 			time.Sleep(time.Duration(attempt+1) * time.Second)
 		}
 	}

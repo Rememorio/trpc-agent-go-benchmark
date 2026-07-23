@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -137,7 +138,7 @@ func TestResolveLongMemEvalAnswerDoesNotCacheFailures(t *testing.T) {
 	}
 }
 
-func TestResolveLongMemEvalAnswerDoesNotReplayTruncatedAttempts(t *testing.T) {
+func TestResolveLongMemEvalAnswerRetriesTruncatedRepair(t *testing.T) {
 	t.Parallel()
 
 	cache, err := openLongMemEvalAnswerCache("")
@@ -165,6 +166,12 @@ func TestResolveLongMemEvalAnswerDoesNotReplayTruncatedAttempts(t *testing.T) {
 			}},
 			Usage: usage(),
 		},
+		{
+			Choices: []model.Choice{{
+				Message: model.NewAssistantMessage("complete answer"),
+			}},
+			Usage: usage(),
+		},
 	}}
 	tracker := &lmeTokenTracker{}
 	llm := &lmeTrackingModel{base: base, tracker: tracker}
@@ -173,22 +180,81 @@ func TestResolveLongMemEvalAnswerDoesNotReplayTruncatedAttempts(t *testing.T) {
 			context.Background(), llm, tracker, "answer-model", "glm",
 			&lmeInstance{Question: "Which option?"}, nil, cache, "",
 		)
-	if !errors.Is(err, errLongMemEvalAnswerTruncated) {
-		t.Fatalf("resolve truncated answer: %v", err)
+	if err != nil {
+		t.Fatalf("resolve retried answer: %v", err)
 	}
-	if raw != "partial two" || key == "" || source != lmeAnswerSourceModel {
+	if raw != "complete answer" || key == "" || source != lmeAnswerSourceModel {
 		t.Fatalf("answer=%q key=%q source=%q", raw, key, source)
 	}
-	if len(attempts) != 1 || attempts[0].Error == "" {
+	if len(attempts) != 2 || attempts[0].Error == "" ||
+		attempts[1].Error != "" {
 		t.Fatalf("attempts = %#v", attempts)
 	}
 	if len(attempts[0].ModelCalls) != 2 ||
-		len(longMemEvalAnswerAttemptCalls(attempts)) != 2 ||
-		total.LLMCalls != 2 || total.TotalTokens != 24 {
+		len(attempts[1].ModelCalls) != 1 ||
+		len(longMemEvalAnswerAttemptCalls(attempts)) != 3 ||
+		total.LLMCalls != 3 || total.TotalTokens != 36 {
 		t.Fatalf("attempt usage=%#v total=%+v", attempts, total)
 	}
-	if len(base.requests) != 2 || cache.Len() != 0 {
+	if len(base.requests) != 3 || cache.Len() != 1 {
 		t.Fatalf("requests=%d cache entries=%d", len(base.requests), cache.Len())
+	}
+}
+
+func TestResolveLongMemEvalAnswerBoundsTruncatedRepairRetries(t *testing.T) {
+	t.Parallel()
+
+	cache, err := openLongMemEvalAnswerCache("")
+	if err != nil {
+		t.Fatalf("open cache: %v", err)
+	}
+	length := "length"
+	usage := func() *model.Usage {
+		return &model.Usage{
+			PromptTokens: 10, CompletionTokens: 2, TotalTokens: 12,
+		}
+	}
+	responses := make([]*model.Response, 0, 2*(1+lmeAnswerMaxExtraAttempts))
+	for i := range cap(responses) {
+		responses = append(responses, &model.Response{
+			Choices: []model.Choice{{
+				Message: model.NewAssistantMessage(
+					fmt.Sprintf("partial %d", i+1),
+				),
+				FinishReason: &length,
+			}},
+			Usage: usage(),
+		})
+	}
+	base := &queuedAnswerModel{responses: responses}
+	tracker := &lmeTokenTracker{}
+	llm := &lmeTrackingModel{base: base, tracker: tracker}
+	raw, _, _, attempts, total, err := resolveLongMemEvalAnswerWithRetries(
+		context.Background(), llm, tracker, "answer-model", "glm",
+		&lmeInstance{Question: "Which option?"}, nil, cache, "",
+	)
+	if !errors.Is(err, errLongMemEvalAnswerTruncated) {
+		t.Fatalf("resolve truncated answer: %v", err)
+	}
+	if raw != "partial 6" {
+		t.Fatalf("answer = %q", raw)
+	}
+	if len(attempts) != 1+lmeAnswerMaxExtraAttempts {
+		t.Fatalf("attempts = %#v", attempts)
+	}
+	for i, attempt := range attempts {
+		if attempt.Error == "" || len(attempt.ModelCalls) != 2 {
+			t.Fatalf("attempt %d = %#v", i, attempt)
+		}
+	}
+	if len(base.requests) != 6 ||
+		len(longMemEvalAnswerAttemptCalls(attempts)) != 6 ||
+		total.LLMCalls != 6 || total.TotalTokens != 72 ||
+		cache.Len() != 0 {
+		t.Fatalf(
+			"requests=%d attempts=%#v total=%+v cache entries=%d",
+			len(base.requests), attempts, total, cache.Len(),
+		)
 	}
 }
 
@@ -220,7 +286,7 @@ func TestResolveLongMemEvalAnswerRetriesTransientFailure(t *testing.T) {
 	}
 }
 
-func TestResolveLongMemEvalAnswerDoesNotReplayMalformedRepair(t *testing.T) {
+func TestResolveLongMemEvalAnswerRetriesMalformedRepair(t *testing.T) {
 	t.Parallel()
 
 	length := "length"
@@ -248,18 +314,18 @@ func TestResolveLongMemEvalAnswerDoesNotReplayMalformedRepair(t *testing.T) {
 		context.Background(), llm, tracker, "answer-model", "glm",
 		&lmeInstance{Question: "Which option?"}, nil, cache, "",
 	)
-	if raw != "not JSON" ||
-		!errors.Is(err, errLongMemEvalAnswerRepair) {
+	if raw != "late answer" || err != nil {
 		t.Fatalf("answer = %q, err = %v", raw, err)
 	}
-	if len(attempts) != 1 || len(base.requests) != lmeAnswerMaxAttempts ||
-		len(base.responses) != 1 {
-		t.Fatalf("attempts = %d, requests = %d, responses = %d",
-			len(attempts), len(base.requests), len(base.responses))
+	if len(attempts) != 2 || attempts[0].Error == "" ||
+		attempts[1].Error != "" || len(base.requests) != 3 ||
+		len(base.responses) != 0 || cache.Len() != 1 {
+		t.Fatalf("attempts=%#v requests=%d responses=%d cache=%d",
+			attempts, len(base.requests), len(base.responses), cache.Len())
 	}
 }
 
-func TestResolveLongMemEvalAnswerDoesNotReplayEmptyAttempts(t *testing.T) {
+func TestResolveLongMemEvalAnswerRetriesEmptyAttempts(t *testing.T) {
 	t.Parallel()
 
 	base := &queuedAnswerModel{responses: []*model.Response{{}, {}, {
@@ -277,13 +343,14 @@ func TestResolveLongMemEvalAnswerDoesNotReplayEmptyAttempts(t *testing.T) {
 		context.Background(), llm, tracker, "answer-model", "glm",
 		&lmeInstance{Question: "Which option?"}, nil, cache, "",
 	)
-	if raw != "" || !errors.Is(err, errLongMemEvalAnswerRepair) {
+	if raw != "late answer" || err != nil {
 		t.Fatalf("answer = %q, err = %v", raw, err)
 	}
-	if len(attempts) != 1 || len(base.requests) != lmeAnswerMaxAttempts ||
-		len(base.responses) != 1 {
-		t.Fatalf("attempts = %d, requests = %d, responses = %d",
-			len(attempts), len(base.requests), len(base.responses))
+	if len(attempts) != 2 || attempts[0].Error == "" ||
+		attempts[1].Error != "" || len(base.requests) != 3 ||
+		len(base.responses) != 0 || cache.Len() != 1 {
+		t.Fatalf("attempts=%#v requests=%d responses=%d cache=%d",
+			attempts, len(base.requests), len(base.responses), cache.Len())
 	}
 }
 

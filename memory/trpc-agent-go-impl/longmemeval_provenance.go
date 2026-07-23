@@ -40,8 +40,8 @@ const (
 	// These versions are part of the experiment contract. Bump the relevant
 	// version whenever replay, prompting, or judging semantics change.
 	lmeProtocolVersion             = "lme-memory-turn-pair-v2"
-	lmeAnswerPromptVersion         = "lme-memory-answer-v12"
-	lmeAnswerRetryPromptVersion    = "lme-memory-answer-repair-v5"
+	lmeAnswerPromptVersion         = "lme-memory-answer-v13"
+	lmeAnswerRetryPromptVersion    = "lme-memory-answer-repair-v6"
 	lmeAnswerRetryStrategy         = "forced-answer-tool"
 	lmeAnswerRetryResponseFormat   = "forced_function_call"
 	lmeJudgePromptVersion          = "lme-official-superset-judge-v3"
@@ -106,21 +106,24 @@ type lmeProtocolProvenance struct {
 }
 
 type lmeAnswerGenerationProvenance struct {
-	PrimaryMaxTokens    int      `json:"primary_max_tokens"`
-	RetryMaxTokens      int      `json:"retry_max_tokens"`
-	MaxAttempts         int      `json:"max_attempts"`
-	RetryFinishReasons  []string `json:"retry_finish_reasons"`
-	RetryEmptyResponse  bool     `json:"retry_empty_response"`
-	RetryPromptVersion  string   `json:"retry_prompt_version,omitempty"`
-	RetryStrategy       string   `json:"retry_strategy,omitempty"`
-	RetryResponseFormat string   `json:"retry_response_format,omitempty"`
-	Temperature         float64  `json:"temperature"`
-	ReasoningEffort     string   `json:"reasoning_effort"`
-	ThinkingEnabled     bool     `json:"thinking_enabled"`
+	PrimaryMaxTokens     int      `json:"primary_max_tokens"`
+	RetryMaxTokens       int      `json:"retry_max_tokens"`
+	MaxAttempts          int      `json:"max_attempts"`
+	MaxExtraAttempts     int      `json:"max_extra_attempts,omitempty"`
+	RetryFinishReasons   []string `json:"retry_finish_reasons"`
+	RetryEmptyResponse   bool     `json:"retry_empty_response"`
+	RetryPromptVersion   string   `json:"retry_prompt_version,omitempty"`
+	RetryStrategy        string   `json:"retry_strategy,omitempty"`
+	RetryResponseFormat  string   `json:"retry_response_format,omitempty"`
+	ExecutionRetryErrors []string `json:"execution_retry_errors,omitempty"`
+	Temperature          float64  `json:"temperature"`
+	ReasoningEffort      string   `json:"reasoning_effort"`
+	ThinkingEnabled      bool     `json:"thinking_enabled"`
 }
 
 type lmeAnswerExecutionProvenance struct {
-	MaxExtraAttempts int `json:"max_extra_attempts"`
+	MaxExtraAttempts int      `json:"max_extra_attempts"`
+	RetryErrors      []string `json:"retry_errors"`
 }
 
 type lmeJudgeGenerationProvenance struct {
@@ -148,20 +151,31 @@ func currentLongMemEvalAnswerGeneration() lmeAnswerGenerationProvenance {
 		PrimaryMaxTokens:    lmeAnswerPrimaryMaxTokens,
 		RetryMaxTokens:      lmeAnswerRetryMaxTokens,
 		MaxAttempts:         lmeAnswerMaxAttempts,
+		MaxExtraAttempts:    lmeAnswerMaxExtraAttempts,
 		RetryFinishReasons:  []string{"length", "max_tokens"},
 		RetryEmptyResponse:  true,
 		RetryPromptVersion:  lmeAnswerRetryPromptVersion,
 		RetryStrategy:       lmeAnswerRetryStrategy,
 		RetryResponseFormat: lmeAnswerRetryResponseFormat,
-		Temperature:         0,
-		ReasoningEffort:     "low",
-		ThinkingEnabled:     false,
+		ExecutionRetryErrors: []string{
+			"transient_model_error",
+			"truncated_repair",
+			"invalid_repair",
+		},
+		Temperature:     0,
+		ReasoningEffort: "low",
+		ThinkingEnabled: false,
 	}
 }
 
 func currentLongMemEvalAnswerExecution() lmeAnswerExecutionProvenance {
 	return lmeAnswerExecutionProvenance{
 		MaxExtraAttempts: lmeAnswerMaxExtraAttempts,
+		RetryErrors: []string{
+			"transient_model_error",
+			"truncated_repair",
+			"invalid_repair",
+		},
 	}
 }
 
@@ -281,6 +295,14 @@ func validateLongMemEvalProtocol(protocol lmeProtocolProvenance) error {
 		protocol.AnswerGeneration.RetryResponseFormat == "" {
 		return errors.New(
 			"LongMemEval answer retry response format is missing",
+		)
+	}
+	if protocol.AnswerGeneration.RetryPromptVersion ==
+		lmeAnswerRetryPromptVersion &&
+		(protocol.AnswerGeneration.MaxExtraAttempts <= 0 ||
+			len(protocol.AnswerGeneration.ExecutionRetryErrors) == 0) {
+		return errors.New(
+			"LongMemEval answer execution retry contract is missing",
 		)
 	}
 	if protocol.JudgeGeneration.PrimaryMaxTokens <= 0 ||
