@@ -3820,31 +3820,36 @@ func answerTurnMemoryRetention(
 	if br == nil {
 		return 0, nil, nil, nil
 	}
-	answerOutputs := make(map[string]string)
+	answerOutputs := make(map[string]memorySnapshot)
 	for _, trace := range br.IngestTraces {
 		if !trace.HasAnswer {
 			continue
 		}
 		for _, mem := range trace.NewMemories {
-			answerOutputs[memoryIdentity(mem)] = strings.TrimSpace(mem.Memory)
+			answerOutputs[memoryLineageIdentity(mem)] = mem
 		}
 	}
 	if len(answerOutputs) == 0 {
 		return 0, nil, nil, nil
 	}
-	final := make(map[string]string, len(br.FinalMemories))
+	final := make(map[string]memorySnapshot, len(br.FinalMemories))
 	for _, mem := range br.FinalMemories {
-		final[memoryIdentity(mem)] = strings.TrimSpace(mem.Memory)
+		final[memoryLineageIdentity(mem)] = mem
 	}
 	var retained []string
 	var mutated []string
 	var missing []string
-	for id, text := range answerOutputs {
-		finalText, ok := final[id]
+	for lineage, output := range answerOutputs {
+		id := output.ID
+		if id == "" {
+			id = lineage
+		}
+		finalSnapshot, ok := final[lineage]
 		switch {
 		case !ok:
 			missing = append(missing, id)
-		case finalText == text:
+		case strings.TrimSpace(finalSnapshot.Memory) ==
+			strings.TrimSpace(output.Memory):
 			retained = append(retained, id)
 		default:
 			mutated = append(mutated, id)
@@ -3854,6 +3859,15 @@ func answerTurnMemoryRetention(
 	sort.Strings(mutated)
 	sort.Strings(missing)
 	return len(answerOutputs), retained, mutated, missing
+}
+
+func memoryLineageIdentity(mem memorySnapshot) string {
+	// Content-addressed backends change IDs on update, while created_at
+	// remains stable for the logical record. Other backends fall back to ID.
+	if !mem.CreatedAt.IsZero() {
+		return "created_at:" + mem.CreatedAt.UTC().Format(time.RFC3339Nano)
+	}
+	return "memory:" + memoryIdentity(mem)
 }
 
 func extractionTraceEvidence(

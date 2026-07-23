@@ -1933,15 +1933,34 @@ func TestExtractionTraceEvidenceDistinguishesPersistence(t *testing.T) {
 func TestAnswerTurnMemoryRetention(t *testing.T) {
 	t.Parallel()
 
+	createdAt := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
+	enrichedAt := createdAt.Add(time.Second)
 	br := &backendResult{
 		IngestTraces: []ingestTrace{
 			{
 				HasAnswer: true,
 				NewMemories: []memorySnapshot{
 					{ID: "retained", Memory: "stable answer detail"},
-					{ID: "mutated", Memory: "specific answer detail"},
+					{
+						ID:        "mutated-before",
+						Memory:    "specific answer detail",
+						CreatedAt: createdAt,
+					},
 					{ID: "missing", Memory: "temporary answer detail"},
+					{
+						ID:        "enriched-before",
+						Memory:    "partial answer detail",
+						CreatedAt: enrichedAt,
+					},
 				},
+			},
+			{
+				HasAnswer: true,
+				NewMemories: []memorySnapshot{{
+					ID:        "enriched-after",
+					Memory:    "complete answer detail",
+					CreatedAt: enrichedAt,
+				}},
 			},
 			{
 				NewMemories: []memorySnapshot{{
@@ -1952,21 +1971,30 @@ func TestAnswerTurnMemoryRetention(t *testing.T) {
 		},
 		FinalMemories: []memorySnapshot{
 			{ID: "retained", Memory: "stable answer detail"},
-			{ID: "mutated", Memory: "generic summary"},
+			{
+				ID:        "mutated-after",
+				Memory:    "generic summary",
+				CreatedAt: createdAt,
+			},
+			{
+				ID:        "enriched-final",
+				Memory:    "complete answer detail",
+				CreatedAt: enrichedAt,
+			},
 			{ID: "unlabeled", Memory: "not from an answer-bearing turn"},
 		},
 	}
 	evidence := computeEvidenceMetrics(&lmeInstance{}, br, 30)
-	if evidence.AnswerTurnOutputMemories != 3 ||
-		evidence.AnswerTurnOutputRetained != 1 ||
+	if evidence.AnswerTurnOutputMemories != 4 ||
+		evidence.AnswerTurnOutputRetained != 2 ||
 		evidence.AnswerTurnOutputMutated != 1 ||
 		evidence.AnswerTurnOutputMissing != 1 {
 		t.Fatalf("answer-turn retention counts = %+v", evidence)
 	}
 	if !slices.Equal(evidence.AnswerTurnOutputRetainedIDs,
-		[]string{"retained"}) ||
+		[]string{"enriched-after", "retained"}) ||
 		!slices.Equal(evidence.AnswerTurnOutputMutatedIDs,
-			[]string{"mutated"}) ||
+			[]string{"mutated-before"}) ||
 		!slices.Equal(evidence.AnswerTurnOutputMissingIDs,
 			[]string{"missing"}) {
 		t.Fatalf("answer-turn retention IDs = %+v", evidence)
