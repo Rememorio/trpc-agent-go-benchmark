@@ -1,0 +1,266 @@
+{
+  "protocol": {
+    "name": "skillcraft-frozen-holdout-v2",
+    "validationScales": [
+      "e2",
+      "m2"
+    ],
+    "holdoutScales": [
+      "e3",
+      "h1"
+    ],
+    "repeats": 2,
+    "minimumSeedsPerFamily": 2,
+    "knownRegressionCases": [
+      "recipe-cookbook-builder/h1"
+    ],
+    "meaningfulQualityBenefitPP": 0.5,
+    "meaningfulTokenReduction": 0.05,
+    "requireOptimizerPromotion": false,
+    "requirePairPrimarySafety": true
+  },
+  "sources": [
+    {
+      "name": "reflective_frozen_v2_worldbank_507",
+      "family": "world-bank-economic-snapshot",
+      "randomSeed": 507,
+      "candidateHash": "c9cf861ad0532155",
+      "optimizerPromotionEligible": false,
+      "optimizerPromotionReason": "frozen candidate regressed on validation score"
+    },
+    {
+      "name": "reflective_frozen_v2_worldbank_508",
+      "family": "world-bank-economic-snapshot",
+      "randomSeed": 508,
+      "candidateHash": "c9cf861ad0532155",
+      "optimizerPromotionEligible": false,
+      "optimizerPromotionReason": "critical holdout case holdout/world-bank-economic-snapshot/e3/r2 regressed on score"
+    }
+  ],
+  "validation": {
+    "seed": {
+      "pairs": 8,
+      "passRate": 100,
+      "averageQuality": 100,
+      "averageScore": 1,
+      "averageAgentTokens": 219299.25,
+      "averageToolCalls": 15.5,
+      "averageDurationSeconds": 79.65
+    },
+    "candidate": {
+      "pairs": 8,
+      "passRate": 100,
+      "averageQuality": 100,
+      "averageScore": 1,
+      "averageAgentTokens": 221715.5,
+      "averageToolCalls": 15.75,
+      "averageDurationSeconds": 85.95
+    },
+    "delta": {
+      "passRatePP": 0,
+      "qualityPP": 0,
+      "averageScore": 0,
+      "averageAgentTokens": 2416.25,
+      "agentTokensPercent": 1.1,
+      "averageToolCalls": 0.25,
+      "averageDurationSeconds": 6.3
+    },
+    "outcomes": {
+      "pairs": 8,
+      "passWins": 0,
+      "passTies": 8,
+      "passLosses": 0,
+      "qualityWins": 0,
+      "qualityTies": 8,
+      "qualityLosses": 0
+    }
+  },
+  "holdout": {
+    "seed": {
+      "pairs": 8,
+      "passRate": 100,
+      "averageQuality": 100,
+      "averageScore": 1,
+      "averageAgentTokens": 421254.5,
+      "averageToolCalls": 24.13,
+      "averageDurationSeconds": 123.68
+    },
+    "candidate": {
+      "pairs": 8,
+      "passRate": 100,
+      "averageQuality": 100,
+      "averageScore": 1,
+      "averageAgentTokens": 385355,
+      "averageToolCalls": 23.13,
+      "averageDurationSeconds": 95.42
+    },
+    "delta": {
+      "passRatePP": 0,
+      "qualityPP": 0,
+      "averageScore": 0,
+      "averageAgentTokens": -35899.5,
+      "agentTokensPercent": -8.52,
+      "averageToolCalls": -1,
+      "averageDurationSeconds": -28.26
+    },
+    "outcomes": {
+      "pairs": 8,
+      "passWins": 0,
+      "passTies": 8,
+      "passLosses": 0,
+      "qualityWins": 0,
+      "qualityTies": 8,
+      "qualityLosses": 0
+    }
+  },
+  "untouchedHoldout": {
+    "seed": {
+      "pairs": 8,
+      "passRate": 100,
+      "averageQuality": 100,
+      "averageScore": 1,
+      "averageAgentTokens": 421254.5,
+      "averageToolCalls": 24.13,
+      "averageDurationSeconds": 123.68
+    },
+    "candidate": {
+      "pairs": 8,
+      "passRate": 100,
+      "averageQuality": 100,
+      "averageScore": 1,
+      "averageAgentTokens": 385355,
+      "averageToolCalls": 23.13,
+      "averageDurationSeconds": 95.42
+    },
+    "delta": {
+      "passRatePP": 0,
+      "qualityPP": 0,
+      "averageScore": 0,
+      "averageAgentTokens": -35899.5,
+      "agentTokensPercent": -8.52,
+      "averageToolCalls": -1,
+      "averageDurationSeconds": -28.26
+    },
+    "outcomes": {
+      "pairs": 8,
+      "passWins": 0,
+      "passTies": 8,
+      "passLosses": 0,
+      "qualityWins": 0,
+      "qualityTies": 8,
+      "qualityLosses": 0
+    }
+  },
+  "knownRegressionHoldout": {
+    "seed": {
+      "pairs": 0,
+      "passRate": 0,
+      "averageQuality": 0,
+      "averageScore": 0,
+      "averageAgentTokens": 0,
+      "averageToolCalls": 0,
+      "averageDurationSeconds": 0
+    },
+    "candidate": {
+      "pairs": 0,
+      "passRate": 0,
+      "averageQuality": 0,
+      "averageScore": 0,
+      "averageAgentTokens": 0,
+      "averageToolCalls": 0,
+      "averageDurationSeconds": 0
+    },
+    "delta": {
+      "passRatePP": 0,
+      "qualityPP": 0,
+      "averageScore": 0,
+      "averageAgentTokens": 0,
+      "agentTokensPercent": 0,
+      "averageToolCalls": 0,
+      "averageDurationSeconds": 0
+    },
+    "outcomes": {
+      "pairs": 0,
+      "passWins": 0,
+      "passTies": 0,
+      "passLosses": 0,
+      "qualityWins": 0,
+      "qualityTies": 0,
+      "qualityLosses": 0
+    }
+  },
+  "families": {
+    "world-bank-economic-snapshot": {
+      "seed": {
+        "pairs": 8,
+        "passRate": 100,
+        "averageQuality": 100,
+        "averageScore": 1,
+        "averageAgentTokens": 421254.5,
+        "averageToolCalls": 24.13,
+        "averageDurationSeconds": 123.68
+      },
+      "candidate": {
+        "pairs": 8,
+        "passRate": 100,
+        "averageQuality": 100,
+        "averageScore": 1,
+        "averageAgentTokens": 385355,
+        "averageToolCalls": 23.13,
+        "averageDurationSeconds": 95.42
+      },
+      "delta": {
+        "passRatePP": 0,
+        "qualityPP": 0,
+        "averageScore": 0,
+        "averageAgentTokens": -35899.5,
+        "agentTokensPercent": -8.52,
+        "averageToolCalls": -1,
+        "averageDurationSeconds": -28.26
+      },
+      "outcomes": {
+        "pairs": 8,
+        "passWins": 0,
+        "passTies": 8,
+        "passLosses": 0,
+        "qualityWins": 0,
+        "qualityTies": 8,
+        "qualityLosses": 0
+      }
+    }
+  },
+  "gates": [
+    {
+      "name": "validation-pair-primary-safety",
+      "passed": true,
+      "details": "0 pass loss(es), 0 quality loss(es)"
+    },
+    {
+      "name": "untouched-pair-primary-safety",
+      "passed": true,
+      "details": "0 pass loss(es), 0 quality loss(es)"
+    },
+    {
+      "name": "holdout-pass-non-regression",
+      "passed": true,
+      "details": "candidate 100.00% vs seed 100.00%"
+    },
+    {
+      "name": "holdout-quality-non-regression",
+      "passed": true,
+      "details": "candidate 100.00 vs seed 100.00"
+    },
+    {
+      "name": "untouched-non-regression",
+      "passed": true,
+      "details": "8 untouched pair(s)"
+    },
+    {
+      "name": "meaningful-benefit",
+      "passed": true,
+      "details": "quality delta 0.00pp or token delta -8.52%"
+    }
+  ],
+  "promotionEligible": true,
+  "promotionReason": "all frozen validation, holdout, and independent-seed gates passed"
+}

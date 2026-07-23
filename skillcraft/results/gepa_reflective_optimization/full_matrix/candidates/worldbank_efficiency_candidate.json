@@ -1,0 +1,22 @@
+{
+  "id": "356636aef6043c33876d3fda24f42e87fd9524e7f25581e72cdfb26307756a2f",
+  "parent_id": "ba792c4a37e001a9f4263e2137ef57ee33c4f8fc1654c84f83852793e0da92f2",
+  "component": "steps",
+  "rationale": "Both cases passed with quality=1.000 but consumed excessive tokens (149K and 267K). The original steps listed each API call as a separate step, which encourages verbose per-step processing. Consolidating API collection into a single per-country step reduces intermediate overhead while keeping the same workflow. Added an explicit claim_done step since both traces show it is required for completion. Mentioned indicators conditionally to cover the M1 case where a fourth endpoint was used without hardcoding it as always required.",
+  "spec": {
+    "name": "Create Economic Snapshots for Multiple Countries",
+    "description": "Create economic snapshots for specified countries by collecting data through multiple API endpoints including economic overviews, GDP data, and country information, then compiling the results into a structured JSON report.",
+    "when_to_use": "When you need to analyze and summarize economic data for three or more countries using various APIs.",
+    "steps": [
+      "Define the list of countries and their codes.",
+      "For each country, call all required API endpoints (economic snapshot, GDP, country info, and indicators if applicable) to collect data in one pass.",
+      "Calculate economic power rank and development tier for each country based on GDP per capita.",
+      "Compile all data into a single JSON report and save it to the specified location.",
+      "Call claim_done to complete."
+    ],
+    "pitfalls": [
+      "Ensure the country codes are correct to avoid data retrieval errors.",
+      "Verify that all required indicators are included in the final report."
+    ]
+  }
+}
