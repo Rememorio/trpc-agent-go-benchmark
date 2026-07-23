@@ -3127,13 +3127,42 @@ func TestAnswerFromMemoriesRetriesTruncatedResponse(t *testing.T) {
 	if len(llm.requests[1].Messages) != 2 ||
 		llm.requests[1].Messages[0].Role != model.RoleSystem ||
 		!strings.Contains(llm.requests[1].Messages[0].Content,
-			"Never reveal analysis or reasoning") ||
+			"Repair the truncated draft") ||
 		!strings.Contains(llm.requests[1].Messages[1].Content,
-			"RETRY REQUIREMENT") ||
+			"How many tanks?") ||
+		!strings.Contains(llm.requests[1].Messages[1].Content,
+			"reasoning without a final answer") ||
 		!strings.Contains(llm.requests[1].Messages[1].Content,
 			"at most 128 words") {
 		t.Fatalf("retry prompt does not enforce a concise final answer: %+v",
 			llm.requests[1].Messages)
+	}
+}
+
+func TestAnswerFromMemoriesReturnsDeterministicTruncationError(t *testing.T) {
+	t.Parallel()
+
+	length := "length"
+	llm := &queuedAnswerModel{responses: []*model.Response{
+		{Choices: []model.Choice{{
+			Message:      model.NewAssistantMessage("partial one"),
+			FinishReason: &length,
+		}}},
+		{Choices: []model.Choice{{
+			Message:      model.NewAssistantMessage("partial two"),
+			FinishReason: &length,
+		}}},
+	}}
+	answer, err := answerFromMemories(
+		context.Background(), llm,
+		&lmeInstance{Question: "Which option?"}, nil,
+	)
+	if answer != "partial two" ||
+		!errors.Is(err, errLongMemEvalAnswerTruncated) {
+		t.Fatalf("answer = %q, err = %v", answer, err)
+	}
+	if len(llm.requests) != lmeAnswerMaxAttempts {
+		t.Fatalf("requests = %d, want %d", len(llm.requests), lmeAnswerMaxAttempts)
 	}
 }
 

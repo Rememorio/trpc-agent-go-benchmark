@@ -30,7 +30,7 @@ const (
 	lmePGVectorModulePath = "trpc.group/trpc-go/trpc-agent-go/memory/pgvector"
 
 	lmeAnswerPrimaryMaxTokens = 512
-	lmeAnswerRetryMaxTokens   = 1024
+	lmeAnswerRetryMaxTokens   = 2048
 	lmeAnswerMaxAttempts      = 2
 	lmeAnswerMaxExtraAttempts = 2
 	lmeJudgePrimaryMaxTokens  = 1024
@@ -40,7 +40,9 @@ const (
 	// These versions are part of the experiment contract. Bump the relevant
 	// version whenever replay, prompting, or judging semantics change.
 	lmeProtocolVersion             = "lme-memory-turn-pair-v2"
-	lmeAnswerPromptVersion         = "lme-memory-answer-v7"
+	lmeAnswerPromptVersion         = "lme-memory-answer-v8"
+	lmeAnswerRetryPromptVersion    = "lme-memory-answer-repair-v1"
+	lmeAnswerRetryStrategy         = "compress-truncated-draft"
 	lmeJudgePromptVersion          = "lme-official-superset-judge-v3"
 	lmeJudgeProtocolVersion        = "lme-content-addressed-verdict-v1"
 	lmeJudgeCacheFormatVersion     = "lme-judge-cache-v1"
@@ -108,6 +110,8 @@ type lmeAnswerGenerationProvenance struct {
 	MaxAttempts        int      `json:"max_attempts"`
 	RetryFinishReasons []string `json:"retry_finish_reasons"`
 	RetryEmptyResponse bool     `json:"retry_empty_response"`
+	RetryPromptVersion string   `json:"retry_prompt_version,omitempty"`
+	RetryStrategy      string   `json:"retry_strategy,omitempty"`
 	Temperature        float64  `json:"temperature"`
 	ReasoningEffort    string   `json:"reasoning_effort"`
 	ThinkingEnabled    bool     `json:"thinking_enabled"`
@@ -144,6 +148,8 @@ func currentLongMemEvalAnswerGeneration() lmeAnswerGenerationProvenance {
 		MaxAttempts:        lmeAnswerMaxAttempts,
 		RetryFinishReasons: []string{"length", "max_tokens"},
 		RetryEmptyResponse: true,
+		RetryPromptVersion: lmeAnswerRetryPromptVersion,
+		RetryStrategy:      lmeAnswerRetryStrategy,
 		Temperature:        0,
 		ReasoningEffort:    "low",
 		ThinkingEnabled:    false,
@@ -258,6 +264,12 @@ func validateLongMemEvalProtocol(protocol lmeProtocolProvenance) error {
 		protocol.AnswerGeneration.RetryMaxTokens <= 0 ||
 		protocol.AnswerGeneration.MaxAttempts <= 0 {
 		return errors.New("LongMemEval answer generation contract is invalid")
+	}
+	if protocol.AnswerGeneration.RetryStrategy != "" &&
+		protocol.AnswerGeneration.RetryPromptVersion == "" {
+		return errors.New(
+			"LongMemEval answer retry prompt version is missing",
+		)
 	}
 	if protocol.JudgeGeneration.PrimaryMaxTokens <= 0 ||
 		protocol.JudgeGeneration.RepairMaxTokens <= 0 {

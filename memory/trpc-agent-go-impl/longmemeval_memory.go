@@ -1632,13 +1632,22 @@ func waitForAutoMemory(
 	}
 }
 
+var errLongMemEvalAnswerTruncated = errors.New(
+	"model answer remained truncated after repair",
+)
+
+var errLongMemEvalAnswerEmpty = errors.New(
+	"model returned an empty answer after retry",
+)
+
 func answerFromMemories(ctx context.Context, llm model.Model, inst *lmeInstance, hits []memoryHit) (string, error) {
 	prompt := buildLongMemEvalAnswerPrompt(inst, hits)
+	var draft string
 	var lastErr error
 	for attempt := 0; attempt < lmeAnswerMaxAttempts; attempt++ {
 		req := newLongMemEvalAnswerRequest(prompt)
 		if attempt > 0 {
-			req = newLongMemEvalAnswerRetryRequest(prompt)
+			req = newLongMemEvalAnswerRetryRequest(prompt, draft)
 		}
 		respCh, err := llm.GenerateContent(ctx, req)
 		if err != nil {
@@ -1673,17 +1682,22 @@ func answerFromMemories(ctx context.Context, llm model.Model, inst *lmeInstance,
 		}
 		out = strings.TrimSpace(out)
 		if truncated && attempt+1 < lmeAnswerMaxAttempts {
+			draft = out
 			lastErr = errors.New("model answer reached the completion token limit")
 			continue
 		}
 		if out != "" {
 			if truncated {
-				return out, errors.New("model answer remained truncated after retry")
+				return out, errLongMemEvalAnswerTruncated
 			}
 			return out, nil
 		}
 		lastErr = errors.New("model returned empty answer")
-		time.Sleep(time.Duration(attempt+1) * time.Second)
+		if attempt+1 == lmeAnswerMaxAttempts {
+			lastErr = errLongMemEvalAnswerEmpty
+		} else {
+			time.Sleep(time.Duration(attempt+1) * time.Second)
+		}
 	}
 	return "", lastErr
 }
@@ -2507,18 +2521,27 @@ func newLongMemEvalAnswerRequest(prompt string) *model.Request {
 	}
 }
 
-func newLongMemEvalAnswerRetryRequest(prompt string) *model.Request {
-	req := newLongMemEvalAnswerRequest(prompt + `
+func newLongMemEvalAnswerRetryRequest(prompt, draft string) *model.Request {
+	userPrompt := fmt.Sprintf(`The previous response to the task below was
+truncated. Rewrite it as a complete final answer in at most 128 words. Preserve
+all names, dates, numbers, and requested list items that are supported by the
+task. For a scalar, date, name, count, or list, return only the requested value
+or values. Do not include analysis, reasoning, a preamble, uncertainty
+discussion, or markdown.
 
-RETRY REQUIREMENT: The previous response exceeded the token limit. Return the
-final answer now in at most 128 words. For a scalar, date, name, count, or list,
-return only the requested value or values. Do not include analysis, reasoning,
-a preamble, uncertainty discussion, or markdown.`)
+<original-task>
+%s
+</original-task>
+
+<truncated-draft>
+%s
+</truncated-draft>`, prompt, strings.TrimSpace(draft))
+	req := newLongMemEvalAnswerRequest(userPrompt)
 	maxTokens := lmeAnswerRetryMaxTokens
 	req.MaxTokens = &maxTokens
 	req.Messages = append([]model.Message{
 		model.NewSystemMessage(
-			"Output only the requested final answer. Never reveal analysis or reasoning.",
+			"Repair the truncated draft. Output only the requested final answer. Never reveal analysis or reasoning.",
 		),
 	}, req.Messages...)
 	return req
