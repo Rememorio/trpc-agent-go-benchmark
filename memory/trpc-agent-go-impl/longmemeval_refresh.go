@@ -506,6 +506,7 @@ func annotateLongMemEvalRefreshedHits(
 ) []memoryHit {
 	provenance := make(map[string]map[string]bool, len(saved))
 	answerProvenance := make(map[string]bool, len(saved))
+	attribution := make(map[string]string, len(saved))
 	for _, mem := range saved {
 		key := memoryIdentity(mem)
 		if key == "" {
@@ -521,6 +522,18 @@ func annotateLongMemEvalRefreshedHits(
 		if mem.SourceHasAnswer {
 			answerProvenance[key] = true
 		}
+		if mem.AttributedTo != "" {
+			attribution[key] = mem.AttributedTo
+		}
 	}
-	return annotateHits(hits, provenance, answerProvenance)
+	out := annotateHits(hits, provenance, answerProvenance)
+	for i := range out {
+		key := memoryIdentity(memorySnapshot{
+			ID: out[i].ID, Memory: out[i].Memory,
+		})
+		if attributedTo := normalizeMemoryAttribution(attribution[key]); attributedTo != "" {
+			out[i].AttributedTo = attributedTo
+		}
+	}
+	return out
 }

@@ -219,6 +219,7 @@ func validateLongMemEvalComparison(baseline, candidate *runResult) error {
 		"model_variant",
 		"model_temperature",
 		"embedding_model",
+		"memory_attribution_version",
 		"answer_prompt_version",
 		"answer_generation",
 		"judge_prompt_version",

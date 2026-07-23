@@ -32,6 +32,7 @@ const lmeSnapshotRefreshOutput = "snapshot_refreshed_results.json"
 type lmeSnapshotProvenance struct {
 	SourceSessions  []string
 	SourceHasAnswer bool
+	AttributedTo    string
 }
 
 type lmeSnapshotProvenanceReader interface {
@@ -270,12 +271,14 @@ func longMemEvalSnapshotProvenance(memories []memorySnapshot) map[string]lmeSnap
 	out := make(map[string]lmeSnapshotProvenance, len(memories))
 	for _, mem := range memories {
 		identity := memoryIdentity(mem)
-		if identity == "" || len(mem.SourceSessions) == 0 {
+		if identity == "" ||
+			len(mem.SourceSessions) == 0 && mem.AttributedTo == "" {
 			continue
 		}
 		out[identity] = lmeSnapshotProvenance{
 			SourceSessions:  append([]string(nil), mem.SourceSessions...),
 			SourceHasAnswer: mem.SourceHasAnswer,
+			AttributedTo:    normalizeMemoryAttribution(mem.AttributedTo),
 		}
 	}
 	return out
@@ -296,10 +299,15 @@ func annotateLongMemEvalSnapshotProvenance(
 			}
 			continue
 		}
+		attributedTo := normalizeMemoryAttribution(item.AttributedTo)
+		if require && attributedTo == "" {
+			return nil, fmt.Errorf("memory %q is missing attribution provenance", identity)
+		}
 		out[i].SourceSessions = append([]string(nil), item.SourceSessions...)
 		sort.Strings(out[i].SourceSessions)
 		out[i].SourceSessions = compactStrings(out[i].SourceSessions)
 		out[i].SourceHasAnswer = item.SourceHasAnswer
+		out[i].AttributedTo = attributedTo
 	}
 	return out, nil
 }
@@ -374,9 +382,11 @@ func (b *mem0Backend) ReadSnapshotProvenance(
 			continue
 		}
 		hasAnswer, _ := record.Metadata["has_answer"].(bool)
+		attributedTo, _ := record.Metadata["attributed_to"].(string)
 		out[record.ID] = lmeSnapshotProvenance{
 			SourceSessions:  []string{source},
 			SourceHasAnswer: hasAnswer,
+			AttributedTo:    normalizeMemoryAttribution(attributedTo),
 		}
 	}
 	return out, len(payload.Results) >= lmeMem0OSSSnapshotLimit, nil

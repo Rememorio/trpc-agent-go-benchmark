@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	lmeRerankPromptVersion  = "lme-memory-rerank-v3"
+	lmeRerankPromptVersion  = "lme-memory-rerank-v4"
 	lmeRerankInitialTokens  = 512
 	lmeRerankRetryTokens    = 4096
 	lmeRerankMaxAttempts    = 2
@@ -169,7 +169,7 @@ func buildLongMemEvalRerankPrompt(
 	for i, hit := range hits {
 		fmt.Fprintf(&candidates, "%d. %s", i+1, hit.Memory)
 		if meta := formatMemoryMetadata(
-			hit.Kind, hit.EventTime, hit.Topics,
+			hit.AttributedTo, hit.Kind, hit.EventTime, hit.Topics,
 			hit.Participants, hit.Location,
 		); meta != "" {
 			fmt.Fprintf(&candidates, " [%s]", meta)

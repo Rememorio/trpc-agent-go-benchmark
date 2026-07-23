@@ -145,6 +145,11 @@ type memoryBackend interface {
 // boundary instead of silently treating a partial snapshot as complete.
 const lmeMem0OSSSnapshotLimit = 1000
 
+const (
+	lmeAttributionUser      = "user"
+	lmeAttributionAssistant = "assistant"
+)
+
 type ingestMeta struct {
 	QuestionID string
 	SessionID  string
@@ -158,6 +163,7 @@ type ingestMeta struct {
 type memoryHit struct {
 	ID              string    `json:"id,omitempty"`
 	Memory          string    `json:"memory"`
+	AttributedTo    string    `json:"attributed_to,omitempty"`
 	Topics          []string  `json:"topics,omitempty"`
 	Score           float64   `json:"score,omitempty"`
 	SourceSessions  []string  `json:"source_sessions,omitempty"`
@@ -173,6 +179,7 @@ type memoryHit struct {
 type memorySnapshot struct {
 	ID              string    `json:"id,omitempty"`
 	Memory          string    `json:"memory"`
+	AttributedTo    string    `json:"attributed_to,omitempty"`
 	Topics          []string  `json:"topics,omitempty"`
 	Score           float64   `json:"score,omitempty"`
 	SourceSessions  []string  `json:"source_sessions,omitempty"`
@@ -541,7 +548,9 @@ func (b *pgvectorBackend) Search(ctx context.Context, userKey memory.UserKey, qu
 	if err != nil {
 		return nil, err
 	}
-	return hitsFromEntries(entries), nil
+	return defaultHitAttribution(
+		hitsFromEntries(entries), lmeAttributionUser,
+	), nil
 }
 
 func (b *pgvectorBackend) Read(
@@ -552,7 +561,9 @@ func (b *pgvectorBackend) Read(
 	if err != nil {
 		return nil, false, err
 	}
-	return snapshotsFromEntries(entries), false, nil
+	return defaultSnapshotAttribution(
+		snapshotsFromEntries(entries), lmeAttributionUser,
+	), false, nil
 }
 
 func (b *pgvectorBackend) SnapshotProviderUsage() lmeProviderUsage {
@@ -1047,6 +1058,8 @@ func runLongMemEvalMemory(ctx context.Context) error {
 			"model":                        modelName,
 			"model_variant":                modelVariant,
 			"model_temperature":            0,
+			"memory_attribution_version":   lmeAttributionProtocolVersion,
+			"memory_attribution_note":      "pgvector derives assistant attribution from its internal memory marker and otherwise defaults to user; self-hosted Mem0 OSS reads attributed_to from persisted record metadata.",
 			"model_call_timeout":           flagLMEModelCallTimeout.String(),
 			"embedding_model":              getEmbedModelName(),
 			"pgvector_extraction":          pgExtractionConfig,
@@ -1375,6 +1388,46 @@ afterIngest:
 	} else {
 		br.Error = appendError(br.Error, "final read: "+err.Error())
 	}
+	persistedProvenance := longMemEvalSnapshotProvenance(br.FinalMemories)
+	if reader, ok := backend.(lmeSnapshotProvenanceReader); ok {
+		requirePersistedProvenance := false
+		if mem0, ok := backend.(*mem0Backend); ok {
+			requirePersistedProvenance = mem0.selfHosted
+		}
+		stored, provenanceTruncated, err := reader.ReadSnapshotProvenance(
+			ctx, userKey,
+		)
+		if err != nil {
+			br.Error = appendError(
+				br.Error, "read persisted provenance: "+err.Error(),
+			)
+		} else {
+			br.SnapshotTruncated = br.SnapshotTruncated || provenanceTruncated
+			for identity, item := range stored {
+				persistedProvenance[identity] = item
+			}
+			annotated, annotateErr := annotateLongMemEvalSnapshotProvenance(
+				br.FinalMemories, persistedProvenance,
+				requirePersistedProvenance,
+			)
+			if annotateErr != nil {
+				br.Error = appendError(
+					br.Error,
+					"annotate persisted provenance: "+annotateErr.Error(),
+				)
+			} else {
+				br.FinalMemories = annotated
+				for i := range br.IngestTraces {
+					br.IngestTraces[i].NewMemories, _ =
+						annotateLongMemEvalSnapshotProvenance(
+							br.IngestTraces[i].NewMemories,
+							persistedProvenance,
+							false,
+						)
+				}
+			}
+		}
+	}
 
 	searchStart := time.Now()
 	hits, err := backend.Search(ctx, userKey, inst.Question, *flagVectorTopK)
@@ -1393,13 +1446,16 @@ afterIngest:
 		br.Error = appendError(br.Error, "search: "+err.Error())
 	}
 	br.Retrieval = annotateHits(hits, provenance, answerProvenance)
+	br.Retrieval = annotateLongMemEvalRefreshedHits(
+		br.Retrieval, br.FinalMemories,
+	)
 
 	if *flagLMEAnswer {
 		answerStart := time.Now()
 		rawAnswer, cacheKey, source, attempts, answerUsage, err :=
 			resolveLongMemEvalAnswerWithRetries(
-				ctx, llm, tracker, modelName, modelVariant, inst, hits,
-				answerCache, "",
+				ctx, llm, tracker, modelName, modelVariant, inst,
+				br.Retrieval, answerCache, "",
 			)
 		br.AnswerMaxAttempts = 1 + lmeAnswerMaxExtraAttempts
 		br.AnswerAttempts = attempts
@@ -1873,6 +1929,7 @@ func reanswerLongMemEvalResult(
 	result.Metadata["reanswer_build"] = currentLongMemEvalBuildProvenance()
 	result.Metadata["answer_generation"] = currentLongMemEvalAnswerGeneration()
 	result.Metadata["answer_execution"] = currentLongMemEvalAnswerExecution()
+	result.Metadata["memory_attribution_version"] = lmeAttributionProtocolVersion
 	result.Metadata["answer_prompt_version"] = lmeAnswerPromptVersion
 	result.Metadata["judge_prompt_version"] = lmeJudgePromptVersion
 	result.Metadata["judge_protocol_version"] = lmeJudgeProtocolVersion
@@ -2702,7 +2759,7 @@ func buildLongMemEvalAnswerPrompt(inst *lmeInstance, hits []memoryHit) string {
 		for i, hit := range hits {
 			fmt.Fprintf(&b, "%d. %s", i+1, hit.Memory)
 			if meta := formatMemoryMetadata(
-				hit.Kind, hit.EventTime, nil,
+				hit.AttributedTo, hit.Kind, hit.EventTime, nil,
 				hit.Participants, hit.Location,
 			); meta != "" {
 				fmt.Fprintf(&b, " [%s]", meta)
@@ -2719,14 +2776,16 @@ requested value, do not abstain merely because lower-ranked memories discuss
 related entities or events. Only explicit contradictory evidence about the
 same subject and time should block that answer. If the memories do not contain
 enough information, answer "I don't know".
-A memory beginning "Assistant result:" records an answer, recommendation,
+A memory marked "attributed_to=assistant" records an answer, recommendation,
 estimate, or other result previously produced by the assistant; it is not a
-fact confirmed by the user. Use such a memory only when the question explicitly
-asks what the assistant previously answered, recommended, listed, or mentioned.
-For every other factual question, including arithmetic, comparison, or planning,
-treat an assistant estimate or suggestion as unavailable unless a separate
-non-assistant memory confirms the same premise. Never use an unconfirmed
-assistant estimate as an operand in a calculation.
+fact confirmed by the user. This marker is authoritative even when the memory
+text describes what the user was recommended or told. Use such a memory only
+when the question explicitly asks what the assistant previously answered,
+recommended, listed, or mentioned. For every other factual question, including
+arithmetic, comparison, or planning, treat an assistant estimate or suggestion
+as unavailable unless a separate non-assistant memory confirms the same
+premise. Never use an unconfirmed assistant estimate as an operand in a
+calculation.
 Output only the final answer. Do not explain, reason step by step, cite
 memory numbers, mention uncertainty analysis, or use markdown. The first token
 must be part of the final answer. If the question asks for an order, list, or
@@ -3198,7 +3257,11 @@ func saveCaseLog(
 			if source != "" {
 				source = " [" + source + "]"
 			}
-			fmt.Fprintf(&b, "  + memory%s has_answer=%v: %s\n", source, mem.SourceHasAnswer, mem.Memory)
+			fmt.Fprintf(
+				&b,
+				"  + memory%s has_answer=%v attributed_to=%s: %s\n",
+				source, mem.SourceHasAnswer, mem.AttributedTo, mem.Memory,
+			)
 		}
 	}
 	fmt.Fprintf(&b, "\n=== Final Memories (%d) ===\n", len(br.FinalMemories))
@@ -3207,7 +3270,11 @@ func saveCaseLog(
 		if source != "" {
 			source = " [" + source + "]"
 		}
-		fmt.Fprintf(&b, "%d.%s has_answer=%v %s\n", i+1, source, mem.SourceHasAnswer, mem.Memory)
+		fmt.Fprintf(
+			&b,
+			"%d.%s has_answer=%v attributed_to=%s %s\n",
+			i+1, source, mem.SourceHasAnswer, mem.AttributedTo, mem.Memory,
+		)
 	}
 	fmt.Fprintf(&b, "\n=== Retrieval (%d) ===\n", len(br.Retrieval))
 	for i, hit := range br.Retrieval {
@@ -3215,7 +3282,12 @@ func saveCaseLog(
 		if source != "" {
 			source = " [" + source + "]"
 		}
-		fmt.Fprintf(&b, "%d. score=%.4f%s has_answer=%v %s\n", i+1, hit.Score, source, hit.SourceHasAnswer, hit.Memory)
+		fmt.Fprintf(
+			&b,
+			"%d. score=%.4f%s has_answer=%v attributed_to=%s %s\n",
+			i+1, hit.Score, source, hit.SourceHasAnswer,
+			hit.AttributedTo, hit.Memory,
+		)
 	}
 	fmt.Fprintf(
 		&b,
@@ -3508,6 +3580,7 @@ func snapshotsFromEntries(entries []*memory.Entry) []memorySnapshot {
 		out = append(out, memorySnapshot{
 			ID:           e.ID,
 			Memory:       e.Memory.Memory,
+			AttributedTo: attributionFromMemoryText(e.Memory.Memory),
 			Topics:       append([]string(nil), e.Memory.Topics...),
 			Score:        e.Score,
 			Kind:         string(e.Memory.Kind),
@@ -3530,6 +3603,7 @@ func hitsFromEntries(entries []*memory.Entry) []memoryHit {
 		out = append(out, memoryHit{
 			ID:           e.ID,
 			Memory:       e.Memory.Memory,
+			AttributedTo: attributionFromMemoryText(e.Memory.Memory),
 			Topics:       append([]string(nil), e.Memory.Topics...),
 			Score:        e.Score,
 			Kind:         string(e.Memory.Kind),
@@ -3551,6 +3625,7 @@ func formatEventTime(t *time.Time) string {
 }
 
 func formatMemoryMetadata(
+	attributedTo string,
 	kind string,
 	eventTime string,
 	topics []string,
@@ -3558,6 +3633,9 @@ func formatMemoryMetadata(
 	location string,
 ) string {
 	var parts []string
+	if attributedTo = normalizeMemoryAttribution(attributedTo); attributedTo != "" {
+		parts = append(parts, "attributed_to="+attributedTo)
+	}
 	if kind != "" {
 		parts = append(parts, "kind="+kind)
 	}
@@ -3574,6 +3652,55 @@ func formatMemoryMetadata(
 		parts = append(parts, "location="+location)
 	}
 	return strings.Join(parts, "; ")
+}
+
+func normalizeMemoryAttribution(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case lmeAttributionUser:
+		return lmeAttributionUser
+	case lmeAttributionAssistant:
+		return lmeAttributionAssistant
+	default:
+		return ""
+	}
+}
+
+func attributionFromMemoryText(value string) string {
+	if strings.HasPrefix(
+		strings.ToLower(strings.TrimSpace(value)),
+		"assistant result:",
+	) {
+		return lmeAttributionAssistant
+	}
+	return ""
+}
+
+func defaultSnapshotAttribution(
+	memories []memorySnapshot,
+	attributedTo string,
+) []memorySnapshot {
+	attributedTo = normalizeMemoryAttribution(attributedTo)
+	out := append([]memorySnapshot(nil), memories...)
+	for i := range out {
+		if out[i].AttributedTo == "" {
+			out[i].AttributedTo = attributedTo
+		}
+	}
+	return out
+}
+
+func defaultHitAttribution(
+	hits []memoryHit,
+	attributedTo string,
+) []memoryHit {
+	attributedTo = normalizeMemoryAttribution(attributedTo)
+	out := append([]memoryHit(nil), hits...)
+	for i := range out {
+		if out[i].AttributedTo == "" {
+			out[i].AttributedTo = attributedTo
+		}
+	}
+	return out
 }
 
 func diffSnapshots(before, after []memorySnapshot) []memorySnapshot {

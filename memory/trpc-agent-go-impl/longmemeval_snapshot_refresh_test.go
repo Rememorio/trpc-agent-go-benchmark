@@ -102,10 +102,12 @@ func TestRefreshLongMemEvalMemorySnapshotResultRepairsFinalSnapshot(t *testing.T
 		provenance: map[string]lmeSnapshotProvenance{
 			"old": {
 				SourceSessions: []string{"session-1"},
+				AttributedTo:   lmeAttributionUser,
 			},
 			"answer": {
 				SourceSessions:  []string{"session-2"},
 				SourceHasAnswer: true,
+				AttributedTo:    lmeAttributionAssistant,
 			},
 		},
 	}
@@ -137,6 +139,13 @@ func TestRefreshLongMemEvalMemorySnapshotResultRepairsFinalSnapshot(t *testing.T
 	}
 	if got := br.Retrieval[0].SourceSessions; len(got) != 1 || got[0] != "session-2" {
 		t.Fatalf("retrieval provenance = %v, want [session-2]", got)
+	}
+	if br.FinalMemories[1].AttributedTo != lmeAttributionAssistant ||
+		br.Retrieval[0].AttributedTo != lmeAttributionAssistant {
+		t.Fatalf(
+			"assistant attribution was not propagated: final=%+v retrieval=%+v",
+			br.FinalMemories[1], br.Retrieval[0],
+		)
 	}
 	if _, err := loadLongMemEvalResults(outPath); err != nil {
 		t.Fatalf("load refreshed checkpoint: %v", err)
@@ -179,6 +188,7 @@ func TestMem0OSSReadSnapshotProvenance(t *testing.T) {
 						"trpc_app_name":  "lme-memory",
 						"source_session": "session-1",
 						"has_answer":     true,
+						"attributed_to":  "assistant",
 					},
 				},
 				{
@@ -211,7 +221,24 @@ func TestMem0OSSReadSnapshotProvenance(t *testing.T) {
 		t.Fatalf("provenance count = %d, want 1", len(provenance))
 	}
 	item := provenance["keep"]
-	if !item.SourceHasAnswer || strings.Join(item.SourceSessions, ",") != "session-1" {
+	if !item.SourceHasAnswer ||
+		strings.Join(item.SourceSessions, ",") != "session-1" ||
+		item.AttributedTo != lmeAttributionAssistant {
 		t.Fatalf("provenance = %+v", item)
+	}
+}
+
+func TestAnnotateLongMemEvalSnapshotProvenanceRequiresAttribution(t *testing.T) {
+	t.Parallel()
+
+	_, err := annotateLongMemEvalSnapshotProvenance(
+		[]memorySnapshot{{ID: "memory-1", Memory: "Remembered fact"}},
+		map[string]lmeSnapshotProvenance{
+			"memory-1": {SourceSessions: []string{"session-1"}},
+		},
+		true,
+	)
+	if err == nil || !strings.Contains(err.Error(), "missing attribution provenance") {
+		t.Fatalf("missing attribution error = %v", err)
 	}
 }

@@ -40,7 +40,8 @@ const (
 	// These versions are part of the experiment contract. Bump the relevant
 	// version whenever replay, prompting, or judging semantics change.
 	lmeProtocolVersion             = "lme-memory-turn-pair-v2"
-	lmeAnswerPromptVersion         = "lme-memory-answer-v13"
+	lmeAttributionProtocolVersion  = "lme-memory-attribution-v1"
+	lmeAnswerPromptVersion         = "lme-memory-answer-v14"
 	lmeAnswerRetryPromptVersion    = "lme-memory-answer-repair-v6"
 	lmeAnswerRetryStrategy         = "forced-answer-tool"
 	lmeAnswerRetryResponseFormat   = "forced_function_call"
@@ -87,6 +88,7 @@ type lmeProtocolProvenance struct {
 	AnswerModel          string                        `json:"answer_model"`
 	AnswerModelVariant   string                        `json:"answer_model_variant"`
 	ModelTemperature     float64                       `json:"model_temperature"`
+	AttributionVersion   string                        `json:"memory_attribution_version"`
 	AnswerPromptVersion  string                        `json:"answer_prompt_version"`
 	AnswerGeneration     lmeAnswerGenerationProvenance `json:"answer_generation"`
 	EmbeddingModel       string                        `json:"embedding_model"`
@@ -219,6 +221,7 @@ func currentLongMemEvalProtocol() lmeProtocolProvenance {
 		AnswerModel:          getModelName(),
 		AnswerModelVariant:   getModelVariant(),
 		ModelTemperature:     0,
+		AttributionVersion:   lmeAttributionProtocolVersion,
 		AnswerPromptVersion:  lmeAnswerPromptVersion,
 		AnswerGeneration:     currentLongMemEvalAnswerGeneration(),
 		EmbeddingModel:       getEmbedModelName(),
@@ -249,6 +252,7 @@ func validateLongMemEvalProtocol(protocol lmeProtocolProvenance) error {
 		"answer model":           protocol.AnswerModel,
 		"embedding model":        protocol.EmbeddingModel,
 		"judge model":            protocol.JudgeModel,
+		"memory attribution":     protocol.AttributionVersion,
 		"answer prompt version":  protocol.AnswerPromptVersion,
 		"judge prompt version":   protocol.JudgePromptVersion,
 		"judge protocol version": protocol.JudgeProtocolVersion,

@@ -1378,6 +1378,7 @@ func TestBuildLongMemEvalAnswerPromptPreferenceGuidance(t *testing.T) {
 	}
 	prompt := buildLongMemEvalAnswerPrompt(inst, []memoryHit{{
 		Memory:       "Attended a language exchange event focused on French and Spanish practice.",
+		AttributedTo: lmeAttributionUser,
 		Topics:       []string{"language exchange", "French", "Spanish"},
 		Score:        0.9876,
 		Kind:         "episode",
@@ -1414,7 +1415,7 @@ func TestBuildLongMemEvalAnswerPromptPreferenceGuidance(t *testing.T) {
 		!strings.Contains(prompt, "never reintroduce the remembered choice itself") {
 		t.Fatalf("missing established-preference guidance: %s", prompt)
 	}
-	if !strings.Contains(prompt, "[kind=episode; event_time=2023-05-20; participants=Alice; location=Community Center]") {
+	if !strings.Contains(prompt, "[attributed_to=user; kind=episode; event_time=2023-05-20; participants=Alice; location=Community Center]") {
 		t.Fatalf("missing memory metadata: %s", prompt)
 	}
 	if strings.Contains(prompt, "Semantic category memberships:") {
@@ -1496,12 +1497,32 @@ func TestBuildLongMemEvalAnswerPromptNonPreference(t *testing.T) {
 	if !strings.Contains(normalizedPrompt, "not include markdown") {
 		t.Fatalf("missing markdown/explanation guard: %s", prompt)
 	}
-	if !strings.Contains(normalizedPrompt, `A memory beginning "Assistant result:"`) ||
+	if !strings.Contains(normalizedPrompt, `A memory marked "attributed_to=assistant"`) ||
 		!strings.Contains(normalizedPrompt, "it is not a fact confirmed by the user") ||
+		!strings.Contains(normalizedPrompt, "marker is authoritative") ||
 		!strings.Contains(normalizedPrompt, "question explicitly asks what the assistant") ||
 		!strings.Contains(normalizedPrompt, "arithmetic, comparison, or planning") ||
 		!strings.Contains(normalizedPrompt, "Never use an unconfirmed assistant estimate") {
 		t.Fatalf("missing assistant-result provenance guidance: %s", prompt)
+	}
+}
+
+func TestBuildLongMemEvalAnswerPromptAssistantAttribution(t *testing.T) {
+	t.Parallel()
+
+	prompt := buildLongMemEvalAnswerPrompt(&lmeInstance{
+		QuestionType: "single-session-assistant",
+		Question:     "Which restaurant did the assistant recommend?",
+	}, []memoryHit{{
+		Memory:       "User was recommended Miss Bee Providore.",
+		AttributedTo: lmeAttributionAssistant,
+	}})
+
+	if !strings.Contains(
+		prompt,
+		"User was recommended Miss Bee Providore. [attributed_to=assistant]",
+	) {
+		t.Fatalf("assistant attribution is missing from prompt: %s", prompt)
 	}
 }
 
@@ -2967,6 +2988,26 @@ func TestHitsFromEntriesIncludesEpisodicMetadata(t *testing.T) {
 	if hit.Location != "Natural History Museum" {
 		t.Fatalf("missing location: %+v", hit)
 	}
+	if hit.AttributedTo != "" {
+		t.Fatalf("unexpected generic attribution: %+v", hit)
+	}
+
+	attributed := defaultHitAttribution(
+		[]memoryHit{
+			hit,
+			{
+				Memory: "Assistant result: Recommended the museum.",
+				AttributedTo: attributionFromMemoryText(
+					"Assistant result: Recommended the museum.",
+				),
+			},
+		},
+		lmeAttributionUser,
+	)
+	if attributed[0].AttributedTo != lmeAttributionUser ||
+		attributed[1].AttributedTo != lmeAttributionAssistant {
+		t.Fatalf("default attribution = %+v", attributed)
+	}
 }
 
 func TestDiffSnapshotsIncludesMetadataOnlyChanges(t *testing.T) {
@@ -3701,6 +3742,7 @@ func testLongMemEvalComparisonMetadata(implementation string) map[string]any {
 		"model_variant":              "glm",
 		"model_temperature":          0,
 		"embedding_model":            "embedding-model",
+		"memory_attribution_version": lmeAttributionProtocolVersion,
 		"answer_prompt_version":      lmeAnswerPromptVersion,
 		"answer_generation":          currentLongMemEvalAnswerGeneration(),
 		"judge_prompt_version":       lmeJudgePromptVersion,
@@ -4088,6 +4130,25 @@ func TestValidateLongMemEvalComparisonRejectsProtocolDrift(t *testing.T) {
 	err := validateLongMemEvalComparison(baseline, candidate)
 	if err == nil || !strings.Contains(err.Error(), "protocol_sha256") {
 		t.Fatalf("protocol mismatch error = %v", err)
+	}
+}
+
+func TestValidateLongMemEvalComparisonRejectsAttributionDrift(t *testing.T) {
+	t.Parallel()
+
+	baseline := &runResult{
+		Metadata: testLongMemEvalComparisonMetadata("upstream-main"),
+	}
+	candidate := &runResult{
+		Metadata: testLongMemEvalComparisonMetadata("candidate-2196"),
+	}
+	candidate.Metadata["memory_attribution_version"] = "different-attribution"
+
+	err := validateLongMemEvalComparison(baseline, candidate)
+	if err == nil || !strings.Contains(
+		err.Error(), "memory_attribution_version",
+	) {
+		t.Fatalf("memory attribution mismatch error = %v", err)
 	}
 }
 

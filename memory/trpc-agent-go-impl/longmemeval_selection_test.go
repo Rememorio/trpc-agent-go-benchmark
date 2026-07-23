@@ -591,6 +591,7 @@ func testLongMemEvalProtocol() lmeProtocolProvenance {
 		Version:              lmeProtocolVersion,
 		AnswerModel:          "answer-model",
 		AnswerModelVariant:   "glm",
+		AttributionVersion:   lmeAttributionProtocolVersion,
 		AnswerPromptVersion:  lmeAnswerPromptVersion,
 		AnswerGeneration:     currentLongMemEvalAnswerGeneration(),
 		EmbeddingModel:       "embedding-model",
@@ -636,6 +637,7 @@ func TestCurrentLongMemEvalProtocolBindsEvaluationConfiguration(t *testing.T) {
 		protocol.JudgeModelVariant != *flagModelVariant ||
 		protocol.JudgeRuns != *flagLMEJudgeRuns ||
 		protocol.UserScope != *flagLMEUserScope ||
+		protocol.AttributionVersion != lmeAttributionProtocolVersion ||
 		protocol.AnswerPromptVersion != lmeAnswerPromptVersion ||
 		protocol.JudgePromptVersion != lmeJudgePromptVersion ||
 		protocol.JudgeProtocolVersion != lmeJudgeProtocolVersion ||
