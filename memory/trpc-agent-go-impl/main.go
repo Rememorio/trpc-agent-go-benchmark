@@ -195,7 +195,7 @@ var (
 	flagPGVectorUpdatePolicy = flag.String(
 		"pgvector-update-policy",
 		"reconcile",
-		"PGVector auto-memory update policy: reconcile, history-preserving, or add-only",
+		"PGVector auto-memory update policy: reconcile, preserve-history, or add-only",
 	)
 	flagPGVectorAssistantResultExtraction = flag.Bool(
 		"pgvector-assistant-result-extraction",

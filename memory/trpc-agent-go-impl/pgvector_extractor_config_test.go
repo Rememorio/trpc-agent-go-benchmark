@@ -45,7 +45,7 @@ func TestCurrentPGVectorExtractionConfig(t *testing.T) {
 	}{
 		{input: "", want: pgvectorUpdatePolicyReconcile},
 		{input: " RECONCILE ", want: pgvectorUpdatePolicyReconcile},
-		{input: "HISTORY-PRESERVING", want: pgvectorUpdatePolicyHistoryPreserving},
+		{input: "PRESERVE-HISTORY", want: pgvectorUpdatePolicyPreserveHistory},
 		{input: "ADD-ONLY", want: pgvectorUpdatePolicyAddOnly},
 	} {
 		*flagPGVectorUpdatePolicy = test.input
