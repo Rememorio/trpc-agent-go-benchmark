@@ -390,6 +390,26 @@ func TestLongMemEvalReplicateSourceUsageValidation(t *testing.T) {
 	if usage.TotalTokens != 100 || usage.LLMCalls != 1 {
 		t.Fatalf("memory-layer usage = %+v", usage)
 	}
+
+	cached := *valid
+	cachedTotalUsage := *valid.TokenUsage
+	cachedTotalUsage.Sub(*valid.AnswerUsage)
+	cached.TokenUsage = &cachedTotalUsage
+	cached.AnswerUsage = nil
+	cached.AnswerSource = lmeAnswerSourcePersistent
+	usage, err = longMemEvalReplicateMemoryLayerUsage(&cached)
+	if err != nil {
+		t.Fatalf("cached answer usage: %v", err)
+	}
+	if usage != cachedTotalUsage {
+		t.Fatalf("cached memory-layer usage = %+v, want %+v", usage, cachedTotalUsage)
+	}
+
+	cached.AnswerLogicalUsage = nil
+	_, err = longMemEvalReplicateMemoryLayerUsage(&cached)
+	if err == nil || !strings.Contains(err.Error(), "answer_logical_token_usage is missing") {
+		t.Fatalf("cached logical usage validation error = %v", err)
+	}
 }
 
 func TestLoadLongMemEvalReplicatesRejectsSharedLedgers(t *testing.T) {

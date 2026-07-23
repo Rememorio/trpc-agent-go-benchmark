@@ -746,14 +746,25 @@ func longMemEvalReplicateMemoryLayerUsage(br *backendResult) (lmeTokenUsage, err
 	if br.TokenUsage == nil {
 		return lmeTokenUsage{}, errors.New("token_usage is missing")
 	}
-	if br.AnswerUsage == nil {
-		return lmeTokenUsage{}, errors.New("answer_token_usage is missing")
-	}
 	if br.EmbeddingUsage == nil {
 		return lmeTokenUsage{}, errors.New("embedding_usage is missing")
 	}
 	usage := *br.TokenUsage
-	answer := *br.AnswerUsage
+	answer := lmeTokenUsage{}
+	if br.AnswerUsage != nil {
+		answer = *br.AnswerUsage
+	} else {
+		switch br.AnswerSource {
+		case lmeAnswerSourceCurrentRun, lmeAnswerSourcePersistent:
+			if br.AnswerLogicalUsage == nil {
+				return lmeTokenUsage{}, errors.New(
+					"answer_logical_token_usage is missing for cached answer",
+				)
+			}
+		default:
+			return lmeTokenUsage{}, errors.New("answer_token_usage is missing")
+		}
+	}
 	for _, field := range []struct {
 		name          string
 		total, answer int
