@@ -19,6 +19,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime/debug"
 	"slices"
 	"strings"
@@ -487,6 +488,37 @@ func TestWriteLongMemEvalSelectionOmitsQuestionContent(t *testing.T) {
 	}
 	if got.Cases[1].QuestionID != "question-2_abs" || !got.Cases[1].Abstention {
 		t.Fatalf("unexpected abstention case: %+v", got.Cases[1])
+	}
+}
+
+func TestWriteLongMemEvalSelectionManifestPreservesRegistration(t *testing.T) {
+	manifest := lmeSelectionManifest{
+		SchemaVersion:   lmeSelectionManifestSchemaVersion,
+		DatasetSHA256:   "dataset",
+		SelectionSHA256: "selection",
+		ProtocolVersion: lmeProtocolVersion,
+		ProtocolSHA256:  "protocol",
+		SamplePerType:   3,
+		AbstentionCount: 4,
+		SampleSeed:      271,
+		ExcludedCount:   5,
+		ExcludedSHA256:  "excluded",
+		Cases: []lmeSelectionCase{{
+			QuestionID:   "question-1",
+			QuestionType: "single-session-user",
+		}},
+	}
+	var output strings.Builder
+	if err := writeLongMemEvalSelectionManifest(&output, manifest); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	var got lmeSelectionManifest
+	if err := json.Unmarshal([]byte(output.String()), &got); err != nil {
+		t.Fatalf("decode manifest: %v", err)
+	}
+	if !reflect.DeepEqual(got, manifest) {
+		t.Fatalf("manifest changed during validation output:\ngot  %+v\nwant %+v",
+			got, manifest)
 	}
 }
 

@@ -1019,6 +1019,12 @@ func runLongMemEvalMemory(ctx context.Context) error {
 		return err
 	}
 	if *flagLMESelectionOnly {
+		if preregisteredSelection != nil {
+			return writeLongMemEvalSelectionManifest(
+				os.Stdout,
+				preregisteredSelection.Manifest,
+			)
+		}
 		return writeLongMemEvalSelection(
 			os.Stdout,
 			cases,
@@ -3229,6 +3235,13 @@ func writeLongMemEvalSelection(
 		ExcludedSHA256:  excludedDigest,
 		Cases:           cases,
 	}
+	return writeLongMemEvalSelectionManifest(w, manifest)
+}
+
+func writeLongMemEvalSelectionManifest(
+	w io.Writer,
+	manifest lmeSelectionManifest,
+) error {
 	encoder := json.NewEncoder(w)
 	encoder.SetIndent("", "  ")
 	if err := encoder.Encode(manifest); err != nil {
