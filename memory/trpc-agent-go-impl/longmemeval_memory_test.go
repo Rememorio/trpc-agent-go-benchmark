@@ -3232,6 +3232,70 @@ func TestBackendResultRequiredCollectionsMarshalAsArrays(t *testing.T) {
 	}
 }
 
+func TestPairTurnsUsesConversationRoles(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		turns []lmeTurn
+		want  [][]string
+	}{
+		{
+			name: "ordinary rounds",
+			turns: []lmeTurn{
+				{Role: "user", Content: "u1"},
+				{Role: "assistant", Content: "a1"},
+				{Role: "user", Content: "u2"},
+				{Role: "assistant", Content: "a2"},
+			},
+			want: [][]string{{"u1", "a1"}, {"u2", "a2"}},
+		},
+		{
+			name: "leading assistant",
+			turns: []lmeTurn{
+				{Role: "assistant", Content: "a0", HasAnswer: true},
+				{Role: "user", Content: "u1"},
+				{Role: "assistant", Content: "a1"},
+			},
+			want: [][]string{{"a0"}, {"u1", "a1"}},
+		},
+		{
+			name: "repeated roles and blank turn",
+			turns: []lmeTurn{
+				{Role: "user", Content: "u1"},
+				{Role: "user", Content: " "},
+				{Role: "user", Content: "u2"},
+				{Role: "assistant", Content: "a1"},
+				{Role: "assistant", Content: "a2"},
+			},
+			want: [][]string{{"u1"}, {"u2", "a1"}, {"a2"}},
+		},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			pairs := pairTurns(tt.turns)
+			got := make([][]string, 0, len(pairs))
+			for _, pair := range pairs {
+				messages := make([]string, 0, len(pair.Messages))
+				for _, message := range pair.Messages {
+					messages = append(messages, message.Content)
+				}
+				got = append(got, messages)
+			}
+			if !slices.EqualFunc(got, tt.want, slices.Equal) {
+				t.Fatalf("pairTurns() = %v, want %v", got, tt.want)
+			}
+			if tt.name == "leading assistant" &&
+				(len(pairs) == 0 || !pairs[0].HasAnswer) {
+				t.Fatalf("leading answer attribution was lost: %+v", pairs)
+			}
+		})
+	}
+}
+
 func TestDiffSnapshotsIncludesMetadataOnlyChanges(t *testing.T) {
 	t.Parallel()
 

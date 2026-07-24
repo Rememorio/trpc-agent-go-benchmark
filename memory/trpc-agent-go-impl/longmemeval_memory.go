@@ -3039,10 +3039,12 @@ func pairTurns(turns []lmeTurn) []lmePair {
 		})
 	}
 	pairs := make([]lmePair, 0, (len(clean)+1)/2)
-	for i := 0; i < len(clean); i += 2 {
-		end := i + 2
-		if end > len(clean) {
-			end = len(clean)
+	for i := 0; i < len(clean); {
+		end := i + 1
+		if clean[i].message.Role == model.RoleUser &&
+			end < len(clean) &&
+			clean[end].message.Role == model.RoleAssistant {
+			end++
 		}
 		pair := lmePair{Messages: make([]model.Message, 0, end-i)}
 		for _, turn := range clean[i:end] {
@@ -3050,6 +3052,7 @@ func pairTurns(turns []lmeTurn) []lmePair {
 			pair.HasAnswer = pair.HasAnswer || turn.hasAnswer
 		}
 		pairs = append(pairs, pair)
+		i = end
 	}
 	return pairs
 }
