@@ -569,7 +569,11 @@ pre-registered cost ratios hold. Embedding cost is gated on logical requests,
 which are independent of shared response-ledger execution order; provider calls
 and tokens remain visible as realized cache-sensitive cost. Formal replicate
 aggregation also rejects incomplete answer or judge logical usage. The JSON,
-TSV, and Markdown outputs retain input hashes and gate details for audit.
+TSV, and Markdown outputs retain input hashes and gate details for audit. Each
+JSON gate check is classified as `integrity`, `outcome`, or `cost`, with
+separate `integrity_passed`, `outcome_passed`, and `cost_passed` summaries. A
+valid negative quality result therefore remains distinguishable from a broken
+or incomparable experiment.
 
 `-lme-answer-cache` supplies a shared, content-addressed answer ledger. Its key
 covers the exact ordered memories and metadata shown to the answer model, the
