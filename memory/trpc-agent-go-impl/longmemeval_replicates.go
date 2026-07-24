@@ -52,6 +52,7 @@ type lmeReplicatePromotionGate struct {
 	JudgeRuns                          int     `json:"judge_runs"`
 	PerTypeMaxDeficit                  int     `json:"per_type_max_deficit"`
 	MemoryLLMTokenRatioMaximum         float64 `json:"memory_llm_token_ratio_maximum"`
+	MemoryLLMUncachedTokenRatioMaximum float64 `json:"memory_llm_uncached_token_ratio_maximum,omitempty"`
 	MemoryEmbeddingRequestRatioMaximum float64 `json:"memory_embedding_request_ratio_maximum"`
 	FinalMemoryCountRatioMaximum       float64 `json:"final_memory_count_ratio_maximum"`
 }
@@ -467,7 +468,9 @@ func validateLongMemEvalReplicateManifest(manifest lmeReplicateComparisonManifes
 	}
 	gate := manifest.Gate
 	if gate.ExpectedCases <= 0 || gate.JudgeRuns <= 1 || gate.JudgeRuns%2 == 0 || gate.PerTypeMaxDeficit < 0 ||
-		gate.MemoryLLMTokenRatioMaximum <= 0 || gate.MemoryEmbeddingRequestRatioMaximum <= 0 ||
+		gate.MemoryLLMTokenRatioMaximum <= 0 ||
+		gate.MemoryLLMUncachedTokenRatioMaximum < 0 ||
+		gate.MemoryEmbeddingRequestRatioMaximum <= 0 ||
 		gate.FinalMemoryCountRatioMaximum <= 0 {
 		return fmt.Errorf("LongMemEval replicate manifest has invalid promotion gate: %+v", gate)
 	}
@@ -1165,6 +1168,21 @@ func evaluateLongMemEvalReplicateGate(
 			main.MemoryLogicalTokenUsage.TotalTokens,
 			gate.MemoryLLMTokenRatioMaximum,
 		)
+		if gate.MemoryLLMUncachedTokenRatioMaximum > 0 {
+			addLongMemEvalReplicateRatioCheck(
+				&result,
+				"candidate_memory_llm_uncached_tokens_vs_main",
+				nonNegativeTokenDifference(
+					candidate.MemoryLogicalTokenUsage.TotalTokens,
+					candidate.MemoryLogicalTokenUsage.CachedTokens,
+				),
+				nonNegativeTokenDifference(
+					main.MemoryLogicalTokenUsage.TotalTokens,
+					main.MemoryLogicalTokenUsage.CachedTokens,
+				),
+				gate.MemoryLLMUncachedTokenRatioMaximum,
+			)
+		}
 	} else {
 		result.add(
 			lmeReplicateGateDimensionCost,

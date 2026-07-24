@@ -174,6 +174,75 @@ func TestReplicateGateUsesLogicalEmbeddingRequests(t *testing.T) {
 	t.Fatal("logical embedding request check is missing")
 }
 
+func TestReplicateGateOptionallyUsesUncachedLogicalTokens(t *testing.T) {
+	t.Parallel()
+
+	arm := func(
+		name string,
+		majority int,
+		correct int,
+		totalTokens int,
+		cachedTokens int,
+	) *lmeReplicateArm {
+		return &lmeReplicateArm{
+			Name: name, Cases: 2, MajorityCorrect: majority,
+			CorrectReplicates: correct, ProviderUsageReportedCases: 2,
+			MemoryLogicalTokenUsage: lmeTokenUsage{
+				TotalTokens:  totalTokens,
+				CachedTokens: cachedTokens,
+			},
+			MemoryLogicalUsageComplete: true,
+			MemoryEmbeddingUsage:       lmeEmbeddingUsage{Requests: 100},
+			FinalMemories:              10,
+			ByType: map[string]*lmeReplicateTypeSummary{
+				"single-session-user": {MajorityCorrect: majority},
+			},
+		}
+	}
+	comparison := &lmeReplicateComparison{
+		Arms: map[string]*lmeReplicateArm{
+			lmeReplicateArmPGVectorMain: arm(
+				lmeReplicateArmPGVectorMain, 0, 0, 100, 80,
+			),
+			lmeReplicateArmMem0OSS: arm(
+				lmeReplicateArmMem0OSS, 0, 0, 100, 80,
+			),
+			lmeReplicateArmPGVectorCandidate: arm(
+				lmeReplicateArmPGVectorCandidate, 2, 6, 120, 20,
+			),
+		},
+	}
+	gate := lmeReplicatePromotionGate{
+		ExpectedCases: 2, JudgeRuns: 3, PerTypeMaxDeficit: 0,
+		MemoryLLMTokenRatioMaximum:         1.55,
+		MemoryEmbeddingRequestRatioMaximum: 2,
+		FinalMemoryCountRatioMaximum:       3,
+	}
+
+	withoutUncachedGate := evaluateLongMemEvalReplicateGate(
+		comparison,
+		gate,
+	)
+	for _, check := range withoutUncachedGate.Checks {
+		if check.Name == "candidate_memory_llm_uncached_tokens_vs_main" {
+			t.Fatalf("optional uncached check unexpectedly present: %+v", check)
+		}
+	}
+
+	gate.MemoryLLMUncachedTokenRatioMaximum = 2
+	withUncachedGate := evaluateLongMemEvalReplicateGate(comparison, gate)
+	for _, check := range withUncachedGate.Checks {
+		if check.Name != "candidate_memory_llm_uncached_tokens_vs_main" {
+			continue
+		}
+		if check.Passed || check.Actual != "5.000000 (100/20)" {
+			t.Fatalf("uncached token check = %+v", check)
+		}
+		return
+	}
+	t.Fatal("uncached token check is missing")
+}
+
 func TestReplicateGateSeparatesOutcomeFromIntegrityAndCost(t *testing.T) {
 	t.Parallel()
 
@@ -577,6 +646,9 @@ func TestValidateLongMemEvalReplicateManifest(t *testing.T) {
 		{name: "later primary kind", mutate: func(m *lmeReplicateComparisonManifest) { m.Replicates[1].Kind = lmeReplicateKindPrimary }, wantError: "want \"independent-reanswer\""},
 		{name: "duplicate name", mutate: func(m *lmeReplicateComparisonManifest) { m.Replicates[1].Name = "r1" }, wantError: "duplicated"},
 		{name: "gate", mutate: func(m *lmeReplicateComparisonManifest) { m.Gate.JudgeRuns = 2 }, wantError: "invalid promotion gate"},
+		{name: "negative uncached gate", mutate: func(m *lmeReplicateComparisonManifest) {
+			m.Gate.MemoryLLMUncachedTokenRatioMaximum = -1
+		}, wantError: "invalid promotion gate"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			copyManifest := valid
