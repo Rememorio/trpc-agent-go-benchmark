@@ -548,6 +548,7 @@ the input files. Paths are resolved relative to the manifest:
     "memory_llm_token_ratio_maximum": 1.55,
     "memory_llm_uncached_token_ratio_maximum": 1.55,
     "memory_embedding_request_ratio_maximum": 2.0,
+    "memory_embedding_token_ratio_maximum": 2.5,
     "final_memory_count_ratio_maximum": 3.0
   }
 }
@@ -571,7 +572,10 @@ which are independent of shared response-ledger execution order; provider calls
 and tokens remain visible as realized cache-sensitive cost. When
 `memory_llm_uncached_token_ratio_maximum` is positive, the gate also bounds logical
 total tokens minus cached prompt tokens; omitting it preserves manifests
-created before this dimension was introduced. Formal replicate
+created before this dimension was introduced. A positive
+`memory_embedding_token_ratio_maximum` independently bounds realized embedding
+tokens, so fewer requests cannot hide substantially longer embedded content.
+Formal replicate
 aggregation also rejects incomplete answer or judge logical usage. The JSON,
 TSV, and Markdown outputs retain input hashes and gate details for audit. Each
 JSON gate check is classified as `integrity`, `outcome`, or `cost`, with

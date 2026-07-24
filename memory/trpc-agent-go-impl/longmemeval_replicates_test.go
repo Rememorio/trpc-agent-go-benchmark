@@ -174,6 +174,72 @@ func TestReplicateGateUsesLogicalEmbeddingRequests(t *testing.T) {
 	t.Fatal("logical embedding request check is missing")
 }
 
+func TestReplicateGateOptionallyUsesEmbeddingTokens(t *testing.T) {
+	t.Parallel()
+
+	arm := func(
+		name string,
+		majority int,
+		correct int,
+		embeddingTokens int,
+	) *lmeReplicateArm {
+		return &lmeReplicateArm{
+			Name: name, Cases: 2, MajorityCorrect: majority,
+			CorrectReplicates: correct, ProviderUsageReportedCases: 2,
+			MemoryLogicalTokenUsage:    lmeTokenUsage{TotalTokens: 100},
+			MemoryLogicalUsageComplete: true,
+			MemoryEmbeddingUsage: lmeEmbeddingUsage{
+				Requests:    100,
+				TotalTokens: embeddingTokens,
+			},
+			FinalMemories: 10,
+			ByType: map[string]*lmeReplicateTypeSummary{
+				"single-session-user": {MajorityCorrect: majority},
+			},
+		}
+	}
+	comparison := &lmeReplicateComparison{
+		Arms: map[string]*lmeReplicateArm{
+			lmeReplicateArmPGVectorMain: arm(
+				lmeReplicateArmPGVectorMain, 0, 0, 100,
+			),
+			lmeReplicateArmMem0OSS: arm(
+				lmeReplicateArmMem0OSS, 0, 0, 100,
+			),
+			lmeReplicateArmPGVectorCandidate: arm(
+				lmeReplicateArmPGVectorCandidate, 2, 6, 250,
+			),
+		},
+	}
+	gate := lmeReplicatePromotionGate{
+		ExpectedCases: 2, JudgeRuns: 3, PerTypeMaxDeficit: 0,
+		MemoryLLMTokenRatioMaximum:         1.55,
+		MemoryEmbeddingRequestRatioMaximum: 2,
+		FinalMemoryCountRatioMaximum:       3,
+	}
+
+	withoutTokenGate := evaluateLongMemEvalReplicateGate(comparison, gate)
+	for _, check := range withoutTokenGate.Checks {
+		if check.Name == "candidate_memory_embedding_tokens_vs_main" {
+			t.Fatalf("optional embedding token check unexpectedly present: %+v",
+				check)
+		}
+	}
+
+	gate.MemoryEmbeddingTokenRatioMaximum = 2
+	withTokenGate := evaluateLongMemEvalReplicateGate(comparison, gate)
+	for _, check := range withTokenGate.Checks {
+		if check.Name != "candidate_memory_embedding_tokens_vs_main" {
+			continue
+		}
+		if check.Passed || check.Actual != "2.500000 (250/100)" {
+			t.Fatalf("embedding token check = %+v", check)
+		}
+		return
+	}
+	t.Fatal("embedding token check is missing")
+}
+
 func TestReplicateGateOptionallyUsesUncachedLogicalTokens(t *testing.T) {
 	t.Parallel()
 
@@ -648,6 +714,9 @@ func TestValidateLongMemEvalReplicateManifest(t *testing.T) {
 		{name: "gate", mutate: func(m *lmeReplicateComparisonManifest) { m.Gate.JudgeRuns = 2 }, wantError: "invalid promotion gate"},
 		{name: "negative uncached gate", mutate: func(m *lmeReplicateComparisonManifest) {
 			m.Gate.MemoryLLMUncachedTokenRatioMaximum = -1
+		}, wantError: "invalid promotion gate"},
+		{name: "negative embedding token gate", mutate: func(m *lmeReplicateComparisonManifest) {
+			m.Gate.MemoryEmbeddingTokenRatioMaximum = -1
 		}, wantError: "invalid promotion gate"},
 	} {
 		t.Run(test.name, func(t *testing.T) {

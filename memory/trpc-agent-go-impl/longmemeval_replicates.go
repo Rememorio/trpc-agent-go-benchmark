@@ -54,6 +54,7 @@ type lmeReplicatePromotionGate struct {
 	MemoryLLMTokenRatioMaximum         float64 `json:"memory_llm_token_ratio_maximum"`
 	MemoryLLMUncachedTokenRatioMaximum float64 `json:"memory_llm_uncached_token_ratio_maximum,omitempty"`
 	MemoryEmbeddingRequestRatioMaximum float64 `json:"memory_embedding_request_ratio_maximum"`
+	MemoryEmbeddingTokenRatioMaximum   float64 `json:"memory_embedding_token_ratio_maximum,omitempty"`
 	FinalMemoryCountRatioMaximum       float64 `json:"final_memory_count_ratio_maximum"`
 }
 
@@ -471,6 +472,7 @@ func validateLongMemEvalReplicateManifest(manifest lmeReplicateComparisonManifes
 		gate.MemoryLLMTokenRatioMaximum <= 0 ||
 		gate.MemoryLLMUncachedTokenRatioMaximum < 0 ||
 		gate.MemoryEmbeddingRequestRatioMaximum <= 0 ||
+		gate.MemoryEmbeddingTokenRatioMaximum < 0 ||
 		gate.FinalMemoryCountRatioMaximum <= 0 {
 		return fmt.Errorf("LongMemEval replicate manifest has invalid promotion gate: %+v", gate)
 	}
@@ -1202,6 +1204,15 @@ func evaluateLongMemEvalReplicateGate(
 	addLongMemEvalReplicateRatioCheck(&result, "candidate_memory_embedding_requests_vs_main",
 		candidate.MemoryEmbeddingUsage.Requests, main.MemoryEmbeddingUsage.Requests,
 		gate.MemoryEmbeddingRequestRatioMaximum)
+	if gate.MemoryEmbeddingTokenRatioMaximum > 0 {
+		addLongMemEvalReplicateRatioCheck(
+			&result,
+			"candidate_memory_embedding_tokens_vs_main",
+			candidate.MemoryEmbeddingUsage.TotalTokens,
+			main.MemoryEmbeddingUsage.TotalTokens,
+			gate.MemoryEmbeddingTokenRatioMaximum,
+		)
+	}
 	addLongMemEvalReplicateRatioCheck(&result, "candidate_final_memories_vs_main",
 		candidate.FinalMemories, main.FinalMemories, gate.FinalMemoryCountRatioMaximum)
 	return result
