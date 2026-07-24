@@ -212,10 +212,11 @@ type ingestTrace struct {
 }
 
 type extractionTrace struct {
-	ExistingMemoryCount int                   `json:"existing_memory_count"`
-	Operations          []extractionOperation `json:"operations,omitempty"`
-	ModelCalls          []lmeModelCallTrace   `json:"model_calls,omitempty"`
-	Error               string                `json:"error,omitempty"`
+	ExistingMemoryCount int                          `json:"existing_memory_count"`
+	Operations          []extractionOperation        `json:"operations,omitempty"`
+	Persistence         []extractionPersistenceTrace `json:"persistence,omitempty"`
+	ModelCalls          []lmeModelCallTrace          `json:"model_calls,omitempty"`
+	Error               string                       `json:"error,omitempty"`
 }
 
 type lmeModelCallTrace struct {
@@ -1372,11 +1373,31 @@ func runCaseBackend(
 			addLongMemEvalBackendUsage(br, usage, embeddingUsage, providerUsage)
 			// IngestPair completes this pair's extraction before returning. Do not
 			// attribute a later pair's memories to an earlier extraction miss.
+			beforeMemories := br.FinalMemories
+			beforeSnapshotTruncated := br.SnapshotTruncated
 			memories, newOrChanged := applySnapshotProvenance(
-				br.FinalMemories, memories,
+				beforeMemories, memories,
 				provenance, answerProvenance,
 				[]string{s.ID}, pair.HasAnswer,
 			)
+			if trace.Extraction != nil {
+				if readErr != nil {
+					trace.Extraction.Persistence =
+						unverifiableExtractionPersistence(
+							trace.Extraction,
+							"snapshot_read_error",
+						)
+				} else {
+					trace.Extraction.Persistence = traceExtractionPersistence(
+						trace.Extraction,
+						beforeMemories,
+						memories,
+						newOrChanged,
+						beforeSnapshotTruncated,
+						snapshotTruncated,
+					)
+				}
+			}
 			trace.MemoryCount = len(memories)
 			trace.SnapshotTruncated = snapshotTruncated
 			trace.NewMemories = newOrChanged
@@ -3307,14 +3328,31 @@ func saveCaseLog(
 				tr.Extraction.ExistingMemoryCount,
 				len(tr.Extraction.Operations),
 				tr.Extraction.Error)
-			for _, op := range tr.Extraction.Operations {
-				fmt.Fprintf(&b, "    %s id=%s kind=%s event_time=%s topics=%s memory=%s\n",
+			persistenceByOperation := make(
+				map[int]extractionPersistenceTrace,
+				len(tr.Extraction.Persistence),
+			)
+			for _, persistence := range tr.Extraction.Persistence {
+				persistenceByOperation[persistence.OperationIndex] = persistence
+			}
+			for index, op := range tr.Extraction.Operations {
+				fmt.Fprintf(&b, "    op[%d] stage=%s type=%s id=%s kind=%s event_time=%s topics=%s memory=%s\n",
+					index,
+					op.Stage,
 					op.Type,
 					op.MemoryID,
 					op.MemoryKind,
 					op.EventTime,
 					strings.Join(op.Topics, ","),
 					truncate(op.Memory, 220))
+				if persistence, ok := persistenceByOperation[index]; ok {
+					fmt.Fprintf(&b, "      persistence: status=%s effect=%s reason=%s observed_id=%s observed_attribution=%s\n",
+						persistence.Status,
+						persistence.Effect,
+						persistence.Reason,
+						persistence.ObservedMemoryID,
+						persistence.ObservedAttribution)
+				}
 			}
 			for i, call := range tr.Extraction.ModelCalls {
 				fmt.Fprintf(&b, "    model_call[%d] source=%s cache_key=%s cache_error=%s error=%s content=%s\n",

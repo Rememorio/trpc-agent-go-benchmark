@@ -64,8 +64,12 @@ func TestCompareLongMemEvalReplicates(t *testing.T) {
 		candidate.ExtractionDiagnostics.Operations != 0 ||
 		candidate.ExtractionDiagnostics.OperationsByStage == nil ||
 		candidate.ExtractionDiagnostics.OperationsByType == nil ||
+		candidate.ExtractionDiagnostics.PersistenceByStatus == nil ||
+		candidate.ExtractionDiagnostics.PersistenceByEffect == nil ||
 		mem0.ExtractionDiagnostics.OperationsByStage == nil ||
 		mem0.ExtractionDiagnostics.OperationsByType == nil ||
+		mem0.ExtractionDiagnostics.PersistenceByStatus == nil ||
+		mem0.ExtractionDiagnostics.PersistenceByEffect == nil ||
 		candidate.FinalMemoriesByAttribution.Unknown != 12 {
 		t.Fatalf("unexpected candidate source cost: %+v", candidate)
 	}
@@ -82,12 +86,16 @@ func TestCompareLongMemEvalReplicates(t *testing.T) {
 			!strings.Contains(string(contents), candidateLabel) {
 			t.Fatalf("%s missing comparison details: %s", name, contents)
 		}
-		if strings.HasSuffix(name, ".md") &&
-			!strings.Contains(
-				string(contents),
+		if strings.HasSuffix(name, ".md") {
+			for _, section := range []string{
 				"## Extraction Diagnostics",
-			) {
-			t.Fatalf("%s missing extraction diagnostics: %s", name, contents)
+				"## Persistence Diagnostics",
+			} {
+				if !strings.Contains(string(contents), section) {
+					t.Fatalf("%s missing %s: %s",
+						name, section, contents)
+				}
+			}
 		}
 	}
 }
@@ -868,6 +876,14 @@ func TestAddLongMemEvalReplicateTraceDiagnostics(t *testing.T) {
 						Type:  extractor.OperationAdd,
 					},
 				},
+				Persistence: []extractionPersistenceTrace{
+					{
+						Status: lmePersistenceObserved,
+						Effect: string(extractor.OperationAdd),
+					},
+					{Status: lmePersistenceAlreadySatisfied},
+					{Status: lmePersistenceNotObserved},
+				},
 				ModelCalls: []lmeModelCallTrace{{}, {}, {}},
 			},
 		},
@@ -887,6 +903,11 @@ func TestAddLongMemEvalReplicateTraceDiagnostics(t *testing.T) {
 		diagnostics.OperationsByType[string(extractor.OperationUpdate)] != 1 ||
 		diagnostics.MultiCallPairs != 1 ||
 		diagnostics.AdditionalModelRequests != 2 ||
+		diagnostics.PersistenceTracedOperations != 3 ||
+		diagnostics.PersistenceByStatus[lmePersistenceObserved] != 1 ||
+		diagnostics.PersistenceByStatus[lmePersistenceAlreadySatisfied] != 1 ||
+		diagnostics.PersistenceByStatus[lmePersistenceNotObserved] != 1 ||
+		diagnostics.PersistenceByEffect[string(extractor.OperationAdd)] != 1 ||
 		diagnostics.PersistedNewMemoriesByAttribution.User != 1 ||
 		diagnostics.PersistedNewMemoriesByAttribution.Assistant != 1 ||
 		diagnostics.PersistedNewMemoriesByAttribution.Unknown != 2 {

@@ -128,6 +128,9 @@ type lmeReplicateExtractionDiagnostics struct {
 	OperationsByType                  map[string]int                `json:"operations_by_type"`
 	MultiCallPairs                    int                           `json:"multi_call_pairs"`
 	AdditionalModelRequests           int                           `json:"additional_model_requests"`
+	PersistenceTracedOperations       int                           `json:"persistence_traced_operations"`
+	PersistenceByStatus               map[string]int                `json:"persistence_by_status"`
+	PersistenceByEffect               map[string]int                `json:"persistence_by_effect"`
 	PersistedNewMemoriesByAttribution lmeReplicateAttributionCounts `json:"persisted_new_memories_by_attribution"`
 }
 
@@ -688,8 +691,10 @@ func aggregateLongMemEvalReplicateArm(
 		Backend: backend,
 		ByType:  make(map[string]*lmeReplicateTypeSummary),
 		ExtractionDiagnostics: lmeReplicateExtractionDiagnostics{
-			OperationsByStage: make(map[string]int),
-			OperationsByType:  make(map[string]int),
+			OperationsByStage:   make(map[string]int),
+			OperationsByType:    make(map[string]int),
+			PersistenceByStatus: make(map[string]int),
+			PersistenceByEffect: make(map[string]int),
 		},
 	}
 	caseCorrect := make(map[string]int)
@@ -1019,6 +1024,12 @@ func addLongMemEvalReplicateTraceDiagnostics(
 	if diagnostics.OperationsByType == nil {
 		diagnostics.OperationsByType = make(map[string]int)
 	}
+	if diagnostics.PersistenceByStatus == nil {
+		diagnostics.PersistenceByStatus = make(map[string]int)
+	}
+	if diagnostics.PersistenceByEffect == nil {
+		diagnostics.PersistenceByEffect = make(map[string]int)
+	}
 	for _, operation := range operations {
 		stage := strings.TrimSpace(operation.Stage)
 		if stage == "" {
@@ -1031,6 +1042,17 @@ func addLongMemEvalReplicateTraceDiagnostics(
 			operationType = "unspecified"
 		}
 		diagnostics.OperationsByType[operationType]++
+	}
+	for _, persistence := range trace.Extraction.Persistence {
+		diagnostics.PersistenceTracedOperations++
+		status := strings.TrimSpace(persistence.Status)
+		if status == "" {
+			status = lmePersistenceUnverifiable
+		}
+		diagnostics.PersistenceByStatus[status]++
+		if effect := strings.TrimSpace(persistence.Effect); effect != "" {
+			diagnostics.PersistenceByEffect[effect]++
+		}
 	}
 
 	modelRequests := len(trace.Extraction.ModelCalls)
@@ -1346,6 +1368,31 @@ func formatLongMemEvalReplicateComparisonMarkdown(comparison *lmeReplicateCompar
 			arm.FinalMemoriesByAttribution.User,
 			arm.FinalMemoriesByAttribution.Assistant,
 			arm.FinalMemoriesByAttribution.Unknown,
+		)
+	}
+	b.WriteString("\n## Persistence Diagnostics\n\n")
+	b.WriteString("| Arm | Covered operations | Observed | Already satisfied | Not observed | Unverifiable | Add effects | Update effects | Delete effects | Clear effects |\n")
+	b.WriteString("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
+	for _, name := range []string{
+		lmeReplicateArmPGVectorMain,
+		lmeReplicateArmMem0OSS,
+		lmeReplicateArmPGVectorCandidate,
+	} {
+		diagnostics := comparison.Arms[name].ExtractionDiagnostics
+		fmt.Fprintf(
+			&b,
+			"| %s | %d/%d | %d | %d | %d | %d | %d | %d | %d | %d |\n",
+			name,
+			diagnostics.PersistenceTracedOperations,
+			diagnostics.Operations,
+			diagnostics.PersistenceByStatus[lmePersistenceObserved],
+			diagnostics.PersistenceByStatus[lmePersistenceAlreadySatisfied],
+			diagnostics.PersistenceByStatus[lmePersistenceNotObserved],
+			diagnostics.PersistenceByStatus[lmePersistenceUnverifiable],
+			diagnostics.PersistenceByEffect[string(extractor.OperationAdd)],
+			diagnostics.PersistenceByEffect[string(extractor.OperationUpdate)],
+			diagnostics.PersistenceByEffect[string(extractor.OperationDelete)],
+			diagnostics.PersistenceByEffect[string(extractor.OperationClear)],
 		)
 	}
 	b.WriteString("\n## Gate\n\n")

@@ -259,6 +259,50 @@ func TestSaveCaseLogBlindProgressRedactsOutcomeContent(t *testing.T) {
 	}
 }
 
+func TestSaveCaseLogIncludesPersistenceTrace(t *testing.T) {
+	t.Parallel()
+
+	outputDir := t.TempDir()
+	cr := &caseResult{QuestionID: "case-1"}
+	br := &backendResult{
+		Backend: "pgvector",
+		IngestTraces: []ingestTrace{{
+			Extraction: &extractionTrace{
+				Operations: []extractionOperation{{
+					Stage:  "assistant_result",
+					Type:   extractor.OperationAdd,
+					Memory: "Recommended the museum.",
+				}},
+				Persistence: []extractionPersistenceTrace{{
+					OperationIndex:      0,
+					Status:              lmePersistenceObserved,
+					Effect:              string(extractor.OperationAdd),
+					Reason:              "snapshot_changed",
+					ObservedMemoryID:    "memory-1",
+					ObservedAttribution: lmeAttributionAssistant,
+				}},
+			},
+		}},
+	}
+
+	saveCaseLog(outputDir, cr, br, false)
+	data, err := os.ReadFile(filepath.Join(outputDir, "case-1_pgvector.log"))
+	if err != nil {
+		t.Fatalf("read case log: %v", err)
+	}
+	logText := string(data)
+	for _, want := range []string{
+		"op[0] stage=assistant_result type=add",
+		"persistence: status=observed effect=add",
+		"reason=snapshot_changed observed_id=memory-1",
+		"observed_attribution=assistant",
+	} {
+		if !strings.Contains(logText, want) {
+			t.Fatalf("case log missing %q:\n%s", want, logText)
+		}
+	}
+}
+
 func TestLongMemEvalBuildProvenance(t *testing.T) {
 	t.Parallel()
 	if current := currentLongMemEvalBuildProvenance(); current.GoVersion == "" {
