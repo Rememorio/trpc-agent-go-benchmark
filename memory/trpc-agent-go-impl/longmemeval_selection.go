@@ -130,10 +130,7 @@ func loadLongMemEvalExcludedQuestionIDs(
 }
 
 func validateLongMemEvalPreregisteredSelectionFlags() error {
-	conflicts := make([]string, 0, 6)
-	if *flagLMESelectionOnly {
-		conflicts = append(conflicts, "-lme-selection-only")
-	}
+	conflicts := make([]string, 0, 5)
 	if strings.TrimSpace(*flagLMEQuestionID) != "" {
 		conflicts = append(conflicts, "-lme-question-id")
 	}

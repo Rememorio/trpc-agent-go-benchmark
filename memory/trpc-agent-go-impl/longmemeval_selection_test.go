@@ -78,6 +78,7 @@ func TestResolveLongMemEvalPreregisteredSelection(t *testing.T) {
 		t.Fatalf("write manifest: %v", err)
 	}
 	*flagLMEPreregisteredSelection = path
+	*flagLMESelectionOnly = true
 	resolved, err = resolveLongMemEvalSelection(instances)
 	if err != nil {
 		t.Fatalf("resolve preregistered selection: %v", err)
@@ -528,6 +529,10 @@ func TestValidateLongMemEvalPreregisteredSelectionFlags(t *testing.T) {
 	}
 
 	*flagLMESelectionOnly = true
+	if err := validateLongMemEvalPreregisteredSelectionFlags(); err != nil {
+		t.Fatalf("validate-only flags: %v", err)
+	}
+
 	*flagLMEQuestionID = "q1"
 	*flagLMEQuestionIDs = "q2"
 	*flagLMEQuestionTypes = "single-session-user"
@@ -536,7 +541,6 @@ func TestValidateLongMemEvalPreregisteredSelectionFlags(t *testing.T) {
 	*flagMaxTasks = 1
 	err := validateLongMemEvalPreregisteredSelectionFlags()
 	for _, flagName := range []string{
-		"-lme-selection-only",
 		"-lme-question-id",
 		"-lme-question-ids",
 		"-lme-question-types",

@@ -315,6 +315,17 @@ LME_AGENT_REPLACEMENT="trpc.group/trpc-go/trpc-agent-go@<candidate-pseudo-versio
   -lme-selection-only \
   > ../results/lme-holdout-selection.json
 
+# Before any provider call, validate the frozen manifest against the exact
+# ingestion protocol by combining -lme-preregistered-selection with
+# -lme-selection-only. Keep the dataset, exclusion file, model, embedding,
+# Top-K, timeout, replay, and answer flags identical to the ingestion command.
+# The runner verifies the dataset, cohort, exclusions, protocol digest, and
+# clean build provenance, prints the validated manifest, and exits before
+# initializing a model, embedding client, database, or Mem0 backend.
+# Run the exact ingestion command below once with -lme-selection-only added
+# and redirect its output to a validation artifact. Then remove only that flag
+# for the provider-backed execution.
+
 # Execute exactly the preregistered selection. Dataset, protocol, exclusion
 # set, case metadata, and benchmark revision must still match the manifest.
 # Additional case filters, resampling, max-tasks truncation, and model,

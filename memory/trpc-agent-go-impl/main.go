@@ -165,7 +165,7 @@ var (
 	flagLMESelectionOnly = flag.Bool(
 		"lme-selection-only",
 		false,
-		"Print the selected LongMemEval question IDs and provenance, then exit before provider setup",
+		"Print or validate the selected LongMemEval question IDs and provenance, then exit before provider setup",
 	)
 	flagLMEPreregisteredSelection = flag.String(
 		"lme-preregistered-selection",
