@@ -20,6 +20,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
 )
 
 const (
@@ -110,9 +112,29 @@ type lmeReplicateArm struct {
 	MemoryEmbeddingUsage       lmeEmbeddingUsage                   `json:"memory_embedding_usage"`
 	IngestedPairs              int                                 `json:"ingested_pairs"`
 	FinalMemories              int                                 `json:"final_memories"`
+	ExtractionDiagnostics      lmeReplicateExtractionDiagnostics   `json:"extraction_diagnostics"`
+	FinalMemoriesByAttribution lmeReplicateAttributionCounts       `json:"final_memories_by_attribution"`
 	IngestDurationMs           int64                               `json:"ingest_duration_ms"`
 	SearchDurationMs           int64                               `json:"search_duration_ms"`
 	ByType                     map[string]*lmeReplicateTypeSummary `json:"by_type"`
+}
+
+type lmeReplicateExtractionDiagnostics struct {
+	TracedPairs                       int                           `json:"traced_pairs"`
+	OperationPairs                    int                           `json:"operation_pairs"`
+	ZeroOperationPairs                int                           `json:"zero_operation_pairs"`
+	Operations                        int                           `json:"operations"`
+	OperationsByStage                 map[string]int                `json:"operations_by_stage"`
+	OperationsByType                  map[string]int                `json:"operations_by_type"`
+	MultiCallPairs                    int                           `json:"multi_call_pairs"`
+	AdditionalModelRequests           int                           `json:"additional_model_requests"`
+	PersistedNewMemoriesByAttribution lmeReplicateAttributionCounts `json:"persisted_new_memories_by_attribution"`
+}
+
+type lmeReplicateAttributionCounts struct {
+	User      int `json:"user"`
+	Assistant int `json:"assistant"`
+	Unknown   int `json:"unknown"`
 }
 
 type lmeReplicateTypeSummary struct {
@@ -661,7 +683,15 @@ func aggregateLongMemEvalReplicateArm(
 	candidate bool,
 	pairs []lmeLoadedReplicateComparisonPair,
 ) (*lmeReplicateArm, []lmeReplicateCase, error) {
-	arm := &lmeReplicateArm{Name: armName, Backend: backend, ByType: make(map[string]*lmeReplicateTypeSummary)}
+	arm := &lmeReplicateArm{
+		Name:    armName,
+		Backend: backend,
+		ByType:  make(map[string]*lmeReplicateTypeSummary),
+		ExtractionDiagnostics: lmeReplicateExtractionDiagnostics{
+			OperationsByStage: make(map[string]int),
+			OperationsByType:  make(map[string]int),
+		},
+	}
 	caseCorrect := make(map[string]int)
 	caseStages := make(map[string][]string)
 	caseTypes := make(map[string]string)
@@ -912,6 +942,10 @@ func addLongMemEvalReplicateSourceCost(arm *lmeReplicateArm, result *runResult, 
 		}
 		arm.MemoryTokenUsage.Add(memoryUsage)
 		for _, trace := range br.IngestTraces {
+			addLongMemEvalReplicateTraceDiagnostics(
+				&arm.ExtractionDiagnostics,
+				trace,
+			)
 			if trace.Extraction == nil {
 				continue
 			}
@@ -934,6 +968,9 @@ func addLongMemEvalReplicateSourceCost(arm *lmeReplicateArm, result *runResult, 
 		arm.MemoryEmbeddingUsage.Add(*br.EmbeddingUsage)
 		arm.IngestedPairs += br.IngestedPairs
 		arm.FinalMemories += len(br.FinalMemories)
+		for _, snapshot := range br.FinalMemories {
+			arm.FinalMemoriesByAttribution.Add(snapshot.AttributedTo)
+		}
 		arm.IngestDurationMs += br.IngestDuration
 		arm.SearchDurationMs += br.SearchDuration
 		if br.ProviderUsageReported {
@@ -953,6 +990,65 @@ func addLongMemEvalReplicateSourceCost(arm *lmeReplicateArm, result *runResult, 
 				arm.MemoryLogicalUsageMissing == 0
 	}
 	return nil
+}
+
+func addLongMemEvalReplicateTraceDiagnostics(
+	diagnostics *lmeReplicateExtractionDiagnostics,
+	trace ingestTrace,
+) {
+	for _, snapshot := range trace.NewMemories {
+		diagnostics.PersistedNewMemoriesByAttribution.Add(
+			snapshot.AttributedTo,
+		)
+	}
+	if trace.Extraction == nil {
+		return
+	}
+
+	diagnostics.TracedPairs++
+	operations := trace.Extraction.Operations
+	if len(operations) == 0 {
+		diagnostics.ZeroOperationPairs++
+	} else {
+		diagnostics.OperationPairs++
+	}
+	diagnostics.Operations += len(operations)
+	if diagnostics.OperationsByStage == nil {
+		diagnostics.OperationsByStage = make(map[string]int)
+	}
+	if diagnostics.OperationsByType == nil {
+		diagnostics.OperationsByType = make(map[string]int)
+	}
+	for _, operation := range operations {
+		stage := strings.TrimSpace(operation.Stage)
+		if stage == "" {
+			stage = "unspecified"
+		}
+		diagnostics.OperationsByStage[stage]++
+
+		operationType := strings.TrimSpace(string(operation.Type))
+		if operationType == "" {
+			operationType = "unspecified"
+		}
+		diagnostics.OperationsByType[operationType]++
+	}
+
+	modelRequests := len(trace.Extraction.ModelCalls)
+	if modelRequests > 1 {
+		diagnostics.MultiCallPairs++
+		diagnostics.AdditionalModelRequests += modelRequests - 1
+	}
+}
+
+func (counts *lmeReplicateAttributionCounts) Add(attributedTo string) {
+	switch strings.ToLower(strings.TrimSpace(attributedTo)) {
+	case lmeAttributionUser:
+		counts.User++
+	case lmeAttributionAssistant:
+		counts.Assistant++
+	default:
+		counts.Unknown++
+	}
 }
 
 func evaluateLongMemEvalReplicateGate(
@@ -1220,6 +1316,37 @@ func formatLongMemEvalReplicateComparisonMarkdown(comparison *lmeReplicateCompar
 			arm.MemoryEmbeddingUsage.Requests,
 			arm.MemoryEmbeddingUsage.Calls, arm.MemoryEmbeddingUsage.TotalTokens,
 			arm.FinalMemories)
+	}
+	b.WriteString("\n## Extraction Diagnostics\n\n")
+	b.WriteString("| Arm | Traced pairs | Operation pairs | Zero-op pairs | Operations | Primary ops | Assistant-result ops | Add ops | Update ops | Multi-call pairs | Additional model requests | New user | New assistant | Final user | Final assistant | Unknown final |\n")
+	b.WriteString("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
+	for _, name := range []string{
+		lmeReplicateArmPGVectorMain,
+		lmeReplicateArmMem0OSS,
+		lmeReplicateArmPGVectorCandidate,
+	} {
+		arm := comparison.Arms[name]
+		diagnostics := arm.ExtractionDiagnostics
+		fmt.Fprintf(
+			&b,
+			"| %s | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d |\n",
+			name,
+			diagnostics.TracedPairs,
+			diagnostics.OperationPairs,
+			diagnostics.ZeroOperationPairs,
+			diagnostics.Operations,
+			diagnostics.OperationsByStage["primary"],
+			diagnostics.OperationsByStage["assistant_result"],
+			diagnostics.OperationsByType[string(extractor.OperationAdd)],
+			diagnostics.OperationsByType[string(extractor.OperationUpdate)],
+			diagnostics.MultiCallPairs,
+			diagnostics.AdditionalModelRequests,
+			diagnostics.PersistedNewMemoriesByAttribution.User,
+			diagnostics.PersistedNewMemoriesByAttribution.Assistant,
+			arm.FinalMemoriesByAttribution.User,
+			arm.FinalMemoriesByAttribution.Assistant,
+			arm.FinalMemoriesByAttribution.Unknown,
+		)
 	}
 	b.WriteString("\n## Gate\n\n")
 	fmt.Fprintf(&b, "- Integrity: **%t**\n", comparison.Gate.IntegrityPassed)

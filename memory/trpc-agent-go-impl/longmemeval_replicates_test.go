@@ -14,6 +14,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
 )
 
 func TestCompareLongMemEvalReplicates(t *testing.T) {
@@ -56,7 +58,15 @@ func TestCompareLongMemEvalReplicates(t *testing.T) {
 		!candidate.MemoryLogicalUsageComplete ||
 		candidate.MemoryEmbeddingUsage.TotalTokens != 30 ||
 		candidate.IngestedPairs != 2 ||
-		candidate.FinalMemories != 12 {
+		candidate.FinalMemories != 12 ||
+		candidate.ExtractionDiagnostics.TracedPairs != 2 ||
+		candidate.ExtractionDiagnostics.ZeroOperationPairs != 2 ||
+		candidate.ExtractionDiagnostics.Operations != 0 ||
+		candidate.ExtractionDiagnostics.OperationsByStage == nil ||
+		candidate.ExtractionDiagnostics.OperationsByType == nil ||
+		mem0.ExtractionDiagnostics.OperationsByStage == nil ||
+		mem0.ExtractionDiagnostics.OperationsByType == nil ||
+		candidate.FinalMemoriesByAttribution.Unknown != 12 {
 		t.Fatalf("unexpected candidate source cost: %+v", candidate)
 	}
 	for _, name := range []string{"replicate_comparison.md", "replicate_comparison.tsv"} {
@@ -71,6 +81,13 @@ func TestCompareLongMemEvalReplicates(t *testing.T) {
 		if !strings.Contains(string(contents), "q-knowledge") ||
 			!strings.Contains(string(contents), candidateLabel) {
 			t.Fatalf("%s missing comparison details: %s", name, contents)
+		}
+		if strings.HasSuffix(name, ".md") &&
+			!strings.Contains(
+				string(contents),
+				"## Extraction Diagnostics",
+			) {
+			t.Fatalf("%s missing extraction diagnostics: %s", name, contents)
 		}
 	}
 }
@@ -818,6 +835,62 @@ func TestReplicateSourceCostRetainsCachedLogicalUsage(t *testing.T) {
 		!arm.MemoryLogicalUsageComplete ||
 		arm.MemoryLogicalUsageMissing != 0 {
 		t.Fatalf("cached source cost = %+v", arm)
+	}
+}
+
+func TestAddLongMemEvalReplicateTraceDiagnostics(t *testing.T) {
+	t.Parallel()
+
+	diagnostics := lmeReplicateExtractionDiagnostics{
+		OperationsByStage: make(map[string]int),
+		OperationsByType:  make(map[string]int),
+	}
+	addLongMemEvalReplicateTraceDiagnostics(
+		&diagnostics,
+		ingestTrace{
+			NewMemories: []memorySnapshot{
+				{AttributedTo: lmeAttributionUser},
+				{AttributedTo: lmeAttributionAssistant},
+				{},
+			},
+			Extraction: &extractionTrace{
+				Operations: []extractionOperation{
+					{
+						Stage: "primary",
+						Type:  extractor.OperationAdd,
+					},
+					{
+						Stage: "primary",
+						Type:  extractor.OperationUpdate,
+					},
+					{
+						Stage: "assistant_result",
+						Type:  extractor.OperationAdd,
+					},
+				},
+				ModelCalls: []lmeModelCallTrace{{}, {}, {}},
+			},
+		},
+	)
+	addLongMemEvalReplicateTraceDiagnostics(
+		&diagnostics,
+		ingestTrace{NewMemories: []memorySnapshot{{}}},
+	)
+
+	if diagnostics.TracedPairs != 1 ||
+		diagnostics.OperationPairs != 1 ||
+		diagnostics.ZeroOperationPairs != 0 ||
+		diagnostics.Operations != 3 ||
+		diagnostics.OperationsByStage["primary"] != 2 ||
+		diagnostics.OperationsByStage["assistant_result"] != 1 ||
+		diagnostics.OperationsByType[string(extractor.OperationAdd)] != 2 ||
+		diagnostics.OperationsByType[string(extractor.OperationUpdate)] != 1 ||
+		diagnostics.MultiCallPairs != 1 ||
+		diagnostics.AdditionalModelRequests != 2 ||
+		diagnostics.PersistedNewMemoriesByAttribution.User != 1 ||
+		diagnostics.PersistedNewMemoriesByAttribution.Assistant != 1 ||
+		diagnostics.PersistedNewMemoriesByAttribution.Unknown != 2 {
+		t.Fatalf("unexpected extraction diagnostics: %+v", diagnostics)
 	}
 }
 
