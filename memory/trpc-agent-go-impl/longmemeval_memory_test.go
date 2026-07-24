@@ -3417,6 +3417,42 @@ func TestPairTurnsUsesConversationRoles(t *testing.T) {
 	}
 }
 
+func TestAppendMessagesPreservesLeadingAssistant(t *testing.T) {
+	t.Parallel()
+
+	sess := &session.Session{}
+	appendMessages(sess, []model.Message{{
+		Role: model.RoleAssistant, Content: "a0",
+	}}, "source", 0)
+	appendMessages(sess, []model.Message{
+		{Role: model.RoleUser, Content: "u1"},
+		{Role: model.RoleAssistant, Content: "a1"},
+	}, "source", 1)
+
+	events := sess.GetEvents()
+	if len(events) != 3 {
+		t.Fatalf("event count = %d, want 3", len(events))
+	}
+	var roles []model.Role
+	var contents []string
+	for _, evt := range events {
+		if evt.Response == nil || len(evt.Response.Choices) == 0 {
+			t.Fatalf("event has no message: %+v", evt)
+		}
+		message := evt.Response.Choices[0].Message
+		roles = append(roles, message.Role)
+		contents = append(contents, message.Content)
+	}
+	if want := []model.Role{
+		model.RoleAssistant, model.RoleUser, model.RoleAssistant,
+	}; !slices.Equal(roles, want) {
+		t.Fatalf("roles = %v, want %v", roles, want)
+	}
+	if want := []string{"a0", "u1", "a1"}; !slices.Equal(contents, want) {
+		t.Fatalf("contents = %v, want %v", contents, want)
+	}
+}
+
 func TestDiffSnapshotsIncludesMetadataOnlyChanges(t *testing.T) {
 	t.Parallel()
 

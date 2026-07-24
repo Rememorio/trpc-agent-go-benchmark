@@ -1138,6 +1138,8 @@ func runLongMemEvalMemory(ctx context.Context) error {
 			"selected_question_ids":        questionIDs(cases),
 			"ingest_wait":                  flagLMEIngestWait.String(),
 			"ingest_policy":                "chronological session replay; trigger extraction after each user/assistant pair",
+			"session_event_replay": "append source-role events without user-root filtering, " +
+				"preserving leading assistant turns",
 			"pgvector_ingest_path": "memory.Service.EnqueueAutoMemoryJob; wait for " +
 				"memory:last_extract_at completion after each pair",
 			"retrieval_note": "retrieval hits are searched memories, not raw transcript chunks",
@@ -1694,8 +1696,22 @@ func appendMessages(sess *session.Session, messages []model.Message, sourceSessi
 			}),
 		)
 		evt.Timestamp = time.Now().UTC().Add(time.Duration(sess.GetEventCount()+1) * time.Millisecond)
-		sess.UpdateUserSession(evt)
+		appendReplayEvent(sess, evt)
 	}
+}
+
+// appendReplayEvent preserves the source transcript exactly. UpdateUserSession
+// intentionally removes events before the first user message, but LongMemEval
+// contains sessions that begin with an assistant turn.
+func appendReplayEvent(sess *session.Session, evt *event.Event) {
+	if sess == nil || evt == nil {
+		return
+	}
+	sess.EventMu.Lock()
+	sess.Events = append(sess.Events, *evt)
+	sess.EventMu.Unlock()
+	sess.UpdatedAt = time.Now()
+	sess.ApplyEventStateDelta(evt)
 }
 
 func latestPairMessages(sess *session.Session) []model.Message {
