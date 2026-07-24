@@ -542,6 +542,32 @@ func TestReplicateSourceCostRejectsInconsistentIngestionTraceCount(
 	}
 }
 
+func TestReplicateSourceCostInfersMem0EmbeddingRequests(t *testing.T) {
+	t.Parallel()
+
+	result := longMemEvalReplicateFixtureResult(
+		"mem0-oss",
+		"answer-ledger",
+		"judge-ledger",
+		lmeReplicateKindIndependentReanswer,
+		map[string][2]bool{"mem0": {true, true}},
+	)
+	for _, cr := range result.Cases {
+		cr.BackendResults["mem0"].EmbeddingUsage.Requests = 0
+	}
+
+	arm := &lmeReplicateArm{}
+	if err := addLongMemEvalReplicateSourceCost(
+		arm, result, "mem0",
+	); err != nil {
+		t.Fatalf("add source cost: %v", err)
+	}
+	if arm.MemoryEmbeddingUsage.Calls != 4 ||
+		arm.MemoryEmbeddingUsage.Requests != 4 {
+		t.Fatalf("embedding usage = %+v", arm.MemoryEmbeddingUsage)
+	}
+}
+
 func TestLongMemEvalReplicateValidationRejectsDrift(t *testing.T) {
 	t.Parallel()
 

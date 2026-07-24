@@ -992,6 +992,11 @@ func addLongMemEvalReplicateSourceCost(arm *lmeReplicateArm, result *runResult, 
 	// reconstructed per request from either the provider response or the
 	// original usage retained in a response-cache entry.
 	if backend == "mem0" {
+		if arm.MemoryEmbeddingUsage.Requests == 0 &&
+			arm.MemoryEmbeddingUsage.Calls > 0 {
+			arm.MemoryEmbeddingUsage.Requests =
+				arm.MemoryEmbeddingUsage.Calls
+		}
 		arm.MemoryLogicalTokenUsage = arm.MemoryTokenUsage
 		arm.MemoryLogicalUsageComplete = true
 	} else {
