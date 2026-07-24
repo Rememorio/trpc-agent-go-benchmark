@@ -219,6 +219,12 @@ func TestMemorySearchProtocol(t *testing.T) {
 }
 
 func TestRecoverMemoryQAAnswer(t *testing.T) {
+	if MemoryQARecoveryMaxTokens != 2048 {
+		t.Fatalf(
+			"MemoryQARecoveryMaxTokens = %d, want 2048",
+			MemoryQARecoveryMaxTokens,
+		)
+	}
 	m := &recoveryModel{}
 	res := collectResult{
 		usage: TokenUsage{LLMCalls: 3},

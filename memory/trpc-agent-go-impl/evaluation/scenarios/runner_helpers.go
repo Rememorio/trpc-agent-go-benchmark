@@ -266,13 +266,13 @@ const (
 	fallbackAnswer = "The information is not available."
 
 	// MemoryQAPromptVersion identifies the shared memory-search QA protocol.
-	MemoryQAPromptVersion = "locomo-memory-qa-v14"
+	MemoryQAPromptVersion = "locomo-memory-qa-v15"
 
 	// MemoryQASearchStrategy identifies how multiple retrieval queries run.
 	MemoryQASearchStrategy = "sequential-adaptive"
 
 	// MemoryQARecoveryMaxTokens caps the forced-tool answer recovery call.
-	MemoryQARecoveryMaxTokens = 512
+	MemoryQARecoveryMaxTokens = 2048
 
 	memoryQAMaxPrimaryAnswerWords = 12
 	// The longest LoCoMo reference answer is 57 words. Recovery leaves
