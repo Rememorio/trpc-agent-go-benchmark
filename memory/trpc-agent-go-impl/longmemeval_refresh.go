@@ -287,9 +287,7 @@ func refreshLongMemEvalRetrievalResult(
 	for _, cr := range result.Cases {
 		if cr != nil {
 			for _, br := range cr.BackendResults {
-				if br != nil {
-					br.Judge = nil
-				}
+				clearLongMemEvalJudge(br)
 			}
 		}
 	}
@@ -345,7 +343,7 @@ func refreshLongMemEvalRetrievalResult(
 		br.RerankError = ""
 		replaceLongMemEvalRerankUsage(br, lmeTokenUsage{})
 		br.Retrieval = hits
-		br.Judge = nil
+		clearLongMemEvalJudge(br)
 		clearLongMemEvalRefreshAnswer(br)
 		if searchErr != nil {
 			br.Error = appendError(br.Error, "refresh search: "+searchErr.Error())

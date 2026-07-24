@@ -957,6 +957,7 @@ func longMemEvalReplicateSourceDigest(result *runResult, backend string) (string
 		copyBR.AnswerUsage = nil
 		copyBR.AnswerLogicalUsage = nil
 		copyBR.FailureStage = ""
+		copyBR.EvaluatedFailureStage = ""
 		copyBR.Judge = nil
 		copyBR.ExactMatch = false
 		copyBR.F1 = 0

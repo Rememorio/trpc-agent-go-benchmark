@@ -696,6 +696,15 @@ func TestLongMemEvalReplicateSourceDigestIgnoresAnswerTimestamps(t *testing.T) {
 	if first != second {
 		t.Fatalf("answer timestamp changed source digest: %s != %s", first, second)
 	}
+	result.Cases[0].BackendResults["pgvector"].EvaluatedFailureStage = "ok"
+	third, err := longMemEvalReplicateSourceDigest(result, "pgvector")
+	if err != nil {
+		t.Fatalf("evaluated stage digest: %v", err)
+	}
+	if first != third {
+		t.Fatalf("evaluated answer stage changed source digest: %s != %s",
+			first, third)
+	}
 }
 
 func TestLongMemEvalReplicateSourceUsageValidation(t *testing.T) {

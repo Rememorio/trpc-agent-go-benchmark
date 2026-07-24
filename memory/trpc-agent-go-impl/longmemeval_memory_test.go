@@ -2508,9 +2508,17 @@ func TestJudgeLongMemEvalResultSharesVerdictsAndCheckpoints(t *testing.T) {
 		Question:     "What did I wear?",
 		Answer:       "A yellow dress",
 		BackendResults: map[string]*backendResult{
-			"empty":    {Backend: "empty"},
-			"mem0":     {Backend: "mem0", Answer: "A yellow dress and matching earrings"},
-			"pgvector": {Backend: "pgvector", Answer: "A yellow dress and matching earrings"},
+			"empty": {Backend: "empty"},
+			"mem0": {
+				Backend:      "mem0",
+				Answer:       "A yellow dress and matching earrings",
+				FailureStage: "evidence_or_answer_miss",
+			},
+			"pgvector": {
+				Backend:      "pgvector",
+				Answer:       "A yellow dress and matching earrings",
+				FailureStage: "evidence_or_answer_miss",
+			},
 		},
 	}}}
 	llm := &queuedJudgeModel{
@@ -2541,6 +2549,14 @@ func TestJudgeLongMemEvalResultSharesVerdictsAndCheckpoints(t *testing.T) {
 		backends["pgvector"].Judge.TokenUsage != nil {
 		t.Fatalf("pgvector shared verdict = %#v", backends["pgvector"].Judge)
 	}
+	for _, backend := range []string{"mem0", "pgvector"} {
+		if backends[backend].FailureStage != "evidence_or_answer_miss" ||
+			backends[backend].EvaluatedFailureStage != "ok" {
+			t.Fatalf("%s failure stages = raw %q evaluated %q",
+				backend, backends[backend].FailureStage,
+				backends[backend].EvaluatedFailureStage)
+		}
+	}
 	if result.Metadata["judge_protocol_version"] != lmeJudgeProtocolVersion ||
 		result.Metadata["judge_cache_ledger_id"] != cache.LedgerID() ||
 		result.Metadata["judge_cache_initial_entries"] != 0 ||
@@ -2557,9 +2573,80 @@ func TestJudgeLongMemEvalResultSharesVerdictsAndCheckpoints(t *testing.T) {
 		t.Fatalf("load judge checkpoint: %v", err)
 	}
 	if loaded.Metadata["judge_cache_ledger_id"] != cache.LedgerID() ||
-		loaded.Cases[0].BackendResults["pgvector"].Judge.CacheKey == "" {
+		loaded.Cases[0].BackendResults["pgvector"].Judge.CacheKey == "" ||
+		loaded.Cases[0].BackendResults["pgvector"].EvaluatedFailureStage != "ok" {
 		t.Fatalf("judge checkpoint provenance = %#v", loaded)
 	}
+}
+
+func TestClearLongMemEvalJudgeClearsEvaluatedStage(t *testing.T) {
+	t.Parallel()
+
+	br := &backendResult{
+		FailureStage:          "evidence_or_answer_miss",
+		EvaluatedFailureStage: "ok",
+		Judge: &lmeJudgeResult{
+			Raw:     "VERDICT: yes",
+			Correct: true,
+		},
+	}
+	clearLongMemEvalJudge(br)
+	if br.Judge != nil || br.EvaluatedFailureStage != "" ||
+		br.FailureStage != "evidence_or_answer_miss" {
+		t.Fatalf("cleared judge state = %#v", br)
+	}
+	clearLongMemEvalJudge(nil)
+}
+
+func TestUpdateLongMemEvalEvaluatedFailureStage(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		result *backendResult
+		want   string
+	}{
+		{
+			name: "semantic match overrides lexical miss",
+			result: &backendResult{
+				FailureStage: "evidence_or_answer_miss",
+				Judge: &lmeJudgeResult{
+					Raw: "VERDICT: yes", Correct: true,
+				},
+			},
+			want: "ok",
+		},
+		{
+			name: "semantic miss overrides lexical match",
+			result: &backendResult{
+				FailureStage: "ok",
+				Judge: &lmeJudgeResult{
+					Raw: "VERDICT: no",
+				},
+			},
+			want: "evidence_or_answer_miss",
+		},
+		{
+			name: "pipeline failure remains attributable",
+			result: &backendResult{
+				FailureStage: "retrieval_turn_miss",
+				Judge: &lmeJudgeResult{
+					Raw: "VERDICT: yes", Correct: true,
+				},
+			},
+			want: "retrieval_turn_miss",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			updateLongMemEvalEvaluatedFailureStage(test.result)
+			if test.result.EvaluatedFailureStage != test.want {
+				t.Fatalf("evaluated failure stage = %q, want %q",
+					test.result.EvaluatedFailureStage, test.want)
+			}
+		})
+	}
+	updateLongMemEvalEvaluatedFailureStage(nil)
 }
 
 func TestJudgeLongMemEvalResultValidatesDependencies(t *testing.T) {

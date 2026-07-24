@@ -131,9 +131,7 @@ func rerankLongMemEvalResult(
 			continue
 		}
 		for _, br := range cr.BackendResults {
-			if br != nil {
-				br.Judge = nil
-			}
+			clearLongMemEvalJudge(br)
 		}
 	}
 
@@ -212,7 +210,7 @@ func rerankLongMemEvalResult(
 			br.Answer = strings.TrimSpace(rawAnswer)
 			br.AnswerCacheKey = cacheKey
 			br.AnswerSource = source
-			br.Judge = nil
+			clearLongMemEvalJudge(br)
 			resetLongMemEvalAnswerError(br)
 			if answerErr != nil {
 				br.AnswerError = answerErr.Error()

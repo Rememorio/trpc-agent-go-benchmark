@@ -287,6 +287,7 @@ type backendResult struct {
 	ProviderUsageError    string              `json:"provider_usage_error,omitempty"`
 	Evidence              *evidenceMetrics    `json:"evidence,omitempty"`
 	FailureStage          string              `json:"failure_stage,omitempty"`
+	EvaluatedFailureStage string              `json:"evaluated_failure_stage,omitempty"`
 	Judge                 *lmeJudgeResult     `json:"judge,omitempty"`
 	ExactMatch            bool                `json:"exact_match"`
 	F1                    float64             `json:"f1"`
@@ -2022,9 +2023,7 @@ func reanswerLongMemEvalResult(
 			continue
 		}
 		for _, br := range cr.BackendResults {
-			if br != nil {
-				br.Judge = nil
-			}
+			clearLongMemEvalJudge(br)
 		}
 	}
 
@@ -2245,6 +2244,7 @@ func judgeLongMemEvalResult(
 					RequestedRuns: judgeRuns,
 					Error:         "missing answer",
 				}
+				updateLongMemEvalEvaluatedFailureStage(br)
 				continue
 			}
 			judge, source, err := resolveLongMemEvalJudge(
@@ -2261,6 +2261,7 @@ func judgeLongMemEvalResult(
 				return fmt.Errorf("judge %s backend %s: %w", cr.QuestionID, backendName, err)
 			}
 			br.Judge = judge
+			updateLongMemEvalEvaluatedFailureStage(br)
 			if !completeLongMemEvalJudgeConsensus(judge) {
 				incomplete = append(incomplete, cr.QuestionID+"/"+backendName)
 			}
@@ -2496,6 +2497,24 @@ func scoreLongMemEvalAnswer(cr *caseResult, br *backendResult) {
 			br.FailureStage = "abstention_answered"
 		}
 	}
+}
+
+func clearLongMemEvalJudge(br *backendResult) {
+	if br == nil {
+		return
+	}
+	br.Judge = nil
+	br.EvaluatedFailureStage = ""
+}
+
+func updateLongMemEvalEvaluatedFailureStage(br *backendResult) {
+	if br == nil {
+		return
+	}
+	correct, available := longMemEvalJudgeCorrect(br)
+	br.EvaluatedFailureStage = evaluatedFailureStage(
+		br, normalizedFailureStage(br), correct, available,
+	)
 }
 
 func resetLongMemEvalAnswerError(br *backendResult) {
