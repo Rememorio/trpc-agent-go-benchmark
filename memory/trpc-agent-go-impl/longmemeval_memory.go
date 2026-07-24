@@ -298,6 +298,21 @@ type backendResult struct {
 	Error                 string              `json:"error,omitempty"`
 }
 
+func (r backendResult) MarshalJSON() ([]byte, error) {
+	type alias backendResult
+	normalized := alias(r)
+	if normalized.IngestTraces == nil {
+		normalized.IngestTraces = []ingestTrace{}
+	}
+	if normalized.FinalMemories == nil {
+		normalized.FinalMemories = []memorySnapshot{}
+	}
+	if normalized.Retrieval == nil {
+		normalized.Retrieval = []memoryHit{}
+	}
+	return json.Marshal(normalized)
+}
+
 type lmeAnswerAttempt struct {
 	Raw                  string              `json:"raw,omitempty"`
 	Source               string              `json:"source,omitempty"`

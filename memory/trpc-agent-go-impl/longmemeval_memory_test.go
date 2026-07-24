@@ -3206,6 +3206,32 @@ func TestUsageMissingCaseCountsAlwaysMarshal(t *testing.T) {
 	}
 }
 
+func TestBackendResultRequiredCollectionsMarshalAsArrays(t *testing.T) {
+	t.Parallel()
+
+	encoded, err := json.Marshal(backendResult{})
+	if err != nil {
+		t.Fatalf("marshal backend result: %v", err)
+	}
+	var got struct {
+		IngestTraces  json.RawMessage `json:"ingest_traces"`
+		FinalMemories json.RawMessage `json:"final_memories"`
+		Retrieval     json.RawMessage `json:"retrieval"`
+	}
+	if err := json.Unmarshal(encoded, &got); err != nil {
+		t.Fatalf("unmarshal backend result: %v", err)
+	}
+	for name, value := range map[string]json.RawMessage{
+		"ingest_traces":  got.IngestTraces,
+		"final_memories": got.FinalMemories,
+		"retrieval":      got.Retrieval,
+	} {
+		if string(value) != "[]" {
+			t.Errorf("%s = %s, want []", name, value)
+		}
+	}
+}
+
 func TestDiffSnapshotsIncludesMetadataOnlyChanges(t *testing.T) {
 	t.Parallel()
 
