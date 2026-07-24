@@ -522,6 +522,12 @@ func (t *lmeProviderUsageTracker) RecordHeader(raw string) {
 		t.mu.Unlock()
 		return
 	}
+	// Mem0 reports physical embedding calls and does not use the benchmark's
+	// client-side embedding response cache. Older server payloads omit the
+	// logical request count, so each reported call is also one request.
+	if usage.Embedding.Requests == 0 && usage.Embedding.Calls > 0 {
+		usage.Embedding.Requests = usage.Embedding.Calls
+	}
 	t.mu.Lock()
 	t.usage.LLM.Add(usage.LLM)
 	t.usage.Embedding.Add(usage.Embedding)

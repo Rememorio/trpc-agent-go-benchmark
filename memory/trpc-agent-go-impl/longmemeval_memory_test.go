@@ -1102,7 +1102,8 @@ func TestMem0UsageTransportRecordsHeader(t *testing.T) {
 		t.Fatalf("unexpected LLM usage: %#v", usage)
 	}
 	if usage.LLM.UsageMissingCalls != 1 || usage.Embedding.TotalTokens != 16 ||
-		usage.Embedding.Calls != 3 || usage.Embedding.UsageMissingCalls != 2 {
+		usage.Embedding.Calls != 3 || usage.Embedding.Requests != 3 ||
+		usage.Embedding.UsageMissingCalls != 2 {
 		t.Fatalf("unexpected embedding usage: %#v", usage)
 	}
 }
