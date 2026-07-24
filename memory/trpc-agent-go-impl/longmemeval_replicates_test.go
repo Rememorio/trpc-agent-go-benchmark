@@ -34,7 +34,12 @@ func TestCompareLongMemEvalReplicates(t *testing.T) {
 	if err := json.Unmarshal(data, &comparison); err != nil {
 		t.Fatalf("decode replicate comparison: %v", err)
 	}
-	if !comparison.Gate.Passed || comparison.ReplicateCount != 3 || len(comparison.Cases) != 2 {
+	if !comparison.Gate.Passed ||
+		!comparison.Gate.IntegrityPassed ||
+		!comparison.Gate.OutcomePassed ||
+		!comparison.Gate.CostPassed ||
+		comparison.ReplicateCount != 3 ||
+		len(comparison.Cases) != 2 {
 		t.Fatalf("unexpected comparison: %+v", comparison)
 	}
 	candidate := comparison.Arms[lmeReplicateArmPGVectorCandidate]
@@ -142,6 +147,74 @@ func TestReplicateGateUsesLogicalEmbeddingRequests(t *testing.T) {
 		}
 	}
 	t.Fatal("logical embedding request check is missing")
+}
+
+func TestReplicateGateSeparatesOutcomeFromIntegrityAndCost(t *testing.T) {
+	t.Parallel()
+
+	arm := func(name string) *lmeReplicateArm {
+		return &lmeReplicateArm{
+			Name: name, Cases: 1, MajorityCorrect: 1,
+			CorrectReplicates: 2, ProviderUsageReportedCases: 1,
+			MemoryTokenUsage:           lmeTokenUsage{TotalTokens: 100},
+			MemoryLogicalTokenUsage:    lmeTokenUsage{TotalTokens: 100},
+			MemoryLogicalUsageComplete: true,
+			MemoryEmbeddingUsage:       lmeEmbeddingUsage{Requests: 10},
+			IngestedPairs:              1,
+			FinalMemories:              5,
+			ByType: map[string]*lmeReplicateTypeSummary{
+				"single-session-user": {MajorityCorrect: 1},
+			},
+		}
+	}
+	caseArms := map[string]lmeReplicateCaseArmSummary{
+		lmeReplicateArmPGVectorMain:      {IngestedPairs: 1},
+		lmeReplicateArmMem0OSS:           {IngestedPairs: 1},
+		lmeReplicateArmPGVectorCandidate: {IngestedPairs: 1},
+	}
+	result := evaluateLongMemEvalReplicateGate(
+		&lmeReplicateComparison{
+			Arms: map[string]*lmeReplicateArm{
+				lmeReplicateArmPGVectorMain: arm(
+					lmeReplicateArmPGVectorMain,
+				),
+				lmeReplicateArmMem0OSS: arm(
+					lmeReplicateArmMem0OSS,
+				),
+				lmeReplicateArmPGVectorCandidate: arm(
+					lmeReplicateArmPGVectorCandidate,
+				),
+			},
+			Cases: []lmeReplicateCase{{Arms: caseArms}},
+		},
+		lmeReplicatePromotionGate{
+			ExpectedCases: 1, JudgeRuns: 3, PerTypeMaxDeficit: 0,
+			MemoryLLMTokenRatioMaximum:         1.55,
+			MemoryEmbeddingRequestRatioMaximum: 2,
+			FinalMemoryCountRatioMaximum:       3,
+		},
+	)
+
+	if result.Passed || result.OutcomePassed {
+		t.Fatalf("outcome gate unexpectedly passed: %+v", result)
+	}
+	if !result.IntegrityPassed || !result.CostPassed {
+		t.Fatalf("non-outcome gate unexpectedly failed: %+v", result)
+	}
+	for _, check := range result.Checks {
+		if strings.HasPrefix(check.Name, "candidate_majority_vs_") &&
+			check.Dimension != lmeReplicateGateDimensionOutcome {
+			t.Fatalf("outcome check has wrong dimension: %+v", check)
+		}
+		if strings.HasSuffix(check.Name, "_ingested_pairs") &&
+			check.Dimension != lmeReplicateGateDimensionIntegrity {
+			t.Fatalf("integrity check has wrong dimension: %+v", check)
+		}
+		if check.Name == "candidate_memory_llm_tokens_vs_main" &&
+			check.Dimension != lmeReplicateGateDimensionCost {
+			t.Fatalf("cost check has wrong dimension: %+v", check)
+		}
+	}
 }
 
 func TestReplicateGateRejectsIncompleteLogicalTokenCosts(t *testing.T) {

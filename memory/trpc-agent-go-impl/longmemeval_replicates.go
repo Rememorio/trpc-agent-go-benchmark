@@ -138,15 +138,27 @@ type lmeReplicateCaseArmSummary struct {
 }
 
 type lmeReplicateGateResult struct {
-	Passed bool                    `json:"passed"`
-	Checks []lmeReplicateGateCheck `json:"checks"`
+	Passed          bool                    `json:"passed"`
+	IntegrityPassed bool                    `json:"integrity_passed"`
+	OutcomePassed   bool                    `json:"outcome_passed"`
+	CostPassed      bool                    `json:"cost_passed"`
+	Checks          []lmeReplicateGateCheck `json:"checks"`
 }
 
+type lmeReplicateGateDimension string
+
+const (
+	lmeReplicateGateDimensionIntegrity lmeReplicateGateDimension = "integrity"
+	lmeReplicateGateDimensionOutcome   lmeReplicateGateDimension = "outcome"
+	lmeReplicateGateDimensionCost      lmeReplicateGateDimension = "cost"
+)
+
 type lmeReplicateGateCheck struct {
-	Name        string `json:"name"`
-	Passed      bool   `json:"passed"`
-	Actual      string `json:"actual"`
-	Requirement string `json:"requirement"`
+	Dimension   lmeReplicateGateDimension `json:"dimension"`
+	Name        string                    `json:"name"`
+	Passed      bool                      `json:"passed"`
+	Actual      string                    `json:"actual"`
+	Requirement string                    `json:"requirement"`
 }
 
 type lmeReplicateStableCase struct {
@@ -947,24 +959,27 @@ func evaluateLongMemEvalReplicateGate(
 	comparison *lmeReplicateComparison,
 	gate lmeReplicatePromotionGate,
 ) lmeReplicateGateResult {
-	result := lmeReplicateGateResult{Passed: true}
-	add := func(name string, passed bool, actual, requirement string) {
-		result.Checks = append(result.Checks, lmeReplicateGateCheck{
-			Name: name, Passed: passed, Actual: actual, Requirement: requirement,
-		})
-		result.Passed = result.Passed && passed
-	}
+	result := newLongMemEvalReplicateGateResult()
 	main := comparison.Arms[lmeReplicateArmPGVectorMain]
 	mem0 := comparison.Arms[lmeReplicateArmMem0OSS]
 	candidate := comparison.Arms[lmeReplicateArmPGVectorCandidate]
 	for _, arm := range []*lmeReplicateArm{main, mem0, candidate} {
-		add(arm.Name+"_cases", arm.Cases == gate.ExpectedCases,
+		result.add(
+			lmeReplicateGateDimensionIntegrity,
+			arm.Name+"_cases", arm.Cases == gate.ExpectedCases,
 			strconv.Itoa(arm.Cases), strconv.Itoa(gate.ExpectedCases))
-		add(arm.Name+"_errors", arm.BackendErrors+arm.AnswerErrors+arm.JudgeErrors == 0,
+		result.add(
+			lmeReplicateGateDimensionIntegrity,
+			arm.Name+"_errors",
+			arm.BackendErrors+arm.AnswerErrors+arm.JudgeErrors == 0,
 			fmt.Sprintf("backend=%d answer=%d judge=%d", arm.BackendErrors, arm.AnswerErrors, arm.JudgeErrors),
 			"all zero")
-		add(arm.Name+"_provider_usage", arm.ProviderUsageReportedCases == arm.Cases &&
-			arm.MemoryTokenUsage.UsageMissingCalls == 0 && arm.MemoryEmbeddingUsage.UsageMissingCalls == 0,
+		result.add(
+			lmeReplicateGateDimensionIntegrity,
+			arm.Name+"_provider_usage",
+			arm.ProviderUsageReportedCases == arm.Cases &&
+				arm.MemoryTokenUsage.UsageMissingCalls == 0 &&
+				arm.MemoryEmbeddingUsage.UsageMissingCalls == 0,
 			fmt.Sprintf("reported=%d/%d llm_missing=%d embedding_missing=%d",
 				arm.ProviderUsageReportedCases, arm.Cases,
 				arm.MemoryTokenUsage.UsageMissingCalls, arm.MemoryEmbeddingUsage.UsageMissingCalls),
@@ -973,13 +988,25 @@ func evaluateLongMemEvalReplicateGate(
 	addLongMemEvalReplicateIngestionChecks(
 		&result, comparison, main, mem0, candidate,
 	)
-	add("candidate_majority_vs_main", candidate.MajorityCorrect > main.MajorityCorrect,
+	result.add(
+		lmeReplicateGateDimensionOutcome,
+		"candidate_majority_vs_main",
+		candidate.MajorityCorrect > main.MajorityCorrect,
 		fmt.Sprintf("%d > %d", candidate.MajorityCorrect, main.MajorityCorrect), "strictly greater")
-	add("candidate_majority_vs_mem0", candidate.MajorityCorrect > mem0.MajorityCorrect,
+	result.add(
+		lmeReplicateGateDimensionOutcome,
+		"candidate_majority_vs_mem0",
+		candidate.MajorityCorrect > mem0.MajorityCorrect,
 		fmt.Sprintf("%d > %d", candidate.MajorityCorrect, mem0.MajorityCorrect), "strictly greater")
-	add("candidate_replicates_vs_main", candidate.CorrectReplicates > main.CorrectReplicates,
+	result.add(
+		lmeReplicateGateDimensionOutcome,
+		"candidate_replicates_vs_main",
+		candidate.CorrectReplicates > main.CorrectReplicates,
 		fmt.Sprintf("%d > %d", candidate.CorrectReplicates, main.CorrectReplicates), "strictly greater")
-	add("candidate_replicates_vs_mem0", candidate.CorrectReplicates > mem0.CorrectReplicates,
+	result.add(
+		lmeReplicateGateDimensionOutcome,
+		"candidate_replicates_vs_mem0",
+		candidate.CorrectReplicates > mem0.CorrectReplicates,
 		fmt.Sprintf("%d > %d", candidate.CorrectReplicates, mem0.CorrectReplicates), "strictly greater")
 
 	types := make(map[string]bool)
@@ -1003,7 +1030,11 @@ func evaluateLongMemEvalReplicateGate(
 		candidateCorrect := lmeReplicateTypeMajority(candidate.ByType[typ])
 		stronger := max(mainCorrect, mem0Correct)
 		deficit := stronger - candidateCorrect
-		add("category_"+typ, deficit <= gate.PerTypeMaxDeficit && !(candidateCorrect == 0 && stronger > 0),
+		result.add(
+			lmeReplicateGateDimensionOutcome,
+			"category_"+typ,
+			deficit <= gate.PerTypeMaxDeficit &&
+				!(candidateCorrect == 0 && stronger > 0),
 			fmt.Sprintf("candidate=%d main=%d mem0=%d deficit=%d", candidateCorrect, mainCorrect, mem0Correct, deficit),
 			fmt.Sprintf("deficit <= %d and candidate nonzero when a baseline is nonzero", gate.PerTypeMaxDeficit))
 	}
@@ -1017,7 +1048,8 @@ func evaluateLongMemEvalReplicateGate(
 			gate.MemoryLLMTokenRatioMaximum,
 		)
 	} else {
-		add(
+		result.add(
+			lmeReplicateGateDimensionCost,
 			"candidate_memory_llm_tokens_vs_main",
 			false,
 			fmt.Sprintf(
@@ -1039,6 +1071,40 @@ func evaluateLongMemEvalReplicateGate(
 	return result
 }
 
+func newLongMemEvalReplicateGateResult() lmeReplicateGateResult {
+	return lmeReplicateGateResult{
+		Passed:          true,
+		IntegrityPassed: true,
+		OutcomePassed:   true,
+		CostPassed:      true,
+	}
+}
+
+func (r *lmeReplicateGateResult) add(
+	dimension lmeReplicateGateDimension,
+	name string,
+	passed bool,
+	actual string,
+	requirement string,
+) {
+	r.Checks = append(r.Checks, lmeReplicateGateCheck{
+		Dimension: dimension,
+		Name:      name, Passed: passed, Actual: actual,
+		Requirement: requirement,
+	})
+	switch dimension {
+	case lmeReplicateGateDimensionIntegrity:
+		r.IntegrityPassed = r.IntegrityPassed && passed
+	case lmeReplicateGateDimensionOutcome:
+		r.OutcomePassed = r.OutcomePassed && passed
+	case lmeReplicateGateDimensionCost:
+		r.CostPassed = r.CostPassed && passed
+	default:
+		r.IntegrityPassed = false
+	}
+	r.Passed = r.IntegrityPassed && r.OutcomePassed && r.CostPassed
+}
+
 func addLongMemEvalReplicateIngestionChecks(
 	result *lmeReplicateGateResult,
 	comparison *lmeReplicateComparison,
@@ -1046,11 +1112,10 @@ func addLongMemEvalReplicateIngestionChecks(
 	others ...*lmeReplicateArm,
 ) {
 	add := func(name string, passed bool, actual, requirement string) {
-		result.Checks = append(result.Checks, lmeReplicateGateCheck{
-			Name: name, Passed: passed, Actual: actual,
-			Requirement: requirement,
-		})
-		result.Passed = result.Passed && passed
+		result.add(
+			lmeReplicateGateDimensionIntegrity,
+			name, passed, actual, requirement,
+		)
 	}
 	mainInvalid := 0
 	for _, item := range comparison.Cases {
@@ -1109,10 +1174,10 @@ func addLongMemEvalReplicateRatioCheck(
 	if denominator > 0 {
 		actual = fmt.Sprintf("%.6f (%d/%d)", float64(numerator)/float64(denominator), numerator, denominator)
 	}
-	result.Checks = append(result.Checks, lmeReplicateGateCheck{
-		Name: name, Passed: passed, Actual: actual, Requirement: fmt.Sprintf("<= %.6f", maximum),
-	})
-	result.Passed = result.Passed && passed
+	result.add(
+		lmeReplicateGateDimensionCost,
+		name, passed, actual, fmt.Sprintf("<= %.6f", maximum),
+	)
 }
 
 func formatLongMemEvalReplicateComparisonTSV(comparison *lmeReplicateComparison) string {
@@ -1157,12 +1222,16 @@ func formatLongMemEvalReplicateComparisonMarkdown(comparison *lmeReplicateCompar
 			arm.FinalMemories)
 	}
 	b.WriteString("\n## Gate\n\n")
+	fmt.Fprintf(&b, "- Integrity: **%t**\n", comparison.Gate.IntegrityPassed)
+	fmt.Fprintf(&b, "- Outcome: **%t**\n", comparison.Gate.OutcomePassed)
+	fmt.Fprintf(&b, "- Cost: **%t**\n\n", comparison.Gate.CostPassed)
 	for _, check := range comparison.Gate.Checks {
 		mark := "x"
 		if !check.Passed {
 			mark = " "
 		}
-		fmt.Fprintf(&b, "- [%s] `%s`: %s; required %s\n", mark, check.Name, check.Actual, check.Requirement)
+		fmt.Fprintf(&b, "- [%s] `%s/%s`: %s; required %s\n",
+			mark, check.Dimension, check.Name, check.Actual, check.Requirement)
 	}
 	b.WriteString("\n## Cases\n\n")
 	b.WriteString("| Question | Type | Main | Mem0 | Candidate |\n")
