@@ -39,7 +39,7 @@ const (
 
 	// These versions are part of the experiment contract. Bump the relevant
 	// version whenever replay, prompting, or judging semantics change.
-	lmeProtocolVersion             = "lme-memory-turn-pair-v2"
+	lmeProtocolVersion             = "lme-memory-role-round-v3"
 	lmeAttributionProtocolVersion  = "lme-memory-attribution-v1"
 	lmeAnswerPromptVersion         = "lme-memory-answer-v14"
 	lmeAnswerRetryPromptVersion    = "lme-memory-answer-repair-v6"
@@ -213,9 +213,9 @@ func currentLongMemEvalRerankGeneration() lmeRerankGenerationProvenance {
 func currentLongMemEvalProtocol() lmeProtocolProvenance {
 	return lmeProtocolProvenance{
 		Version:              lmeProtocolVersion,
-		ReplayUnit:           "user-assistant-pair",
+		ReplayUnit:           "role-aware-user-assistant-round",
 		SessionOrder:         "haystack-date-ascending-stable",
-		ExtractionCadence:    "after-each-pair",
+		ExtractionCadence:    "after-each-replay-unit",
 		RetrievalInput:       "question-to-memory-search",
 		AnswerInput:          "ranked-memories-only",
 		AnswerModel:          getModelName(),

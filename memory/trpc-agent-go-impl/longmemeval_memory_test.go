@@ -459,6 +459,8 @@ func TestWriteLongMemEvalSelectionOmitsQuestionContent(t *testing.T) {
 	}
 	if got.SchemaVersion != lmeSelectionManifestSchemaVersion ||
 		got.Protocol.Version != lmeProtocolVersion ||
+		got.Protocol.ReplayUnit != "role-aware-user-assistant-round" ||
+		got.Protocol.ExtractionCadence != "after-each-replay-unit" ||
 		got.Protocol.TopK != *flagVectorTopK ||
 		got.Protocol.AnswerModel != getModelName() ||
 		got.Protocol.AnswerModelVariant != getModelVariant() ||

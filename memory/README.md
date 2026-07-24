@@ -216,11 +216,15 @@ go run . -scenario agentic,auto -memory-backend pgvector,mysql
 
 LongMemEval uses a separate dataset format because each question carries its
 own haystack sessions. The runner replays sessions in chronological order and
-triggers memory extraction after each user/assistant pair. The pgvector backend
-uses `memory.Service.EnqueueAutoMemoryJob` and waits for its session completion
+triggers memory extraction after each role-aware replay unit. A user turn
+immediately followed by an assistant turn forms one unit; leading assistant
+turns, repeated roles, and other unmatched turns remain singleton units in
+source order. This prevents malformed or assistant-leading sessions from
+combining unrelated messages. The pgvector backend uses
+`memory.Service.EnqueueAutoMemoryJob` and waits for its session completion
 marker before continuing. Reported asynchronous extraction or persistence
-errors stop that backend immediately and are retained in the pair trace;
-self-hosted mem0 sends the same raw pair to its memory API. Session dates are
+errors stop that backend immediately and are retained in the replay trace;
+self-hosted mem0 sends the same raw unit to its memory API. Session dates are
 transported separately: pgvector receives the date through extraction context,
 while mem0 receives an ISO date in `metadata.observation_date`. The Mem0 V3
 runtime used for a comparison must pass that metadata value to its existing
