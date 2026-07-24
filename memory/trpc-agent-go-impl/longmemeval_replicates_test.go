@@ -36,7 +36,8 @@ func TestCompareLongMemEvalReplicates(t *testing.T) {
 	if err := json.Unmarshal(data, &comparison); err != nil {
 		t.Fatalf("decode replicate comparison: %v", err)
 	}
-	if !comparison.Gate.Passed ||
+	if comparison.SchemaVersion != lmeReplicateComparisonSchemaVersion ||
+		!comparison.Gate.Passed ||
 		!comparison.Gate.IntegrityPassed ||
 		!comparison.Gate.OutcomePassed ||
 		!comparison.Gate.CostPassed ||
@@ -52,6 +53,22 @@ func TestCompareLongMemEvalReplicates(t *testing.T) {
 		mem0.MajorityCorrect != 1 || mem0.CorrectReplicates != 3 {
 		t.Fatalf("unexpected arm summaries: main=%+v mem0=%+v candidate=%+v",
 			main, mem0, candidate)
+	}
+	if len(comparison.Pairwise) != 2 {
+		t.Fatalf("unexpected pairwise summaries: %+v", comparison.Pairwise)
+	}
+	for _, pairwise := range comparison.Pairwise {
+		if pairwise.InferenceUnit != "question-majority" ||
+			pairwise.CandidateCorrect != 2 ||
+			pairwise.BaselineCorrect != 1 ||
+			pairwise.CandidateWins != 1 ||
+			pairwise.BaselineWins != 0 ||
+			pairwise.Ties != 1 ||
+			pairwise.DiscordantCases != 1 ||
+			pairwise.AccuracyDelta != 0.5 ||
+			pairwise.ExactMcNemarPValue != 1 {
+			t.Fatalf("unexpected pairwise summary: %+v", pairwise)
+		}
 	}
 	if candidate.MemoryTokenUsage.TotalTokens != 240 ||
 		candidate.MemoryLogicalTokenUsage.TotalTokens != 240 ||
@@ -88,6 +105,7 @@ func TestCompareLongMemEvalReplicates(t *testing.T) {
 		}
 		if strings.HasSuffix(name, ".md") {
 			for _, section := range []string{
+				"## Pairwise Majority Outcomes",
 				"## Extraction Diagnostics",
 				"## Persistence Diagnostics",
 			} {
@@ -97,6 +115,79 @@ func TestCompareLongMemEvalReplicates(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func TestAnalyzeLongMemEvalPairwise(t *testing.T) {
+	t.Parallel()
+
+	replicateCase := func(
+		id string,
+		candidateCorrect bool,
+		baselineCorrect bool,
+	) lmeReplicateCase {
+		return lmeReplicateCase{
+			QuestionID: id,
+			Arms: map[string]lmeReplicateCaseArmSummary{
+				lmeReplicateArmPGVectorCandidate: {
+					MajorityCorrect: candidateCorrect,
+				},
+				lmeReplicateArmPGVectorMain: {
+					MajorityCorrect: baselineCorrect,
+				},
+			},
+		}
+	}
+	cases := []lmeReplicateCase{
+		replicateCase("candidate-1", true, false),
+		replicateCase("candidate-2", true, false),
+		replicateCase("candidate-3", true, false),
+		replicateCase("candidate-4", true, false),
+		replicateCase("candidate-5", true, false),
+		replicateCase("baseline-1", false, true),
+		replicateCase("both-correct", true, true),
+		replicateCase("both-wrong", false, false),
+	}
+
+	got, err := analyzeLongMemEvalPairwise(
+		cases,
+		lmeReplicateArmPGVectorCandidate,
+		lmeReplicateArmPGVectorMain,
+	)
+	if err != nil {
+		t.Fatalf("analyze pairwise outcomes: %v", err)
+	}
+	if got.Cases != 8 ||
+		got.CandidateCorrect != 6 ||
+		got.BaselineCorrect != 2 ||
+		got.CandidateWins != 5 ||
+		got.BaselineWins != 1 ||
+		got.Ties != 2 ||
+		got.DiscordantCases != 6 ||
+		got.AccuracyDelta != 0.5 ||
+		got.ExactMcNemarPValue != 0.21875 {
+		t.Fatalf("unexpected pairwise analysis: %+v", got)
+	}
+}
+
+func TestAnalyzeLongMemEvalPairwiseRejectsMissingArm(t *testing.T) {
+	t.Parallel()
+
+	_, err := analyzeLongMemEvalPairwise(
+		[]lmeReplicateCase{{QuestionID: "missing"}},
+		lmeReplicateArmPGVectorCandidate,
+		lmeReplicateArmPGVectorMain,
+	)
+	if err == nil || !strings.Contains(err.Error(), "missing candidate arm") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestExactMcNemarPValueNoDiscordantCases(t *testing.T) {
+	t.Parallel()
+
+	if got := exactMcNemarPValue(0, 0); got != 1 {
+		t.Fatalf("exact McNemar p-value = %v, want 1", got)
 	}
 }
 
@@ -714,7 +805,7 @@ func TestValidateLongMemEvalReplicateManifest(t *testing.T) {
 	t.Parallel()
 
 	valid := lmeReplicateComparisonManifest{
-		SchemaVersion: lmeReplicateComparisonSchemaVersion,
+		SchemaVersion: lmeReplicateManifestSchemaVersion,
 		Replicates: []lmeReplicateComparisonPair{
 			{Name: "r1", Kind: lmeReplicateKindPrimary, BaselineResults: "b1", CandidateResults: "c1"},
 			{Name: "r2", Kind: lmeReplicateKindIndependentReanswer, BaselineResults: "b2", CandidateResults: "c2"},
@@ -1103,7 +1194,7 @@ func writeLongMemEvalReplicateFixture(
 		{main: [2]bool{false, false}, mem0: [2]bool{true, false}, candidate: [2]bool{true, true}},
 	}
 	manifest := lmeReplicateComparisonManifest{
-		SchemaVersion: lmeReplicateComparisonSchemaVersion,
+		SchemaVersion: lmeReplicateManifestSchemaVersion,
 		Gate: lmeReplicatePromotionGate{
 			ExpectedCases: 2, JudgeRuns: 3, PerTypeMaxDeficit: 1,
 			MemoryLLMTokenRatioMaximum:         1.35,

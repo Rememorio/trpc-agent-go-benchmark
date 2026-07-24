@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -25,7 +26,8 @@ import (
 )
 
 const (
-	lmeReplicateComparisonSchemaVersion = 2
+	lmeReplicateManifestSchemaVersion   = 2
+	lmeReplicateComparisonSchemaVersion = 3
 	lmeReplicateKindPrimary             = "primary"
 	lmeReplicateKindIndependentReanswer = "independent-reanswer"
 
@@ -76,6 +78,7 @@ type lmeReplicateComparison struct {
 	Inputs         []lmeReplicateInputAudit    `json:"inputs"`
 	Arms           map[string]*lmeReplicateArm `json:"arms"`
 	Cases          []lmeReplicateCase          `json:"cases"`
+	Pairwise       []lmeReplicatePairwise      `json:"pairwise"`
 	Gate           lmeReplicateGateResult      `json:"gate"`
 }
 
@@ -162,6 +165,22 @@ type lmeReplicateCaseArmSummary struct {
 	CorrectReplicates int      `json:"correct_replicates"`
 	IngestedPairs     int      `json:"ingested_pairs"`
 	Stages            []string `json:"stages"`
+}
+
+type lmeReplicatePairwise struct {
+	Name               string  `json:"name"`
+	InferenceUnit      string  `json:"inference_unit"`
+	CandidateArm       string  `json:"candidate_arm"`
+	BaselineArm        string  `json:"baseline_arm"`
+	Cases              int     `json:"cases"`
+	CandidateCorrect   int     `json:"candidate_correct"`
+	BaselineCorrect    int     `json:"baseline_correct"`
+	CandidateWins      int     `json:"candidate_wins"`
+	BaselineWins       int     `json:"baseline_wins"`
+	Ties               int     `json:"ties"`
+	DiscordantCases    int     `json:"discordant_cases"`
+	AccuracyDelta      float64 `json:"accuracy_delta"`
+	ExactMcNemarPValue float64 `json:"exact_mcnemar_p_value"`
 }
 
 type lmeReplicateGateResult struct {
@@ -429,9 +448,9 @@ func validateLongMemEvalIndependentMemoryResponseCaches(
 }
 
 func validateLongMemEvalReplicateManifest(manifest lmeReplicateComparisonManifest) error {
-	if manifest.SchemaVersion != lmeReplicateComparisonSchemaVersion {
+	if manifest.SchemaVersion != lmeReplicateManifestSchemaVersion {
 		return fmt.Errorf("LongMemEval replicate schema version is %d, want %d",
-			manifest.SchemaVersion, lmeReplicateComparisonSchemaVersion)
+			manifest.SchemaVersion, lmeReplicateManifestSchemaVersion)
 	}
 	if len(manifest.Replicates) < 3 || len(manifest.Replicates)%2 == 0 {
 		return fmt.Errorf("LongMemEval replicate manifest requires an odd count of at least 3, got %d", len(manifest.Replicates))
@@ -682,8 +701,94 @@ func aggregateLongMemEvalReplicates(
 	for _, id := range caseOrder {
 		comparison.Cases = append(comparison.Cases, *caseMap[id])
 	}
+	for _, baselineArm := range []string{
+		lmeReplicateArmPGVectorMain,
+		lmeReplicateArmMem0OSS,
+	} {
+		pairwise, err := analyzeLongMemEvalPairwise(
+			comparison.Cases,
+			lmeReplicateArmPGVectorCandidate,
+			baselineArm,
+		)
+		if err != nil {
+			return nil, err
+		}
+		comparison.Pairwise = append(comparison.Pairwise, pairwise)
+	}
 	comparison.Gate = evaluateLongMemEvalReplicateGate(comparison, manifest.Gate)
 	return comparison, nil
+}
+
+func analyzeLongMemEvalPairwise(
+	cases []lmeReplicateCase,
+	candidateArm string,
+	baselineArm string,
+) (lmeReplicatePairwise, error) {
+	result := lmeReplicatePairwise{
+		Name:          "candidate_vs_" + baselineArm,
+		InferenceUnit: "question-majority",
+		CandidateArm:  candidateArm,
+		BaselineArm:   baselineArm,
+		Cases:         len(cases),
+	}
+	for _, item := range cases {
+		candidate, ok := item.Arms[candidateArm]
+		if !ok {
+			return result, fmt.Errorf(
+				"replicate question %q is missing candidate arm %q",
+				item.QuestionID,
+				candidateArm,
+			)
+		}
+		baseline, ok := item.Arms[baselineArm]
+		if !ok {
+			return result, fmt.Errorf(
+				"replicate question %q is missing baseline arm %q",
+				item.QuestionID,
+				baselineArm,
+			)
+		}
+		if candidate.MajorityCorrect {
+			result.CandidateCorrect++
+		}
+		if baseline.MajorityCorrect {
+			result.BaselineCorrect++
+		}
+		switch {
+		case candidate.MajorityCorrect && !baseline.MajorityCorrect:
+			result.CandidateWins++
+		case !candidate.MajorityCorrect && baseline.MajorityCorrect:
+			result.BaselineWins++
+		default:
+			result.Ties++
+		}
+	}
+	result.DiscordantCases = result.CandidateWins + result.BaselineWins
+	if result.Cases > 0 {
+		result.AccuracyDelta = float64(
+			result.CandidateCorrect-result.BaselineCorrect,
+		) / float64(result.Cases)
+	}
+	result.ExactMcNemarPValue = exactMcNemarPValue(
+		result.CandidateWins,
+		result.BaselineWins,
+	)
+	return result, nil
+}
+
+func exactMcNemarPValue(candidateWins, baselineWins int) float64 {
+	discordant := candidateWins + baselineWins
+	if discordant <= 0 {
+		return 1
+	}
+	tail := min(candidateWins, baselineWins)
+	term := math.Ldexp(1, -discordant)
+	probability := term
+	for successes := 1; successes <= tail; successes++ {
+		term *= float64(discordant-successes+1) / float64(successes)
+		probability += term
+	}
+	return min(1, 2*probability)
 }
 
 func aggregateLongMemEvalReplicateArm(
@@ -1372,6 +1477,26 @@ func formatLongMemEvalReplicateComparisonMarkdown(comparison *lmeReplicateCompar
 			arm.MemoryEmbeddingUsage.Requests,
 			arm.MemoryEmbeddingUsage.Calls, arm.MemoryEmbeddingUsage.TotalTokens,
 			arm.FinalMemories)
+	}
+	b.WriteString("\n## Pairwise Majority Outcomes\n\n")
+	b.WriteString("| Comparison | Candidate | Baseline | Wins | Losses | Ties | Accuracy delta | Discordant cases | Exact McNemar p |\n")
+	b.WriteString("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
+	for _, pairwise := range comparison.Pairwise {
+		fmt.Fprintf(
+			&b,
+			"| %s | %d/%d | %d/%d | %d | %d | %d | %+.3f | %d | %.6f |\n",
+			pairwise.Name,
+			pairwise.CandidateCorrect,
+			pairwise.Cases,
+			pairwise.BaselineCorrect,
+			pairwise.Cases,
+			pairwise.CandidateWins,
+			pairwise.BaselineWins,
+			pairwise.Ties,
+			pairwise.AccuracyDelta,
+			pairwise.DiscordantCases,
+			pairwise.ExactMcNemarPValue,
+		)
 	}
 	b.WriteString("\n## Extraction Diagnostics\n\n")
 	b.WriteString("| Arm | Traced pairs | Operation pairs | Zero-op pairs | Operations | Primary ops | Assistant-result ops | Add ops | Update ops | Multi-call pairs | Additional model requests | New user | New assistant | Final user | Final assistant | Unknown final |\n")

@@ -583,6 +583,15 @@ separate `integrity_passed`, `outcome_passed`, and `cost_passed` summaries. A
 valid negative quality result therefore remains distinguishable from a broken
 or incomparable experiment.
 
+The comparison JSON and Markdown also report paired majority outcomes for the
+candidate against each baseline: candidate wins, baseline wins, ties, accuracy
+delta, discordant question count, and the two-sided exact McNemar p-value.
+The inference unit is one question after majority voting. Answer replicates
+measure stability and contribute to the promotion gate, but are not treated as
+independent samples for significance. This distinction is especially important
+for small holdouts, where a positive accuracy delta may still have weak
+statistical evidence.
+
 `-lme-answer-cache` supplies a shared, content-addressed answer ledger. Its key
 covers the exact ordered memories and metadata shown to the answer model, the
 question prompt, model, variant, generation settings, and protocol versions;
