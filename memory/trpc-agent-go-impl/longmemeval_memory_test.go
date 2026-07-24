@@ -3181,6 +3181,30 @@ func TestHitsFromEntriesIncludesEpisodicMetadata(t *testing.T) {
 	}
 }
 
+func TestUsageMissingCaseCountsAlwaysMarshal(t *testing.T) {
+	t.Parallel()
+
+	for name, value := range map[string]any{
+		"run summary":     runSummary{},
+		"backend summary": backendSummary{},
+	} {
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			t.Fatalf("%s: marshal: %v", name, err)
+		}
+		got := string(encoded)
+		for _, field := range []string{
+			`"answer_logical_usage_missing_cases":0`,
+			`"judge_logical_usage_missing_cases":0`,
+		} {
+			if !strings.Contains(got, field) {
+				t.Fatalf("%s: missing explicit zero field %s in %s",
+					name, field, got)
+			}
+		}
+	}
+}
+
 func TestDiffSnapshotsIncludesMetadataOnlyChanges(t *testing.T) {
 	t.Parallel()
 

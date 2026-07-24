@@ -362,11 +362,11 @@ type runSummary struct {
 	AnswerTokenUsage               lmeTokenUsage              `json:"answer_token_usage,omitempty"`
 	AnswerLogicalTokenUsage        lmeTokenUsage              `json:"answer_logical_token_usage,omitempty"`
 	AnswerLogicalUsageCases        int                        `json:"answer_logical_usage_cases,omitempty"`
-	AnswerLogicalUsageMissingCases int                        `json:"answer_logical_usage_missing_cases,omitempty"`
+	AnswerLogicalUsageMissingCases int                        `json:"answer_logical_usage_missing_cases"`
 	JudgeTokenUsage                lmeTokenUsage              `json:"judge_token_usage,omitempty"`
 	JudgeLogicalTokenUsage         lmeTokenUsage              `json:"judge_logical_token_usage,omitempty"`
 	JudgeLogicalUsageCases         int                        `json:"judge_logical_usage_cases,omitempty"`
-	JudgeLogicalUsageMissingCases  int                        `json:"judge_logical_usage_missing_cases,omitempty"`
+	JudgeLogicalUsageMissingCases  int                        `json:"judge_logical_usage_missing_cases"`
 }
 
 type backendSummary struct {
@@ -393,11 +393,11 @@ type backendSummary struct {
 	AnswerTokenUsage               lmeTokenUsage     `json:"answer_token_usage,omitempty"`
 	AnswerLogicalTokenUsage        lmeTokenUsage     `json:"answer_logical_token_usage,omitempty"`
 	AnswerLogicalUsageCases        int               `json:"answer_logical_usage_cases,omitempty"`
-	AnswerLogicalUsageMissingCases int               `json:"answer_logical_usage_missing_cases,omitempty"`
+	AnswerLogicalUsageMissingCases int               `json:"answer_logical_usage_missing_cases"`
 	JudgeTokenUsage                lmeTokenUsage     `json:"judge_token_usage,omitempty"`
 	JudgeLogicalTokenUsage         lmeTokenUsage     `json:"judge_logical_token_usage,omitempty"`
 	JudgeLogicalUsageCases         int               `json:"judge_logical_usage_cases,omitempty"`
-	JudgeLogicalUsageMissingCases  int               `json:"judge_logical_usage_missing_cases,omitempty"`
+	JudgeLogicalUsageMissingCases  int               `json:"judge_logical_usage_missing_cases"`
 }
 
 type evidenceMetrics struct {
