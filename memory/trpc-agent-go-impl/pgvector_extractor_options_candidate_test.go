@@ -25,9 +25,6 @@ func TestLongMemEvalExtractorOptionsCandidate(t *testing.T) {
 			AssistantResultExtraction: true,
 		},
 		{
-			UpdatePolicy: pgvectorUpdatePolicyPreserveHistory,
-		},
-		{
 			UpdatePolicy: pgvectorUpdatePolicyAddOnly,
 		},
 	} {

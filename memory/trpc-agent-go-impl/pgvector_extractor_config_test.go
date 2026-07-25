@@ -45,7 +45,6 @@ func TestCurrentPGVectorExtractionConfig(t *testing.T) {
 	}{
 		{input: "", want: pgvectorUpdatePolicyReconcile},
 		{input: " RECONCILE ", want: pgvectorUpdatePolicyReconcile},
-		{input: "PRESERVE-HISTORY", want: pgvectorUpdatePolicyPreserveHistory},
 		{input: "ADD-ONLY", want: pgvectorUpdatePolicyAddOnly},
 	} {
 		*flagPGVectorUpdatePolicy = test.input
@@ -66,6 +65,10 @@ func TestCurrentPGVectorExtractionConfig(t *testing.T) {
 	*flagPGVectorUpdatePolicy = "custom"
 	if _, err := currentPGVectorExtractionConfig(); err == nil {
 		t.Fatal("expected unsupported update policy error")
+	}
+	*flagPGVectorUpdatePolicy = "preserve-history"
+	if _, err := currentPGVectorExtractionConfig(); err == nil {
+		t.Fatal("expected removed preserve-history policy error")
 	}
 }
 

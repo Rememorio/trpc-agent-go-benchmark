@@ -508,7 +508,40 @@ func longMemEvalImplementation() string {
 	if value := strings.TrimSpace(os.Getenv("LME_IMPLEMENTATION")); value != "" {
 		return value
 	}
+	if value := longMemEvalBuildImplementation(
+		currentLongMemEvalBuildProvenance(),
+	); value != "" {
+		return value
+	}
 	return "unspecified"
+}
+
+func longMemEvalBuildImplementation(build lmeBuildProvenance) string {
+	if longMemEvalBuildProvenanceIssue(build) != "" {
+		return ""
+	}
+	agentVersion := longMemEvalEffectiveModuleVersion(
+		build.Modules[lmeAgentModulePath],
+	)
+	pgvectorVersion := longMemEvalEffectiveModuleVersion(
+		build.Modules[lmePGVectorModulePath],
+	)
+	if agentVersion == pgvectorVersion {
+		return build.BuildProfile + "@" + agentVersion
+	}
+	return fmt.Sprintf(
+		"%s@agent=%s,pgvector=%s",
+		build.BuildProfile,
+		agentVersion,
+		pgvectorVersion,
+	)
+}
+
+func longMemEvalEffectiveModuleVersion(module lmeModuleProvenance) string {
+	if value := strings.TrimSpace(module.ReplacementVersion); value != "" {
+		return value
+	}
+	return strings.TrimSpace(module.Version)
 }
 
 func longMemEvalMem0Implementation() string {

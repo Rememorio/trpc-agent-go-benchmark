@@ -816,7 +816,7 @@ LongMemEval-specific options:
 | `-lme-embedding-response-cache` |  | Persistent exact-vector embedding ledger      |
 | `-lme-embedding-response-cache-require-hit` | false | Fail before an uncached embedding provider call |
 | `-lme-blind-progress`    | false   | Hide identifiers and outcome content from progress and case logs |
-| `-lme-implementation`    | (env)   | Reproducible implementation label            |
+| `-lme-implementation`    | (build) | Label; flag/env override pinned build identity |
 | `-lme-reanswer-results`   |         | Re-answer using saved ranked retrieval hits  |
 | `-lme-reanswer-reuse-source-answers` | true | Seed cache from compatible source answers |
 | `-lme-refresh-memory-snapshots` | | Refresh final snapshots without model calls  |
@@ -851,7 +851,7 @@ LongMemEval-specific options:
 | `OPENAI_EMBEDDING_BASE_URL` | Base URL for embedding API (optional)     |
 | `MEM0_HOST`                 | Self-hosted mem0 OSS host                 |
 | `MEM0_IMPLEMENTATION`       | Mem0 source revision or image digest      |
-| `LME_IMPLEMENTATION`        | LongMemEval implementation label          |
+| `LME_IMPLEMENTATION`        | LongMemEval implementation label override |
 
 ## Dataset Setup
 

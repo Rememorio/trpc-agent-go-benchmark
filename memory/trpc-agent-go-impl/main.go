@@ -195,7 +195,7 @@ var (
 	flagPGVectorUpdatePolicy = flag.String(
 		"pgvector-update-policy",
 		"reconcile",
-		"PGVector auto-memory update policy: reconcile, preserve-history, or add-only",
+		"PGVector auto-memory update policy: reconcile or add-only",
 	)
 	flagPGVectorAssistantResultExtraction = flag.Bool(
 		"pgvector-assistant-result-extraction",
@@ -220,7 +220,7 @@ var (
 	flagLMEImplementation = flag.String(
 		"lme-implementation",
 		"",
-		"Implementation label recorded in LongMemEval results (env LME_IMPLEMENTATION)",
+		"Implementation label recorded in LongMemEval results; defaults to pinned build identity (env LME_IMPLEMENTATION)",
 	)
 	flagLMEAnalyzeResults = flag.String(
 		"lme-analyze-results",
