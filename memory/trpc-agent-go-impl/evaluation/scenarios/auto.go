@@ -24,13 +24,13 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 const (
 	autoAppName = "memory-eval-auto"
 
-	autoQAMaxTokens         = 80
 	autoQAMaxToolIterations = 10
 )
 
@@ -77,54 +77,31 @@ func (e *AutoEvaluator) Evaluate(
 	userKey := memory.UserKey{
 		AppName: autoAppName, UserID: sample.SampleID,
 	}
-
-	_ = e.memoryService.ClearMemories(ctx, userKey)
-
-	// Phase 1: Seed sessions to trigger auto extraction.
-	seedRunner := runner.NewRunner(
-		autoAppName,
-		seedAgent{},
-		runner.WithSessionService(newSessionService(e.config)),
-		runner.WithMemoryService(e.memoryService),
-	)
-	defer seedRunner.Close()
-
-	for _, sess := range sample.Conversation {
-		sessionID := fmt.Sprintf("seed-%s", sess.SessionID)
-		msgs := sessionMessages(sample, sess)
-		// Set reference date so the extractor resolves
-		// relative time expressions correctly.
-		seedCtx := ctx
-		if t, ok := parseSessionDate(
-			sess.SessionDate,
-		); ok {
-			seedCtx = extractor.WithReferenceDate(
-				seedCtx, t,
-			)
-		}
-		ch, err := runner.RunWithMessages(
-			seedCtx, seedRunner,
-			userKey.UserID, sessionID, msgs,
-		)
-		if err != nil {
-			return nil, fmt.Errorf(
-				"seed session %s: %w", sess.SessionID, err,
-			)
-		}
-		if _, err := collectFinalText(ch); err != nil {
-			return nil, fmt.Errorf(
-				"seed session %s: %w", sess.SessionID, err,
-			)
-		}
+	if e.config.ExtractionTracker != nil {
+		e.config.ExtractionTracker.SnapshotWithCalls()
+	}
+	if e.config.SnapshotEmbeddingUsage != nil {
+		e.config.SnapshotEmbeddingUsage()
 	}
 
-	// Wait for async extraction to complete.
-	if err := e.waitForAutoExtraction(
-		ctx, userKey, sample,
-	); err != nil {
-		return nil, fmt.Errorf(
-			"wait for auto extraction: %w", err,
-		)
+	if e.config.ReuseMemories {
+		if err := e.requireExistingMemories(ctx, userKey); err != nil {
+			return e.failedExtractionResult(startTime, sample), err
+		}
+	} else {
+		if err := e.seedMemories(ctx, userKey, sample); err != nil {
+			return e.failedExtractionResult(startTime, sample), err
+		}
+	}
+	var extractionUsage TokenUsage
+	var extractionCalls []ExtractionCallTrace
+	if e.config.ExtractionTracker != nil {
+		extractionUsage, extractionCalls =
+			e.config.ExtractionTracker.SnapshotWithCalls()
+	}
+	var extractionEmbeddingUsage EmbeddingUsage
+	if e.config.SnapshotEmbeddingUsage != nil {
+		extractionEmbeddingUsage = e.config.SnapshotEmbeddingUsage()
 	}
 
 	// Phase 2: Answer questions via agent with memory_search.
@@ -177,8 +154,39 @@ func (e *AutoEvaluator) Evaluate(
 	result.ByCategory = catAgg.GetCategoryMetrics()
 	result.Overall = catAgg.GetOverall()
 	result.TotalTimeMs = time.Since(startTime).Milliseconds()
-	result.TokenUsage = &sampleUsage
+	result.QATokenUsage = tokenUsagePointer(sampleUsage)
+	result.ExtractionTokenUsage = tokenUsagePointer(extractionUsage)
+	result.ExtractionCalls = extractionCalls
+	totalUsage := extractionUsage
+	totalUsage.Add(sampleUsage)
+	result.TokenUsage = tokenUsagePointer(totalUsage)
+
+	var qaEmbeddingUsage EmbeddingUsage
+	if e.config.SnapshotEmbeddingUsage != nil {
+		qaEmbeddingUsage = e.config.SnapshotEmbeddingUsage()
+	}
+	result.ExtractionEmbeddingUsage = embeddingUsagePointer(
+		extractionEmbeddingUsage,
+	)
+	result.QAEmbeddingUsage = embeddingUsagePointer(qaEmbeddingUsage)
+	totalEmbeddingUsage := extractionEmbeddingUsage
+	totalEmbeddingUsage.Add(qaEmbeddingUsage)
+	result.EmbeddingUsage = embeddingUsagePointer(totalEmbeddingUsage)
 	return result, nil
+}
+
+func tokenUsagePointer(usage TokenUsage) *TokenUsage {
+	if usage.IsZero() {
+		return nil
+	}
+	return &usage
+}
+
+func embeddingUsagePointer(usage EmbeddingUsage) *EmbeddingUsage {
+	if usage.IsZero() {
+		return nil
+	}
+	return &usage
 }
 
 func newAutoQAAgent(
@@ -186,21 +194,151 @@ func newAutoQAAgent(
 	tools []tool.Tool,
 	searchPasses int,
 ) agent.Agent {
-	genConfig := model.GenerationConfig{
-		Stream:      false,
-		MaxTokens:   intPtr(autoQAMaxTokens),
-		Temperature: float64Ptr(0),
-	}
 	return llmagent.New(
 		defaultAgentName,
 		llmagent.WithModel(m),
 		llmagent.WithInstruction(
 			qaMemorySearchInstruction(searchPasses),
 		),
-		llmagent.WithGenerationConfig(genConfig),
+		llmagent.WithGenerationConfig(memoryQAGenerationConfig()),
 		llmagent.WithTools(tools),
 		llmagent.WithMaxToolIterations(autoQAMaxToolIterations),
 	)
+}
+
+func (e *AutoEvaluator) requireExistingMemories(
+	ctx context.Context,
+	userKey memory.UserKey,
+) error {
+	entries, err := e.memoryService.ReadMemories(ctx, userKey, 1)
+	if err != nil {
+		return fmt.Errorf("read reused memories: %w", err)
+	}
+	if len(entries) == 0 {
+		return fmt.Errorf(
+			"reuse memories requested but no memories exist for sample %s",
+			userKey.UserID,
+		)
+	}
+	return nil
+}
+
+func (e *AutoEvaluator) seedMemories(
+	ctx context.Context,
+	userKey memory.UserKey,
+	sample *dataset.LoCoMoSample,
+) error {
+	if err := e.memoryService.ClearMemories(ctx, userKey); err != nil {
+		return fmt.Errorf("clear memories: %w", err)
+	}
+
+	sessionSvc := newSessionService(e.config)
+	seedMemSvc := &noAutoMemoryService{inner: e.memoryService}
+	seedRunner := runner.NewRunner(
+		autoAppName,
+		seedAgent{},
+		runner.WithSessionService(sessionSvc),
+		runner.WithMemoryService(seedMemSvc),
+	)
+	defer seedRunner.Close()
+
+	seeds := make([]autoExtractionSeed, 0, len(sample.Conversation))
+	for _, sess := range sample.Conversation {
+		sessionID := fmt.Sprintf("seed-%s", sess.SessionID)
+		msgs := sessionMessages(sess)
+		seedCtx := ctx
+		if t, ok := parseSessionDate(sess.SessionDate); ok {
+			seedCtx = extractor.WithReferenceDate(seedCtx, t)
+		}
+		ch, err := runner.RunWithMessages(
+			seedCtx, seedRunner,
+			userKey.UserID, sessionID, msgs,
+		)
+		if err != nil {
+			return fmt.Errorf("seed session %s: %w", sess.SessionID, err)
+		}
+		if _, err := collectFinalText(ch); err != nil {
+			return fmt.Errorf("seed session %s: %w", sess.SessionID, err)
+		}
+		key := session.Key{
+			AppName:   autoAppName,
+			UserID:    userKey.UserID,
+			SessionID: sessionID,
+		}
+		seededSession, err := sessionSvc.GetSession(seedCtx, key)
+		if err != nil {
+			return fmt.Errorf("get seed session %s: %w", sess.SessionID, err)
+		}
+		if seededSession == nil {
+			return fmt.Errorf("get seed session %s: not found", sess.SessionID)
+		}
+		seeds = append(seeds, autoExtractionSeed{
+			ctx:     seedCtx,
+			session: seededSession,
+		})
+	}
+
+	if err := enqueueAutoExtractionsSequentially(
+		ctx,
+		e.memoryService,
+		seeds,
+		autoExtractionWaitTimeout(
+			len(seeds), e.config.AutoExtractionTimeout,
+		),
+	); err != nil {
+		return err
+	}
+	return nil
+}
+
+type autoExtractionSeed struct {
+	ctx     context.Context
+	session *session.Session
+}
+
+type autoExtractionEnqueuer interface {
+	EnqueueAutoMemoryJob(context.Context, *session.Session) error
+}
+
+func enqueueAutoExtractionsSequentially(
+	ctx context.Context,
+	service autoExtractionEnqueuer,
+	seeds []autoExtractionSeed,
+	timeout time.Duration,
+) error {
+	if len(seeds) == 0 {
+		return nil
+	}
+	if timeout <= 0 {
+		timeout = autoExtractionWaitTimeout(len(seeds), 0)
+	}
+	deadline := time.Now().Add(timeout)
+	for index, seed := range seeds {
+		if seed.session == nil {
+			return fmt.Errorf("seed session %d is nil", index)
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return fmt.Errorf("auto extraction timeout after %s", timeout)
+		}
+		seedCtx := seed.ctx
+		if seedCtx == nil {
+			seedCtx = ctx
+		}
+		if err := service.EnqueueAutoMemoryJob(
+			seedCtx, seed.session,
+		); err != nil {
+			return fmt.Errorf(
+				"enqueue seed session %s: %w", seed.session.ID, err,
+			)
+		}
+		if err := waitForAutoExtraction(
+			ctx, []*session.Session{seed.session}, remaining,
+		); err != nil {
+			return fmt.Errorf("wait for auto extraction: %w", err)
+		}
+	}
+	return nil
 }
 
 func (e *AutoEvaluator) evaluateQA(
@@ -212,7 +350,7 @@ func (e *AutoEvaluator) evaluateQA(
 ) (*QAResult, error) {
 	start := time.Now()
 	sessionID := fmt.Sprintf("qa-%s", qa.QuestionID)
-	msg := model.NewUserMessage(qa.Question)
+	msg := memoryQAUserMessage(qa.Question)
 
 	var runOpts []agent.RunOption
 	if len(historyMsgs) > 0 {
@@ -232,6 +370,9 @@ func (e *AutoEvaluator) evaluateQA(
 	if err != nil {
 		return nil, fmt.Errorf("runner run: %w", err)
 	}
+	res, answerRecovery := recoverMemoryQAAnswer(
+		ctx, e.model, qa.Question, res,
+	)
 	predicted := res.text
 
 	m := metrics.QAMetrics{
@@ -252,16 +393,22 @@ func (e *AutoEvaluator) evaluateQA(
 	}
 
 	tu := res.usage
+	searchCalls, protocolError := memorySearchProtocol(
+		res.steps, e.config.QASearchPasses,
+	)
 	return &QAResult{
-		QuestionID: qa.QuestionID,
-		Question:   qa.Question,
-		Category:   qa.Category,
-		Expected:   qa.Answer,
-		Predicted:  predicted,
-		Metrics:    m,
-		LatencyMs:  time.Since(start).Milliseconds(),
-		TokenUsage: &tu,
-		Steps:      res.steps,
+		QuestionID:     qa.QuestionID,
+		Question:       qa.Question,
+		Category:       qa.Category,
+		Expected:       qa.Answer,
+		Predicted:      predicted,
+		Metrics:        m,
+		LatencyMs:      time.Since(start).Milliseconds(),
+		TokenUsage:     &tu,
+		Steps:          res.steps,
+		SearchCalls:    searchCalls,
+		ProtocolError:  protocolError,
+		AnswerRecovery: answerRecovery,
 	}, nil
 }
 
@@ -278,68 +425,120 @@ func qaResultFromError(qa dataset.QAItem, err error) *QAResult {
 	}
 }
 
-func (e *AutoEvaluator) waitForAutoExtraction(
-	ctx context.Context,
-	userKey memory.UserKey,
-	sample *dataset.LoCoMoSample,
-) error {
-	numSessions := len(sample.Conversation)
+const autoMemoryLastErrorStateKey = "memory:last_extract_error"
 
-	const pollInterval = 5 * time.Second
-	const stableRounds = 3
-	const readLimit = 10000
-
-	timeout := min(
-		max(
-			time.Duration(numSessions)*15*time.Second,
-			30*time.Second,
-		),
-		10*time.Minute,
-	)
-	deadline := time.Now().Add(timeout)
-
-	var (
-		lastCount           = -1
-		lastLatestUpdatedAt time.Time
-		stableCount         = 0
-		sawAnyMemories      = false
-	)
-
-	for {
-		if time.Now().After(deadline) {
-			return nil
-		}
-
-		entries, err := e.memoryService.ReadMemories(
-			ctx, userKey, readLimit,
-		)
-		if err != nil {
-			time.Sleep(pollInterval)
-			continue
-		}
-
-		cur := len(entries)
-		var latestUpdatedAt time.Time
-		if cur > 0 {
-			latestUpdatedAt = entries[0].UpdatedAt
-		}
-		if cur > 0 {
-			sawAnyMemories = true
-		}
-
-		if cur == lastCount &&
-			latestUpdatedAt.Equal(lastLatestUpdatedAt) {
-			stableCount++
-		} else {
-			stableCount = 0
-			lastCount = cur
-			lastLatestUpdatedAt = latestUpdatedAt
-		}
-
-		if sawAnyMemories && stableCount >= stableRounds {
-			return nil
-		}
-
-		time.Sleep(pollInterval)
+func autoExtractionWaitTimeout(
+	sessionCount int,
+	configured time.Duration,
+) time.Duration {
+	if configured > 0 {
+		return configured
 	}
+	return min(
+		max(time.Duration(sessionCount)*time.Minute, 5*time.Minute),
+		60*time.Minute,
+	)
+}
+
+func (e *AutoEvaluator) failedExtractionResult(
+	startedAt time.Time,
+	sample *dataset.LoCoMoSample,
+) *SampleResult {
+	result := &SampleResult{
+		SampleID:    sample.SampleID,
+		QAResults:   []*QAResult{},
+		ByCategory:  map[string]metrics.CategoryMetrics{},
+		TotalTimeMs: time.Since(startedAt).Milliseconds(),
+	}
+	if e.config.ExtractionTracker != nil {
+		usage, calls := e.config.ExtractionTracker.SnapshotWithCalls()
+		result.ExtractionTokenUsage = tokenUsagePointer(usage)
+		result.TokenUsage = tokenUsagePointer(usage)
+		result.ExtractionCalls = calls
+	}
+	if e.config.SnapshotEmbeddingUsage != nil {
+		usage := e.config.SnapshotEmbeddingUsage()
+		result.ExtractionEmbeddingUsage = embeddingUsagePointer(usage)
+		result.EmbeddingUsage = embeddingUsagePointer(usage)
+	}
+	return result
+}
+
+func waitForAutoExtraction(
+	ctx context.Context,
+	sessions []*session.Session,
+	timeout time.Duration,
+) error {
+	if len(sessions) == 0 {
+		return nil
+	}
+	if timeout <= 0 {
+		timeout = autoExtractionWaitTimeout(len(sessions), 0)
+	}
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+	wants := make([]time.Time, len(sessions))
+	for i, sess := range sessions {
+		if sess == nil {
+			return fmt.Errorf("session %d is nil", i)
+		}
+		wants[i] = latestAutoExtractionTimestamp(sess)
+		if wants[i].IsZero() {
+			return fmt.Errorf("session %s has no events to extract", sess.ID)
+		}
+	}
+	for {
+		allComplete := true
+		for i, sess := range sessions {
+			if raw, ok := sess.GetState(autoMemoryLastErrorStateKey); ok &&
+				len(raw) > 0 {
+				return fmt.Errorf("session %s: %s", sess.ID, raw)
+			}
+			raw, ok := sess.GetState(
+				memory.SessionStateKeyAutoMemoryLastExtractAt,
+			)
+			if !ok {
+				allComplete = false
+				continue
+			}
+			got, parseErr := time.Parse(time.RFC3339Nano, string(raw))
+			if parseErr != nil {
+				return fmt.Errorf(
+					"session %s completion marker %q: %w",
+					sess.ID, raw, parseErr,
+				)
+			}
+			if got.Before(wants[i]) {
+				allComplete = false
+			}
+		}
+		if allComplete {
+			return nil
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timer.C:
+			return fmt.Errorf("auto extraction timeout after %s", timeout)
+		case <-ticker.C:
+		}
+	}
+}
+
+func latestAutoExtractionTimestamp(sess *session.Session) time.Time {
+	if sess == nil {
+		return time.Time{}
+	}
+	events := sess.GetEvents()
+	var latest time.Time
+	for _, event := range events {
+		if event.Timestamp.After(latest) {
+			latest = event.Timestamp
+		}
+	}
+	return latest.UTC()
 }

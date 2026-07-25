@@ -193,7 +193,7 @@ func (seedAgent) FindSubAgent(_ string) agent.Agent {
 	return nil
 }
 
-func sessionMessages(sample *dataset.LoCoMoSample, sess dataset.Session) []model.Message {
+func sessionMessages(sess dataset.Session) []model.Message {
 	msgs := make([]model.Message, 0, len(sess.Turns)+1)
 	if strings.TrimSpace(sess.SessionDate) != "" {
 		msgs = append(msgs, model.NewSystemMessage(
@@ -201,24 +201,25 @@ func sessionMessages(sample *dataset.LoCoMoSample, sess dataset.Session) []model
 		))
 	}
 
-	primarySpeaker := ""
-	secondarySpeaker := ""
-	if sample != nil {
-		if len(sample.Speakers) > 0 {
-			primarySpeaker = sample.Speakers[0]
-		}
-		if len(sample.Speakers) > 1 {
-			secondarySpeaker = sample.Speakers[1]
+	// Both LoCoMo participants are humans, so user/assistant is only a
+	// transport-level mapping. Anchor each session on its opening speaker to
+	// prevent strict chat providers from dropping a leading assistant message.
+	openingSpeaker := ""
+	for _, turn := range sess.Turns {
+		if strings.TrimSpace(turn.Speaker) != "" &&
+			strings.TrimSpace(turn.Text) != "" {
+			openingSpeaker = turn.Speaker
+			break
 		}
 	}
 
 	for _, turn := range sess.Turns {
 		role := model.RoleUser
 		speakerLower := strings.ToLower(turn.Speaker)
-		if secondarySpeaker != "" && turn.Speaker == secondarySpeaker {
-			role = model.RoleAssistant
-		} else if primarySpeaker != "" && turn.Speaker == primarySpeaker {
+		if openingSpeaker != "" && turn.Speaker == openingSpeaker {
 			role = model.RoleUser
+		} else if turn.Speaker != "" {
+			role = model.RoleAssistant
 		} else if strings.Contains(speakerLower, "assistant") {
 			role = model.RoleAssistant
 		} else if speakerLower == "user2" {
@@ -252,7 +253,7 @@ func buildHistoryMessages(
 	// Collect all conversation turns into messages.
 	var all []model.Message
 	for _, sess := range sample.Conversation {
-		msgs := sessionMessages(sample, sess)
+		msgs := sessionMessages(sess)
 		all = append(all, msgs...)
 	}
 	if len(all) <= k {
@@ -261,169 +262,118 @@ func buildHistoryMessages(
 	return all[len(all)-k:]
 }
 
-const fallbackAnswer = "The information is not available."
+const (
+	fallbackAnswer = "The information is not available."
 
-// qaSingleSearchInstruction is a strict instruction for the QA agent
-// to produce concise answers using memory_search tool.
-const qaSingleSearchInstruction = `You are a memory retrieval assistant. Your ONLY job is to search memories and output a short factual answer.
+	// MemoryQAPromptVersion identifies the shared memory-search QA protocol.
+	MemoryQAPromptVersion = "locomo-memory-qa-v15"
 
-WORKFLOW:
-1. Analyze the question. If it involves a specific time period or asks "when", include time_after/time_before (ISO 8601: YYYY-MM-DD). Use WIDE windows (full year, e.g. 2023-01-01 to 2023-12-31). NEVER use a single-day window.
-2. NEVER use the kind filter. It frequently causes missed results.
-3. For temporal order questions, set order_by_event_time=true.
-4. Call memory_search ONCE with a short keyword-style query (e.g. "Melanie beach" not full sentences). Only ONE tool call per turn — NEVER call memory_search more than once in a single turn.
-5. Read ALL returned memories carefully. Use exact words from the memories in your answer.
-6. Output ONLY the bare answer — no explanations, no context.
+	// MemoryQASearchStrategy identifies how multiple retrieval queries run.
+	MemoryQASearchStrategy = "sequential-adaptive"
 
-ANSWERING PRIORITY — ALWAYS try to answer first:
-If ANY retrieved memory is topically related to the question, you MUST provide an answer.
-Only say "` + fallbackAnswer + `" when ZERO retrieved memories relate to the question topic.
-When in doubt between answering and saying "not available", ALWAYS answer.
+	// MemoryQARecoveryMaxTokens caps the forced-tool answer recovery call.
+	MemoryQARecoveryMaxTokens = 2048
 
-ANSWER STRATEGY:
+	memoryQAMaxPrimaryAnswerWords = 12
+	// The longest LoCoMo reference answer is 57 words. Recovery leaves
+	// headroom for equivalent wording while still rejecting runaway output.
+	memoryQAMaxRecoveryAnswerWords = 64
+	memoryQASubmitAnswerToolName   = "submit_answer"
+	memoryQAAnswerSourceInitial    = "initial"
+	memoryQAAnswerSourceRecovery   = "recovery"
+	memoryQAAnswerSourceFallback   = "fallback"
+)
 
-A) FACTUAL questions (Who/What/Where/When/How many):
-   Answer using the exact words from a relevant memory.
-   For "When" questions, look at both memory text AND the event_time field for dates.
-   For "How many" questions, output the NUMBER (e.g. "3" not "three").
-   If the question asks about a SPECIFIC person, verify the memory mentions that person.
-   If the question asks about person A but memories ONLY mention person B doing that exact thing, say "` + fallbackAnswer + `".
-   IMPORTANT: Only reject when there is a CLEAR person mismatch for the SAME activity/fact.
-   If the memory mentions person A doing ANYTHING related, use it to answer.
+type memoryQASubmitAnswerTool struct{}
 
-B) HYPOTHETICAL/INFERENCE questions (Would/Could/Is it likely/What might/What would/What traits/Would X be considered/Would X want/Would X be more interested):
-   You MUST reason and infer from available evidence. NEVER say "not available" for these.
-   - "Would X enjoy Vivaldi?" + memory "X enjoys classical music" → "Yes"
-   - "Would X be considered religious?" + memory "necklace symbolizing faith" → "Somewhat"
-   - "Would X be more interested in A or B?" → You MUST pick one option. Use ANY relevant memory to decide. → "A" or "B"
-   - "What traits would X have?" + memory "X volunteers, donates" → "Compassionate, generous"
-   - "Would X be considered a member of Y?" + no direct evidence → "No"
-   For preference/choice questions ("more interested in A or B", "prefer A or B"), ALWAYS commit to one choice based on available evidence.
+func (memoryQASubmitAnswerTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{
+		Name: memoryQASubmitAnswerToolName,
+		Description: "Submit the final concise answer grounded only in " +
+			"the retrieved memories.",
+		InputSchema: &tool.Schema{
+			Type:                 "object",
+			AdditionalProperties: false,
+			Properties: map[string]*tool.Schema{
+				"answer": {
+					Type: "string",
+					Description: "The shortest complete final answer " +
+						"span in at most 64 words.",
+				},
+			},
+			Required: []string{"answer"},
+		},
+	}
+}
 
-C) TEMPORAL CALCULATION questions (How long/What happened first):
-   Combine dates from multiple memories to calculate durations or order.
-   For "Would X be able to do Y by date Z?" — check dates and infer. Give a direct Yes/No.
+const qaInstructionHeader = `You are a memory retrieval assistant. Search memories, then output one concise answer.
 
-D) OPEN-DOMAIN questions (What does X feel/think/enjoy/value/realize/describe/do/see/find):
-   Answer by copying the most relevant phrase directly from memory text. Do NOT summarize.
-   NEVER say "not available" for open-domain questions if ANY related memory exists.
+`
 
-E) QUESTIONS REQUIRING INDIRECT REASONING — VERY IMPORTANT:
-   Many questions LOOK factual but require you to INFER the answer from available memories + common knowledge. You MUST attempt an answer for these. Examples:
-   - "Does X live in Connecticut?" + memory "X adopted a dog from a Connecticut shelter" → "Likely yes"
-   - "Who is Jill?" + memory "John and Jill went on a date" → "Most likely John's partner"
-   - "Was X feeling lonely before meeting Y?" + memory "X said only dogs gave him joy" → "Most likely yes"
-   - "What console does X own?" + memory "X plays Xenoblade Chronicles" → "Nintendo Switch" (common knowledge: Xenoblade is a Switch game)
-   - "What state did X visit?" + memory "X went to Indianapolis" → "Indiana" (common knowledge: Indianapolis is in Indiana)
-   - "Why didn't X want to go to Starbucks?" + memory "X likes to drink beer on days off" → "Possibly because he prefers drinking beer"
-   - "Did X and Y study together?" + memory "X and Y met in college" → "Yes"
-   For these questions, combine memory evidence with reasonable inference. NEVER say "not available" — give your best inference.
+const qaSingleSearchWorkflow = `SEARCH WORKFLOW:
+1. In your first response, call memory_search exactly once and do not answer yet, even if the answer already seems obvious or unavailable.
+2. Use a short keyword query containing the key entity and requested event, action, or relation.
+3. Never use the kind filter. If the question is time-related, use a wide time window. For temporal ordering, set order_by_event_time=true.
+4. After the search result arrives, read every returned memory and answer without calling another tool.
 
-ADVERSARIAL PERSON-NAME CHECK (apply ONLY when suspicious):
-Some questions deliberately swap person names. For example, asking "What did Melanie do while camping?" when ONLY Caroline went camping.
-Apply this check ONLY when: the question asks person A did something, but ALL memories about that activity mention ONLY person B and NEVER person A.
-Do NOT apply this check when: memories mention the correct person doing related things, or when the question is about general topics.
+`
 
-RULES:
-- Maximum 1-8 words. Output ONLY the answer fragment, NEVER a full sentence.
-- For "When" questions: output the date in NATURAL LANGUAGE format like "7 May 2023" or "June 2023". NEVER use ISO format (NOT "2023-05-07").
-- For "How many" questions: output the NUMBER. "3" not "Three children".
-- For "What/Who" questions: output ONLY the key noun phrase from the memory.
-  Memory says "Caroline moved from Sweden" → Answer: "Sweden"
-  Memory says "Caroline is a transgender woman" → Answer: "Transgender woman"
-  Memory says "sunset painting" → Answer: "sunset"
-- NEVER start your answer with a person's name or "She/He/They".
-  BAD: "Melanie runs and paints." GOOD: "Running, painting."
-  BAD: "Caroline attended a group on 2023-05-07." GOOD: "7 May 2023"
-- Do NOT rephrase. If memory says "Sweden", say "Sweden", NOT "her home country".
-- Output the bare answer only. No sentences. No explanations.
+const qaMultiSearchWorkflow = `SEARCH WORKFLOW:
+1. You MUST call memory_search exactly %[1]d times before answering, even if an earlier result seems sufficient or the answer seems unavailable.
+2. Call exactly ONE memory_search per assistant response, then stop and wait for its result. NEVER emit multiple tool calls in the same response.
+3. Search #1 with short keywords containing the exact key entity and requested event, action, or relation. Never use the kind filter. If time-related, use a wide time window. For temporal ordering, set order_by_event_time=true.
+4. After each result, use what you learned to plan a different query or relation while keeping the exact subject. If a time filter may have hidden evidence, search once without it.
+5. Only after all %[1]d search results have arrived, read every returned memory and answer without calling another tool.
 
-GOOD: "Sweden", "7 May 2023", "3", "sunset", "Running, pottery", "No"
-BAD: "Caroline moved from Sweden." (just say "Sweden"), "Three children" (say "3")`
+`
 
-// qaMultiSearchInstruction is a strict instruction for the QA agent to
-// call memory_search multiple times before answering.
-const qaMultiSearchInstruction = `You are a memory retrieval assistant. Your ONLY job is to search memories and output a short factual answer.
+const qaAnswerPolicy = `EVIDENCE POLICY:
+1. Topical relevance is not answer support. For a factual question, answer only when the memories support the exact subject and the requested event, action, attribute, or relation.
+2. Support may be direct or an unambiguous paraphrase or distinctive description of the same object or event. Exact wording or a title need not appear when the identity and requested relation are otherwise clear.
+3. Never transfer a fact between people, objects, or similar events. Mentioning the requested person elsewhere is insufficient. A plan or consideration does not prove a choice or completed action, and possession of a related object does not prove participation in the activity.
+4. Respect negative evidence and status qualifiers such as not, never, considering, planning, and completed.
+5. For an explicitly hypothetical, comparative, or inferential question, make a concise inference only from evidence about the exact subject. Do not assume an unsupported premise from the question.
+6. Temporal and multi-hop answers may combine multiple memories, but every required link must be supported.
+7. Prefer the most specific supported answer. If retrieved memories provide an explicit person, place, organization, or item, never replace it with a pronoun or vague category label. Combine an exact relation with an unambiguous identity from another retrieved memory when needed.
+8. Return every supported part that directly answers a compound reason, description, or requested list. Do not omit a required part just to make the answer shorter, and do not add unrelated facts from the same topic.
+9. If the exact factual relation is unsupported after all searches, output exactly "` + fallbackAnswer + `". Prefer this fallback to a guess based only on a related topic.
 
-WORKFLOW:
-1. You MUST call memory_search exactly %d times before answering. Call ONE search per turn — NEVER call memory_search more than once in a single turn.
-2. Search #1: Short keyword query from the question. NEVER use kind filter. If time-related, add time_after/time_before with WIDE windows (full year). For temporal order, set order_by_event_time=true. Then WAIT for results.
-3. Search #2: Based on what you learned from Search #1, try different short keywords focusing on KEY ENTITIES (e.g. "Melanie sunrise painting" not full sentence). Try a different angle. No kind filter. Then WAIT for results.
-4. Search #3 (if applicable): Person's name + single key noun, or just person's name for broad results. If previous searches used time filters, try WITHOUT them.
-5. After completing ALL searches, read ALL returned memories. Use exact words from the memories.
-6. Output ONLY the bare answer — no explanations, no context.
+FINAL ANSWER FORMAT (MANDATORY):
+- The score compares your text with a short reference answer. Output only the shortest complete answer span, never evidence, explanation, context, Markdown, or a full sentence. Complete means it names the requested entity and includes every directly requested part supported by the memories.
+- For yes/no, output exactly "Yes" or "No". For who/what/where/which, output only the requested name or noun phrase. For when, output only a natural-language date. For how many, output only the number. For why/how, output a short clause.
+- Use exact words from the supporting memories. Keep the answer to 1-12 words and do not restate the question's subject.
+- Examples: "Sweden", "Transgender woman", "Horseback riding", "19 October 2023", "3", "Yes".
+- Never output an empty answer. If the exact factual relation is unsupported, output exactly "` + fallbackAnswer + `".`
 
-ANSWERING PRIORITY — ALWAYS try to answer first:
-If ANY retrieved memory is topically related to the question, you MUST provide an answer.
-Only say "` + fallbackAnswer + `" when ZERO retrieved memories relate to the question topic.
-When in doubt between answering and saying "not available", ALWAYS answer.
+const qaQuestionAnswerConstraint = `
 
-ANSWER STRATEGY:
+After the required memory searches, output only the shortest complete final answer span (1-12 words). Use explicit entity names instead of vague references, and include every directly requested part supported by the memories. Do not include evidence, explanation, context, or Markdown. For yes/no, output only Yes or No.`
 
-A) FACTUAL questions (Who/What/Where/When/How many):
-   Answer using the exact words from a relevant memory.
-   For "When" questions, look at both memory text AND the event_time field for dates.
-   For "How many" questions, output the NUMBER (e.g. "3" not "three").
-   If the question asks about a SPECIFIC person, verify the memory mentions that person.
-   If the question asks about person A but memories ONLY mention person B doing that exact thing, say "` + fallbackAnswer + `".
-   IMPORTANT: Only reject when there is a CLEAR person mismatch for the SAME activity/fact.
-   If the memory mentions person A doing ANYTHING related, use it to answer.
-
-B) HYPOTHETICAL/INFERENCE questions (Would/Could/Is it likely/What might/What would/What traits/Would X be considered/Would X want/Would X be more interested):
-   You MUST reason and infer from available evidence. NEVER say "not available" for these.
-   - "Would X enjoy Vivaldi?" + memory "X enjoys classical music" → "Yes"
-   - "Would X be considered religious?" + memory "necklace symbolizing faith" → "Somewhat"
-   - "Would X be more interested in A or B?" → You MUST pick one option. Use ANY relevant memory to decide. → "A" or "B"
-   - "What traits would X have?" + memory "X volunteers, donates" → "Compassionate, generous"
-   - "Would X be considered a member of Y?" + no direct evidence → "No"
-   For preference/choice questions ("more interested in A or B", "prefer A or B"), ALWAYS commit to one choice based on available evidence.
-
-C) TEMPORAL CALCULATION questions (How long/What happened first):
-   Combine dates from multiple memories to calculate durations or order.
-   For "Would X be able to do Y by date Z?" — check dates and infer. Give a direct Yes/No.
-
-D) OPEN-DOMAIN questions (What does X feel/think/enjoy/value/realize/describe/do/see/find):
-   Answer by copying the most relevant phrase directly from memory text. Do NOT summarize.
-   NEVER say "not available" for open-domain questions if ANY related memory exists.
-
-E) QUESTIONS REQUIRING INDIRECT REASONING — VERY IMPORTANT:
-   Many questions LOOK factual but require you to INFER the answer from available memories + common knowledge. You MUST attempt an answer for these. Examples:
-   - "Does X live in Connecticut?" + memory "X adopted a dog from a Connecticut shelter" → "Likely yes"
-   - "Who is Jill?" + memory "John and Jill went on a date" → "Most likely John's partner"
-   - "Was X feeling lonely before meeting Y?" + memory "X said only dogs gave him joy" → "Most likely yes"
-   - "What console does X own?" + memory "X plays Xenoblade Chronicles" → "Nintendo Switch" (common knowledge: Xenoblade is a Switch game)
-   - "What state did X visit?" + memory "X went to Indianapolis" → "Indiana" (common knowledge: Indianapolis is in Indiana)
-   - "Why didn't X want to go to Starbucks?" + memory "X likes to drink beer on days off" → "Possibly because he prefers drinking beer"
-   - "Did X and Y study together?" + memory "X and Y met in college" → "Yes"
-   For these questions, combine memory evidence with reasonable inference. NEVER say "not available" — give your best inference.
-
-ADVERSARIAL PERSON-NAME CHECK (apply ONLY when suspicious):
-Some questions deliberately swap person names. For example, asking "What did Melanie do while camping?" when ONLY Caroline went camping.
-Apply this check ONLY when: the question asks person A did something, but ALL memories about that activity mention ONLY person B and NEVER person A.
-Do NOT apply this check when: memories mention the correct person doing related things, or when the question is about general topics.
-
-RULES:
-- Maximum 1-8 words. Output ONLY the answer fragment, NEVER a full sentence.
-- For "When" questions: output the date in NATURAL LANGUAGE format like "7 May 2023" or "June 2023". NEVER use ISO format (NOT "2023-05-07").
-- For "How many" questions: output the NUMBER. "3" not "Three children".
-- For "What/Who" questions: output ONLY the key noun phrase from the memory.
-  Memory says "Caroline moved from Sweden" → Answer: "Sweden"
-  Memory says "Caroline is a transgender woman" → Answer: "Transgender woman"
-  Memory says "sunset painting" → Answer: "sunset"
-- NEVER start your answer with a person's name or "She/He/They".
-  BAD: "Melanie runs and paints." GOOD: "Running, painting."
-  BAD: "Caroline attended a group on 2023-05-07." GOOD: "7 May 2023"
-- Do NOT rephrase. If memory says "Sweden", say "Sweden", NOT "her home country".
-- Output the bare answer only. No sentences. No explanations.
-
-GOOD: "Sweden", "7 May 2023", "3", "sunset", "Running, pottery", "No"
-BAD: "Caroline moved from Sweden." (just say "Sweden"), "Three children" (say "3")`
+func memoryQAUserMessage(question string) model.Message {
+	return model.NewUserMessage(question + qaQuestionAnswerConstraint)
+}
 
 func qaMemorySearchInstruction(searchPasses int) string {
 	if searchPasses <= 1 {
-		return qaSingleSearchInstruction
+		return qaInstructionHeader + qaSingleSearchWorkflow + qaAnswerPolicy
 	}
-	return fmt.Sprintf(qaMultiSearchInstruction, searchPasses)
+	return qaInstructionHeader +
+		fmt.Sprintf(qaMultiSearchWorkflow, searchPasses) +
+		qaAnswerPolicy
+}
+
+const memoryQAMaxTokens = 512
+
+func memoryQAGenerationConfig() model.GenerationConfig {
+	reasoningEffort := "low"
+	thinkingEnabled := false
+	return model.GenerationConfig{
+		Stream:          false,
+		MaxTokens:       intPtr(memoryQAMaxTokens),
+		Temperature:     float64Ptr(0),
+		ReasoningEffort: &reasoningEffort,
+		ThinkingEnabled: &thinkingEnabled,
+	}
 }
 
 const (
@@ -443,12 +393,19 @@ type ToolCallTrace struct {
 
 // StepTrace records one LLM round-trip (request → response).
 type StepTrace struct {
-	Step             int             `json:"step"`
-	PromptTokens     int             `json:"prompt_tokens"`
-	CompletionTokens int             `json:"completion_tokens"`
-	TotalTokens      int             `json:"total_tokens"`
-	CachedTokens     int             `json:"cached_tokens,omitempty"`
-	ToolCalls        []ToolCallTrace `json:"tool_calls,omitempty"`
+	Step                int             `json:"step"`
+	Phase               string          `json:"phase,omitempty"`
+	LLMCalls            int             `json:"llm_calls,omitempty"`
+	PromptTokens        int             `json:"prompt_tokens"`
+	CompletionTokens    int             `json:"completion_tokens"`
+	TotalTokens         int             `json:"total_tokens"`
+	CachedTokens        int             `json:"cached_tokens,omitempty"`
+	CacheCreationTokens int             `json:"cache_creation_tokens,omitempty"`
+	CacheReadTokens     int             `json:"cache_read_tokens,omitempty"`
+	ReasoningTokens     int             `json:"reasoning_tokens,omitempty"`
+	FinishReason        string          `json:"finish_reason,omitempty"`
+	Error               string          `json:"error,omitempty"`
+	ToolCalls           []ToolCallTrace `json:"tool_calls,omitempty"`
 }
 
 // collectResult holds the output of collecting events from a runner.
@@ -463,9 +420,7 @@ func collectFinalTextAndUsage(
 ) (collectResult, error) {
 	var res collectResult
 	step := 0
-	// pendingCalls tracks tool calls from the latest assistant
-	// response that have not yet been matched with results.
-	var pendingCalls []ToolCallTrace
+	pendingStep := -1
 	for ev := range eventChan {
 		if ev == nil {
 			continue
@@ -475,13 +430,17 @@ func collectFinalTextAndUsage(
 				"runner event error: %s", ev.Error.Message,
 			)
 		}
+		recordedAssistantCall := false
 		if ev.Response != nil {
 			if len(ev.Response.Choices) > 0 {
-				msg := ev.Response.Choices[0].Message
-				// Assistant message with tool calls.
-				if len(msg.ToolCalls) > 0 {
+				choice := ev.Response.Choices[0]
+				msg := choice.Message
+				if msg.Role == model.RoleAssistant {
 					step++
-					st := StepTrace{Step: step}
+					st := StepTrace{
+						Step: step, Phase: "answer", LLMCalls: 1,
+					}
+					recordedAssistantCall = true
 					if ev.Response.Usage != nil {
 						st.PromptTokens =
 							ev.Response.Usage.PromptTokens
@@ -491,30 +450,47 @@ func collectFinalTextAndUsage(
 							ev.Response.Usage.TotalTokens
 						st.CachedTokens =
 							ev.Response.Usage.PromptTokensDetails.CachedTokens
+						st.CacheCreationTokens = ev.Response.Usage.
+							PromptTokensDetails.CacheCreationTokens
+						st.CacheReadTokens = ev.Response.Usage.
+							PromptTokensDetails.CacheReadTokens
+						st.ReasoningTokens = ev.Response.Usage.
+							CompletionTokensDetails.ReasoningTokens
 					}
-					pendingCalls = make(
-						[]ToolCallTrace, 0, len(msg.ToolCalls),
-					)
+					if choice.FinishReason != nil {
+						st.FinishReason = *choice.FinishReason
+					}
 					for _, tc := range msg.ToolCalls {
-						pendingCalls = append(pendingCalls,
+						st.ToolCalls = append(st.ToolCalls,
 							ToolCallTrace{
 								Name: tc.Function.Name,
 								Args: string(tc.Function.Arguments),
 							})
 					}
-					st.ToolCalls = pendingCalls
+					if len(st.ToolCalls) > 0 {
+						st.Phase = "memory-search"
+					}
 					res.steps = append(res.steps, st)
+					pendingStep = -1
+					if len(st.ToolCalls) > 0 {
+						pendingStep = len(res.steps) - 1
+					}
+					if msg.Content != "" {
+						res.text = msg.Content
+					}
 				}
 				// Tool response event.
 				if ev.Response.Object ==
 					model.ObjectTypeToolResponse &&
 					msg.Role == model.RoleTool {
-					content := msg.Content
-					// Attach result to the matching pending call.
 					matched := false
-					for i := range pendingCalls {
-						if pendingCalls[i].Result == "" {
-							pendingCalls[i].Result = content
+					if pendingStep >= 0 {
+						calls := res.steps[pendingStep].ToolCalls
+						for i := range calls {
+							if calls[i].Result != "" {
+								continue
+							}
+							calls[i].Result = msg.Content
 							matched = true
 							break
 						}
@@ -524,25 +500,14 @@ func collectFinalTextAndUsage(
 						last.ToolCalls = append(last.ToolCalls,
 							ToolCallTrace{
 								Name:   msg.ToolName,
-								Result: content,
+								Result: msg.Content,
 							})
 					}
 				}
-				// Final assistant text.
-				if msg.Role == model.RoleAssistant &&
-					msg.Content != "" {
-					res.text = msg.Content
-				}
 			}
 			if ev.Response.Usage != nil {
-				res.usage.PromptTokens +=
-					ev.Response.Usage.PromptTokens
-				res.usage.CompletionTokens +=
-					ev.Response.Usage.CompletionTokens
-				res.usage.TotalTokens +=
-					ev.Response.Usage.TotalTokens
-				res.usage.CachedTokens +=
-					ev.Response.Usage.PromptTokensDetails.CachedTokens
+				res.usage.Add(tokenUsageFromModelUsage(ev.Response.Usage))
+			} else if recordedAssistantCall {
 				res.usage.LLMCalls++
 			}
 		}
@@ -559,15 +524,376 @@ func collectFinalText(eventChan <-chan *event.Event) (string, error) {
 	return res.text, err
 }
 
+func memorySearchProtocol(
+	steps []StepTrace,
+	expected int,
+) (int, string) {
+	if expected < 1 {
+		expected = 1
+	}
+	var total int
+	stepCalls := make([]int, len(steps))
+	for stepIndex, step := range steps {
+		for _, call := range step.ToolCalls {
+			if call.Name != "memory_search" {
+				continue
+			}
+			total++
+			stepCalls[stepIndex]++
+		}
+	}
+	if total != expected {
+		return total, fmt.Sprintf(
+			"memory_search calls = %d, want %d",
+			total, expected,
+		)
+	}
+	for i := range expected {
+		if i >= len(stepCalls) || stepCalls[i] != 1 {
+			var actual int
+			if i < len(stepCalls) {
+				actual = stepCalls[i]
+			}
+			return total, fmt.Sprintf(
+				"memory_search calls in step %d = %d, want 1",
+				i+1, actual,
+			)
+		}
+	}
+	for i := expected; i < len(stepCalls); i++ {
+		if stepCalls[i] != 0 {
+			return total, fmt.Sprintf(
+				"unexpected memory_search call in answer step %d",
+				i+1,
+			)
+		}
+	}
+	return total, ""
+}
+
+func recoverMemoryQAAnswer(
+	ctx context.Context,
+	m model.Model,
+	question string,
+	res collectResult,
+) (collectResult, *AnswerRecoveryTrace) {
+	trigger := memoryQARecoveryTrigger(res)
+	if trigger == "" {
+		return res, nil
+	}
+	initialAnswer := strings.TrimSpace(res.text)
+	trace := &AnswerRecoveryTrace{
+		Trigger:       trigger,
+		InitialAnswer: initialAnswer,
+	}
+	evidence := memoryQARetrievalEvidence(res.steps)
+	if strings.TrimSpace(evidence) == "" {
+		trace.Error = "no memory_search evidence available for recovery"
+		trace.FallbackApplied = true
+		trace.SelectedAnswerSource = memoryQAAnswerSourceFallback
+		res.text = fallbackAnswer
+		return res, trace
+	}
+	previousAnswer := initialAnswer
+	if previousAnswer == "" {
+		previousAnswer = "<empty>"
+	}
+	prompt := fmt.Sprintf(
+		`The previous answer generation failed. Answer the question using only the retrieved memory_search results below. Call submit_answer exactly once and do not output text.
+
+Follow these rules:
+- Put only the shortest complete final answer span in the answer argument. Target 1-12 words; exceed 12 only when every directly requested item cannot otherwise fit, and never exceed 64 words.
+- Treat the previous answer as a draft. If it is supported, preserve its answer-bearing terms while removing explanation and unrelated context. When it exceeds 12 words, the submitted answer must contain fewer words.
+- Use explicit entity names instead of vague references, and include every directly requested part supported by the memories.
+- Do not include evidence, explanation, context, or Markdown.
+- For yes/no, output only Yes or No.
+- If the exact factual relation is unsupported, output exactly "%s".
+
+Question:
+%s
+
+Previous answer:
+<answer>%s</answer>
+
+Retrieved memory_search results:
+%s`,
+		fallbackAnswer,
+		question,
+		previousAnswer,
+		evidence,
+	)
+	reasoningEffort := "low"
+	thinkingEnabled := false
+	recovery, err := runModelWithRateLimitRetry(
+		ctx,
+		m,
+		&model.Request{
+			Messages: []model.Message{model.NewUserMessage(prompt)},
+			GenerationConfig: model.GenerationConfig{
+				Stream:          false,
+				MaxTokens:       intPtr(MemoryQARecoveryMaxTokens),
+				Temperature:     float64Ptr(0),
+				ReasoningEffort: &reasoningEffort,
+				ThinkingEnabled: &thinkingEnabled,
+			},
+			Tools: map[string]tool.Tool{
+				memoryQASubmitAnswerToolName: memoryQASubmitAnswerTool{},
+			},
+			ExtraFields: map[string]any{
+				"tool_choice": map[string]any{
+					"type": "function",
+					"function": map[string]string{
+						"name": memoryQASubmitAnswerToolName,
+					},
+				},
+			},
+		},
+	)
+	trace.FinishReason = recovery.finishReason
+	step := StepTrace{
+		Step:                len(res.steps) + 1,
+		Phase:               "answer-recovery",
+		LLMCalls:            recovery.usage.LLMCalls,
+		PromptTokens:        recovery.usage.PromptTokens,
+		CompletionTokens:    recovery.usage.CompletionTokens,
+		TotalTokens:         recovery.usage.TotalTokens,
+		CachedTokens:        recovery.usage.CachedTokens,
+		CacheCreationTokens: recovery.usage.CacheCreationTokens,
+		CacheReadTokens:     recovery.usage.CacheReadTokens,
+		ReasoningTokens:     recovery.usage.ReasoningTokens,
+		FinishReason:        recovery.finishReason,
+	}
+	for _, tc := range recovery.toolCalls {
+		step.ToolCalls = append(step.ToolCalls, ToolCallTrace{
+			Name: tc.Function.Name,
+			Args: string(tc.Function.Arguments),
+		})
+	}
+	res.usage.Add(recovery.usage)
+	if err != nil {
+		trace.Error = err.Error()
+		step.Error = err.Error()
+		res.steps = append(res.steps, step)
+		selectMemoryQARecoveryFallback(&res, trace)
+		return res, trace
+	}
+	recoveredText, parseErr := parseMemoryQARecoveryToolCall(
+		recovery.toolCalls, recovery.text,
+	)
+	trace.Succeeded = parseErr == nil
+	if parseErr != nil {
+		trace.Error = parseErr.Error()
+		step.Error = trace.Error
+		res.steps = append(res.steps, step)
+		selectMemoryQARecoveryFallback(&res, trace)
+		return res, trace
+	}
+	trace.RecoveredAnswer = recoveredText
+	res.steps = append(res.steps, step)
+	if memoryQAAnswerUsable(initialAnswer) &&
+		len(strings.Fields(recoveredText)) >=
+			len(strings.Fields(initialAnswer)) {
+		trace.InitialAnswerRetained = true
+		trace.SelectedAnswerSource = memoryQAAnswerSourceInitial
+		res.text = initialAnswer
+		return res, trace
+	}
+	trace.Applied = true
+	trace.SelectedAnswerSource = memoryQAAnswerSourceRecovery
+	res.text = recoveredText
+	return res, trace
+}
+
+func selectMemoryQARecoveryFallback(
+	res *collectResult,
+	trace *AnswerRecoveryTrace,
+) {
+	if memoryQAAnswerUsable(trace.InitialAnswer) {
+		trace.InitialAnswerRetained = true
+		trace.SelectedAnswerSource = memoryQAAnswerSourceInitial
+		res.text = trace.InitialAnswer
+		return
+	}
+	trace.FallbackApplied = true
+	trace.SelectedAnswerSource = memoryQAAnswerSourceFallback
+	res.text = fallbackAnswer
+}
+
+func memoryQAAnswerUsable(answer string) bool {
+	answer = strings.TrimSpace(answer)
+	return answer != "" && memoryQAAnswerFormatViolation(
+		answer, memoryQAMaxRecoveryAnswerWords,
+	) == ""
+}
+
+func parseMemoryQARecoveryToolCall(
+	calls []model.ToolCall,
+	responseText string,
+) (string, error) {
+	if len(calls) == 0 {
+		if strings.TrimSpace(responseText) == "" {
+			return "", fmt.Errorf("recovery returned an empty answer")
+		}
+		return "", fmt.Errorf(
+			"recovery did not call %s", memoryQASubmitAnswerToolName,
+		)
+	}
+	if len(calls) != 1 {
+		return "", fmt.Errorf(
+			"recovery returned %d tool calls, want 1", len(calls),
+		)
+	}
+	call := calls[0]
+	if call.Function.Name != memoryQASubmitAnswerToolName {
+		return "", fmt.Errorf(
+			"recovery called %s, want %s",
+			call.Function.Name, memoryQASubmitAnswerToolName,
+		)
+	}
+	return parseMemoryQARecoveryAnswer(string(call.Function.Arguments))
+}
+
+func parseMemoryQARecoveryAnswer(raw string) (string, error) {
+	if strings.TrimSpace(raw) == "" {
+		return "", fmt.Errorf("recovery returned an empty answer")
+	}
+	var payload struct {
+		Answer string `json:"answer"`
+	}
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return "", fmt.Errorf("recovery returned invalid JSON: %w", err)
+	}
+	answer := strings.TrimSpace(payload.Answer)
+	if answer == "" {
+		return "", fmt.Errorf("recovery returned an empty answer")
+	}
+	if violation := memoryQAAnswerFormatViolation(
+		answer, memoryQAMaxRecoveryAnswerWords,
+	); violation != "" {
+		return "", fmt.Errorf(
+			"recovery returned a malformed answer: %s", violation,
+		)
+	}
+	return answer, nil
+}
+
+func memoryQARecoveryTrigger(res collectResult) string {
+	var reasons []string
+	answer := strings.TrimSpace(res.text)
+	if answer == "" {
+		reasons = append(reasons, "empty-answer")
+	} else if violation := memoryQAAnswerFormatViolation(
+		answer, memoryQAMaxPrimaryAnswerWords,
+	); violation != "" {
+		reasons = append(reasons, "answer-format:"+violation)
+	}
+	if len(res.steps) > 0 {
+		finishReason := strings.ToLower(strings.TrimSpace(
+			res.steps[len(res.steps)-1].FinishReason,
+		))
+		if finishReason == "length" || finishReason == "max_tokens" ||
+			finishReason == "max_output_tokens" {
+			reasons = append(reasons, "finish-reason:"+finishReason)
+		}
+	}
+	return strings.Join(reasons, ",")
+}
+
+func memoryQAAnswerFormatViolation(answer string, maxWords int) string {
+	if strings.ContainsAny(answer, "\r\n") {
+		return "multiline"
+	}
+	if len(strings.Fields(answer)) > maxWords {
+		return "too-many-words"
+	}
+	return ""
+}
+
+func memoryQARetrievalEvidence(steps []StepTrace) string {
+	var evidence strings.Builder
+	seen := make(map[string]struct{})
+	resultNumber := 0
+	for _, step := range steps {
+		for _, call := range step.ToolCalls {
+			if call.Name != "memory_search" || call.Result == "" {
+				continue
+			}
+			var searchResult memorySearchResult
+			if err := json.Unmarshal(
+				[]byte(call.Result), &searchResult,
+			); err != nil {
+				fmt.Fprintf(&evidence, "Search result: %s\n\n", call.Result)
+				continue
+			}
+			for _, result := range searchResult.Results {
+				key := result.ID
+				if key == "" {
+					key = result.Memory
+				}
+				if _, ok := seen[key]; ok {
+					continue
+				}
+				seen[key] = struct{}{}
+				resultNumber++
+				fmt.Fprintf(
+					&evidence, "%d. Memory: %s\n",
+					resultNumber, result.Memory,
+				)
+				if len(result.Topics) > 0 {
+					fmt.Fprintf(
+						&evidence, "   Topics: %s\n",
+						strings.Join(result.Topics, ", "),
+					)
+				}
+				if result.Kind != "" {
+					fmt.Fprintf(&evidence, "   Kind: %s\n", result.Kind)
+				}
+				if result.EventTime != "" {
+					fmt.Fprintf(
+						&evidence, "   Event time: %s\n", result.EventTime,
+					)
+				}
+				if len(result.Participants) > 0 {
+					fmt.Fprintf(
+						&evidence, "   Participants: %s\n",
+						strings.Join(result.Participants, ", "),
+					)
+				}
+				if result.Location != "" {
+					fmt.Fprintf(
+						&evidence, "   Location: %s\n", result.Location,
+					)
+				}
+				if result.Metadata != nil {
+					metadata, err := json.Marshal(result.Metadata)
+					if err == nil && string(metadata) != "{}" &&
+						string(metadata) != "null" {
+						fmt.Fprintf(
+							&evidence, "   Metadata: %s\n", metadata,
+						)
+					}
+				}
+				evidence.WriteString("\n")
+			}
+		}
+	}
+	return strings.TrimSpace(evidence.String())
+}
+
 // memorySearchResult matches the JSON structure returned by
 // memory_search tool for parsing in logs.
 type memorySearchResult struct {
 	Query   string `json:"query"`
 	Results []struct {
-		ID       string `json:"id"`
-		Memory   string `json:"memory"`
-		Score    any    `json:"score"`
-		Metadata any    `json:"metadata,omitempty"`
+		ID           string   `json:"id"`
+		Memory       string   `json:"memory"`
+		Topics       []string `json:"topics,omitempty"`
+		Kind         string   `json:"kind,omitempty"`
+		EventTime    string   `json:"event_time,omitempty"`
+		Participants []string `json:"participants,omitempty"`
+		Location     string   `json:"location,omitempty"`
+		Score        any      `json:"score"`
+		Metadata     any      `json:"metadata,omitempty"`
 	} `json:"results"`
 }
 
@@ -582,12 +908,13 @@ func logQATrace(
 	log.Printf("    📋 Question: %s", question)
 	log.Printf("    🎯 Expected: %s", expected)
 	for _, st := range res.steps {
-		if st.CachedTokens > 0 {
+		cachedTokens := max(st.CachedTokens, st.CacheReadTokens)
+		if cachedTokens > 0 {
 			log.Printf(
 				"    🔹 Step %d | Tokens: %d"+
 					" (in:%d cached:%d out:%d)",
 				st.Step, st.TotalTokens,
-				st.PromptTokens, st.CachedTokens,
+				st.PromptTokens, cachedTokens,
 				st.CompletionTokens,
 			)
 		} else {
@@ -597,6 +924,14 @@ func logQATrace(
 				st.Step, st.TotalTokens,
 				st.PromptTokens, st.CompletionTokens,
 			)
+		}
+		if st.FinishReason != "" {
+			log.Printf(
+				"    Finish reason: %s", st.FinishReason,
+			)
+		}
+		if st.Phase != "" {
+			log.Printf("    Phase: %s", st.Phase)
 		}
 		if len(st.ToolCalls) > 0 {
 			log.Printf(
@@ -645,12 +980,13 @@ func logDirectQATrace(
 	log.Printf("    📋 Question: %s", question)
 	log.Printf("    🎯 Expected: %s", expected)
 	if usage != nil {
-		if usage.CachedTokens > 0 {
+		cachedTokens := usage.CachedPromptTokens()
+		if cachedTokens > 0 {
 			log.Printf(
 				"    🔹 Tokens: %d (in:%d cached:%d out:%d)",
 				usage.TotalTokens,
 				usage.PromptTokens,
-				usage.CachedTokens,
+				cachedTokens,
 				usage.CompletionTokens,
 			)
 		} else {
@@ -719,6 +1055,20 @@ func logVerboseQAResult(
 	)
 	if qaResult == nil {
 		return
+	}
+	if qaResult.ProtocolError != "" {
+		log.Printf(
+			"    Protocol violation: %s", qaResult.ProtocolError,
+		)
+	}
+	if qaResult.AnswerRecovery != nil {
+		log.Printf(
+			"    Answer recovery: trigger=%s succeeded=%v finish=%s error=%s",
+			qaResult.AnswerRecovery.Trigger,
+			qaResult.AnswerRecovery.Succeeded,
+			qaResult.AnswerRecovery.FinishReason,
+			qaResult.AnswerRecovery.Error,
+		)
 	}
 	if qaResult.SessionRecall != nil {
 		logSessionRecallTrace(qaResult.SessionRecall)

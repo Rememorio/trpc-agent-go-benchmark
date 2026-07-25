@@ -1,43 +1,65 @@
-# Evaluating Long-Term Conversational Memory on LoCoMo Benchmark
+# Long-Term Conversational Memory Evaluation on LoCoMo and LongMemEval
 
 ## 1. Introduction
 
 This report evaluates the long-term conversational memory of
-**trpc-agent-go** using the **LoCoMo** benchmark (Maharana et al.,
-2024). It covers two versions:
+**trpc-agent-go** on two complementary benchmarks:
 
+- **LoCoMo** measures broad conversational QA quality over 1,986
+  questions and supports comparisons with agent frameworks and
+  published memory systems.
+- **LongMemEval** isolates the production memory lifecycle across
+  extraction, persistence, retrieval, and answer generation. The
+  evaluation directly compares the trpc-agent-go pgvector memory
+  service with a self-hosted mem0 deployment.
+
+The LoCoMo evaluation covers a long-context upper bound and three memory
+strategies:
+
+- **Long-Context**: Full transcript in the model context
 - **trpc-agent-go (original)**: Baseline version (Auto extraction + pgvector)
 - **trpc-agent-go (optimized)**: After multiple rounds of optimization
   including contextualized memory extraction, episodic memory
   classification, hybrid search, and multi-pass retrieval
   (see Section 2.3 for details)
+- **Session Recall**: Query-time retrieval over persisted raw session events
 
-Both versions are compared against four Python agent frameworks
+These approaches are compared against four Python agent frameworks
 (AutoGen, Agno, ADK, CrewAI) and ten external memory systems
-(Mem0, Zep, etc.).
+(Mem0, Zep, etc.). The current LongMemEval protocol-v2 evaluation uses
+one fixed, already-observed 16-question development set with three
+independent answers per arm. It is a regression and mechanism study,
+not unseen evidence or a claim about the complete 500-question dataset.
 
 ## 2. Experimental Setup
 
-### 2.1 Benchmark
+### 2.1 Benchmarks
 
-| Item | Value |
-| --- | --- |
-| Dataset | LoCoMo-10 (10 conversations, 1,986 QA) |
-| Categories | single-hop (282), multi-hop (321), temporal (96), open-domain (841), adversarial (446) |
-| Model | GPT-4o-mini (inference + judge) |
-| Embedding | text-embedding-3-small |
+| Benchmark | Scope | Categories | Model | Embedding |
+| --- | --- | --- | --- | --- |
+| LoCoMo-10 | 10 conversations, 1,986 QA | single-hop (282), multi-hop (321), temporal (96), open-domain (841), adversarial (446) | GPT-4o-mini (inference + judge) | text-embedding-3-small |
+| LongMemEval Oracle | Fixed observed 16-question development regression from 500 questions | knowledge-update, multi-session, single-session-assistant, single-session-preference, single-session-user, temporal-reasoning; four selected abstention questions | glm52 (memory, answer, and judge) | text-embedding-3-small |
 
-### 2.2 Scenarios
+LoCoMo is the broad quality and cross-system benchmark. LongMemEval
+Oracle removes the large irrelevant-session haystack so that failures can
+be attributed more precisely to memory extraction, persistence, retrieval,
+or answer generation. The latter does not substitute for a future
+LongMemEval-M evaluation under noisy long histories. Earlier protocol-v1
+subsets remain useful for diagnosis, but their date transport differed
+between backends and they no longer support the formal cross-backend claim.
+
+### 2.2 LoCoMo Scenarios
 
 | Scenario | Description |
 | --- | --- |
 | **Long-Context** | Full transcript as LLM context (upper bound) |
+| **Session Recall** | Query-time search over persisted raw historical session events |
 | **Original** | Auto extraction + pgvector baseline; background extractor writes memories and retrieves them at query time |
 | **Optimized** | Optimized memory extraction strategy and multi-pass retrieval over extracted memories |
 
-### 2.3 Optimizations: Original → Optimized
+### 2.3 Memory Optimizations
 
-The optimized version builds on the original baseline with a series
+For LoCoMo, the optimized version builds on the original baseline with a series
 of targeted improvements across the memory extraction, storage, and
 retrieval pipeline:
 
@@ -93,6 +115,96 @@ retrieval pipeline:
    word-level Jaccard similarity) are deduplicated, keeping only
    the highest-scored version. This reduces redundant context
    in the retrieval results.
+
+LongMemEval then exposed a different set of production-path reliability
+problems. The resulting changes retain concrete assistant answers and
+structured deliverables, carry observation times through extraction, and
+retry malformed structured extraction output. If extraction still produces
+no operation, qualifying long assistant output is stored through a
+conservative fallback.
+
+The final candidate keeps the second-pass structured-result recovery narrow:
+it receives the current dated user/assistant pair, while persistence still
+uses the existing-memory snapshot for duplicate and conflict handling. This
+removes an unnecessary copy of all existing memories from the recovery prompt
+without weakening downstream reconciliation.
+
+The current candidate additionally compacts the assistant-result extraction
+instructions and gives the private assistant-result tool a focused schema with
+required `memory` and optional `topics` fields. This does not add public API or
+change the opt-in boundary. It reduces repeated prompt text while retaining the
+rules for source attribution, exact values, and cohesive structured results.
+
+Extraction context also retains cumulative observation times so that a later
+turn cannot erase when an earlier state was observed. Focused source passages
+preserve the concrete entity or list that triggered assistant-result recovery,
+and temporal retrieval keeps a bounded tail of dated events alongside hybrid
+search results. These mechanisms are opt-in for the candidate arm; ordinary
+user-memory updates continue to use the compatible default reconciliation
+behavior.
+
+The final retrieval stage uses the source marker already stored with assistant
+results. Explicit references to a past assistant answer add an
+assistant-result ranking to RRF; ordinary fact, preference, and current-advice
+queries add a user-grounded ranking instead. This is a soft fourth signal, not
+a filter, and it does not change similarity scores, persisted memories, or the
+public API. The intent classifier is deliberately narrow: a bare "remind me,"
+generic follow-up, or current recommendation request is not treated as an
+assistant-history query.
+
+An earlier candidate exposed a separate history-preserving update policy for
+ordinary memories. A fresh LoCoMo policy ablation did not support it: default
+reconcile scored slightly higher overall and won two of three answer repeats.
+The final design therefore removes that public policy and its specialized
+state-recovery path. Strict preservation remains private to assistant-result
+memories, where rewriting a cited answer or structured deliverable would lose
+the evidence the feature is intended to retain.
+
+Automatic Add reconciliation now rewrites only high-confidence
+near-duplicates; related plans, recommendations, events, and entity lists
+remain distinct. Add, Update, Delete, and Clear failures are propagated
+from asynchronous jobs, exposed through session state, and no longer
+advance the extraction completion marker. A benchmark-like extraction
+example was also replaced with synthetic content to avoid prompt leakage.
+
+### 2.4 LongMemEval Replay and Fairness
+
+Each LongMemEval question owns a separate user and run scope. Haystack
+sessions are sorted chronologically and replayed one user/assistant pair at
+a time. After every pair, pgvector invokes the production
+`memory.Service.EnqueueAutoMemoryJob` path and waits for completion; mem0
+receives the same raw pair through its public API. The source session date is
+transported outside message content and fills each backend's observation-date
+context. The answer model sees only searched memories, never the raw
+transcript.
+
+All arms use glm52 at temperature 0, `text-embedding-3-small`, and top-k 30
+retrieval. The accepted frozen baseline compares upstream-main pgvector with
+default reconcile, the candidate with default reconcile plus assistant-result
+extraction, and a pinned self-hosted Mem0 OSS image backed by pgvector. The
+final provenance-ranking refinement refreshes retrieval from the candidate's
+exact persisted-memory snapshot and then runs fresh answers and judges. This
+separates a retrieval change from extraction variance and allows ingestion
+usage to be inherited only after byte-stable memory verification. The runner
+records extraction operations, memory diffs, retrieval hits, evidence
+provenance, errors, timings, LLM and embedding usage, cached tokens, build
+revisions, and sanitized Mem0 configuration.
+
+The fixed development selection contains two answerable questions from each
+LongMemEval type plus four abstention questions, for 16 questions total and
+183 replayed user/assistant pairs per arm. Every arm answers from its saved
+top-k three times. Each answer receives three independent semantic-judge votes.
+An empty content-addressed answer and judge ledger is shared across arms within
+each replicate, while different replicates use distinct ledgers. One planned
+replicate contained an incomplete Mem0 answer; it was rejected and replaced
+for every arm and every case using fresh ledgers. No case-selective resampling
+was allowed. Exact match, F1, and BLEU remain secondary diagnostics.
+
+Dataset, selection, protocol, prompt, model, build, and Mem0 runtime digests
+are checked before comparison. The promotion gate was frozen before execution
+and covers majority quality, total correct replicates, category regressions,
+provider usage, backend errors, token cost, embedding cost, and memory count.
+No new blind holdout was selected or run in this evaluation.
 
 ## 3. Results
 
@@ -287,6 +399,115 @@ We also rerun the same configuration on another representative sample.
   be sensitive to noise in retrieved memories.
 - `qa-search-passes=2` improves some categories (e.g. multi-hop) but does
   not improve overall F1, and increases both tokens and latency.
+
+### 3.4 LongMemEval: pgvector vs Self-Hosted mem0
+
+> **Evidence scope:** This is a fixed, already-observed development regression
+> under `lme-memory-turn-pair-v2`. It validates protocol correctness and the
+> candidate mechanisms, but it is not an unseen holdout result. Earlier
+> protocol-v1 seed48/seed137 runs are retained only as historical diagnostics.
+
+The protocol-v2 comparison measures the production auto-memory path rather
+than the LoCoMo retrieval variants above. The accepted baseline replayed the
+same 183 user/assistant pairs with byte-identical message content,
+metadata-only observation dates, top-k 30, and isolated stores. Each arm then
+produced three independent answers; every answer received three independent
+semantic-judge votes.
+
+| Arm | Memory policy | Primary | Majority | Correct replicates | Unstable | Errors |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| pgvector main | default reconcile; assistant results off | 11/16 | 11/16 | 33/48 | 0 | 0 |
+| Mem0 OSS | pinned self-hosted OSS runtime | 14/16 | 14/16 | 42/48 | 0 | 0 |
+| pgvector before provenance ranking | reconcile; assistant results on | 15/16 | 15/16 | 46/48 | 1 | 0 |
+| final pgvector candidate | same memories; query-aware provenance RRF | **16/16** | **16/16** | **48/48** | **0** | **0** |
+
+The first three rows use the accepted all-arm replacement manifest. One earlier
+replicate was discarded because a Mem0 answer remained truncated; the entire
+replicate was rerun for all arms and all cases with fresh answer and judge
+ledgers. The final row is a retrieval-only follow-up over the exact candidate
+memory snapshot, with three new answer ledgers and three votes per answer. It
+therefore inherits memory-layer cost but not answer outcomes.
+
+The majority result spans all six categories:
+
+| LongMemEval type | Cases | pgvector main | Mem0 OSS | Before ranking | Final candidate |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| knowledge-update | 2 | 2 | 2 | 2 | **2** |
+| multi-session | 4 | 2 | 3 | 3 | **4** |
+| single-session-assistant | 2 | 0 | **2** | **2** | **2** |
+| single-session-preference | 2 | **2** | **2** | **2** | **2** |
+| single-session-user | 3 | **3** | **3** | **3** | **3** |
+| temporal-reasoning | 3 | 2 | 2 | **3** | **3** |
+
+Provider-reported memory-layer usage excludes answer and judge calls. The final
+candidate rows below are inherited from the byte-stable pre-ranking snapshot:
+
+| Arm | LLM calls | Prompt tokens | Completion tokens | Total tokens | Cached tokens | Cache hit rate |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| pgvector main | 183 | 1,114,204 | 69,853 | 1,184,057 | 441,472 | 39.62% |
+| Mem0 OSS | 183 | 1,667,854 | 97,377 | 1,765,231 | 1,292,992 | 77.52% |
+| pgvector before provenance ranking | 209 | 1,520,533 | 121,276 | 1,641,809 | 558,400 | 36.72% |
+| final pgvector candidate | 209 | 1,520,533 | 121,276 | 1,641,809 | 558,400 | 36.72% |
+
+| Arm | Embedding requests | Response-cache hits | Provider calls | Embedding tokens | Final memories | Ingest time | Search time |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| pgvector main | 663 | 210 | 453 | 16,500 | 141 | 1,697.6s | 21.0s |
+| Mem0 OSS | - | - | 373 | 116,822 | 492 | 1,941.4s | 21.9s |
+| pgvector before provenance ranking | 627 | 231 | 396 | 27,946 | 311 | 2,770.2s | 0.085s |
+| final pgvector candidate | 627 | 231 | 396 | 27,946 | 311 | 2,770.2s | refreshed |
+
+Against main, the final candidate uses 1.3866x memory LLM tokens, 1.6937x
+embedding tokens, 0.9457x logical embedding requests, and 2.2057x final
+memories. Against Mem0 it uses 6.99% fewer memory LLM tokens, 76.08% fewer
+embedding tokens, and 36.79% fewer final memories, although ingestion is 42.69%
+longer. Prompt-cache tokens are reported separately because billing semantics
+depend on the provider. The final answer follow-up consumed 140,568 answer
+tokens over 54 model calls and 39,997 judge tokens over 144 calls; all ledgers
+started empty and had zero cache hits.
+
+The saved trajectories localize the remaining baseline failures:
+
+- `cc539528` and `e3fc4d6e` are extraction failures in main. The candidate
+  preserves the assistant's `Ruby, Python, PHP` list and the named entity
+  `Dr. Arati Prabhakar`; both assistant-history questions are 3/3 correct.
+- `d682f1a2` is primarily an answer-context failure in main: all three delivery
+  services are present in retrieval, but main answers `2`. It does not justify
+  another extraction rule.
+- Mem0's `09ba9854_abs` treats suggested bus/taxi prices as user-grounded and
+  answers an abstention question. Its `gpt4_7abb270c` retrieval contains all six
+  source sessions but is crowded by recommendations and loses usable temporal
+  structure; both failures are stable across three answers.
+- Before provenance ranking, `09ba9854_abs` is also the candidate's sole
+  majority failure: an assistant estimate ranks first and only one of three
+  answers abstains. Query-aware RRF moves the user's grounded statement about a
+  roughly $60 taxi above that estimate. Three fresh answers then abstain, while
+  the two explicit assistant-history cases remain 3/3 correct.
+
+The retrieval refinement changed order in 14 of 16 observed questions but
+changed neither persisted memories nor evidence coverage. Tightening the intent
+classifier afterward produced byte-for-byte identical retrieval arrays on all
+16 questions, including scores and order. The cross-dataset check replayed 60
+top-30 LoCoMo trajectories over 31 unique queries and a frozen table of 139
+active memories. That table contained no assistant-result memories, so the new
+RRF signal was empty in every call and exactly matched the former three-signal
+merge; the inherited target mean F1 was 0.7122. This is a zero-provider
+component-inactivity regression, not evidence that provenance ranking improves
+LoCoMo or an independent sample.
+
+Earlier ablations still constrain the design. Removing conservative recovery
+was rejected because `e3fc4d6e` produced no memory. A public
+history-preserving update policy was removed after default reconcile scored
+slightly higher on its direct LoCoMo ablation and won two of three repeats.
+Prompt compaction's formal gate was retained as rejected after exceeding its
+exact model-call bound, even though later quality diagnostics supported the
+smaller internal prompt. These outcomes favor a private, narrow retrieval
+signal over another public policy or special-case extraction rule.
+
+All current LongMemEval evidence comes from the already-observed 16-question
+development set. The final candidate is integrated with observed evidence only
+and is not promotion-eligible. An authorized, preregistered unseen
+full-haystack holdout and a larger LongMemEval-M run remain necessary before
+making a generalization claim.
 
 ---
 
@@ -675,6 +896,11 @@ Source: Mem0 Table 1 (Chhikara et al., 2025, arXiv:2504.19413).
 All systems use GPT-4o-mini. Adversarial category excluded for
 cross-system comparability (Mem0 paper does not include it).
 
+This section uses published LoCoMo numbers and is separate from the direct,
+same-run self-hosted mem0 comparison in Section 3.4. The two evaluations use
+different datasets and model protocols, so their absolute scores must not be
+mixed.
+
 > **About "LoCoMo (paper baseline)" in the table.** LoCoMo is
 > both the dataset used in this report and a memory system
 > proposed in the LoCoMo paper (Maharana et al., 2024). That
@@ -784,13 +1010,22 @@ Agno                |====================                      | 0.267
    robustness, while Long-Context still serves as a useful upper
    bound for short single-session histories.
 
-3. **trpc-agent-go now surpasses dedicated memory systems by a wide
+3. **The opt-in pgvector candidate leads both upstream main and self-hosted
+   Mem0 on the fixed LongMemEval development regression.** Under protocol v2,
+   it scores 16/16 and 48/48 correct answer replicates, versus main's 11/16
+   and 33/48 and Mem0's 14/16 and 42/48. Assistant-result extraction repairs
+   assistant-history recall, while query-aware provenance RRF prevents those
+   results from displacing user-grounded evidence on ordinary queries. Direct
+   ablation rejects a separate history-preserving ordinary-update policy. No
+   new unseen holdout has been run under this protocol.
+
+4. **trpc-agent-go now surpasses dedicated memory systems by a wide
    margin.** Session Recall's 4-category weighted F1 of 0.531 is well
    above Mem0g (0.422), Mem0 (0.421), Zep (0.403), LangMem (0.362),
    A-Mem (0.347), OpenAI Memory (0.328), MemGPT (0.308), and other
    purpose-built memory systems.
 
-4. **Limitations of other Python frameworks.**
+5. **Limitations of other Python frameworks.**
 
    - **ADK**: Highest token consumption (49,224 tokens/QA) — **2.9x**
      that of the optimized version — yet only achieves 0.362 F1. Its
@@ -815,17 +1050,21 @@ Agno                |====================                      | 0.267
      lowest among all frameworks, revealing a critical adversarial
      robustness deficiency
 
-5. **Memory is essential for production agents.** Long-Context is
+6. **Memory is essential for production agents.** Long-Context is
    effective for short single-session scenarios, but cannot persist
    knowledge across sessions or scale beyond the model's context
    window. Session Recall delivers a stronger quality/cost balance,
    while the optimized version provides a second memory strategy built on
    extracted persistent memories.
 
-6. **Temporal reasoning remains the next optimization target.** The
-   optimized version reaches 0.247 in temporal, but Session Recall is
-   still at 0.174. Time-aware retrieval, temporal query rewriting,
-   and richer reranking remain the main next steps.
+7. **The next target is unseen generalization, not more observed-set tuning.**
+   The current candidate closes every observed LongMemEval development gap and
+   uses 1.3866x main's memory tokens, 1.6937x its embedding tokens, and 2.2057x
+   its final memories while retaining 48/48 correct replicates. The LoCoMo
+   replay proves that the new component is inert on one frozen snapshot, not
+   that it generalizes. Further quality tuning on these observed IDs would risk
+   overfitting; the next promotion step is a preregistered unseen
+   full-haystack holdout.
 
 ### Production Recommendations
 
@@ -833,8 +1072,10 @@ Agno                |====================                      | 0.267
 | --- | --- |
 | Short single-session (< 50K tokens) | Long-context (no memory needed) |
 | Cross-session QA / best accuracy | Session Recall |
-| Long-running agents (weeks/months) | Optimized |
+| Long-running agents with durable extracted memory | Optimized pgvector auto memory |
 | History exceeding context window | Session Recall or optimized |
+| Memory regression development | Fixed observed Oracle set with saved stage-level traces |
+| Candidate promotion | Preregistered unseen full-haystack holdout plus LoCoMo regression gate |
 
 ---
 
@@ -845,10 +1086,11 @@ Agno                |====================                      | 0.267
 | Component | Version/Config |
 | --- | --- |
 | Framework | trpc-agent-go |
-| Model | gpt-4o-mini |
+| Models | GPT-4o-mini (LoCoMo); glm52 (LongMemEval) |
 | Embedding | text-embedding-3-small |
 | PostgreSQL | 15+ with pgvector extension |
-| Dataset | LoCoMo-10 (10 samples, 1,986 QA) |
+| Datasets | LoCoMo-10 (10 samples, 1,986 QA); LongMemEval Oracle (fixed observed 16-question development regression) |
+| Comparison backend | Pinned self-hosted Mem0 OSS runtime with pgvector (LongMemEval) |
 
 ### B. Full Category Breakdown (F1 / BLEU / LLM)
 
@@ -872,10 +1114,87 @@ Agno                |====================                      | 0.267
 | Agno | 20,694,534 | 31,194 | 20,725,728 | 1,986 | 1.0 |
 | ADK | 97,691,620 | 67,833 | 97,759,453 | 4,028 | 2.0 |
 
+### D. LongMemEval Reproduction and Provenance
+
+The exact question IDs are frozen in the run manifest rather than resampled.
+The primary arm shape is:
+
+```bash
+./run-longmemeval.sh \
+  -dataset-format longmemeval \
+  -dataset ../../summary/data/longmemeval-cleaned/longmemeval_oracle.json \
+  -lme-question-ids "$FROZEN_QUESTION_IDS" \
+  -memory-backend pgvector,mem0 \
+  -pgvector-update-policy reconcile \
+  -pgvector-assistant-result-extraction=false \
+  -mem0-llm-temperature 0 \
+  -model glm52 \
+  -eval-model glm52 \
+  -embed-model text-embedding-3-small \
+  -lme-judge-runs 3 \
+  -lme-answer=true \
+  -vector-topk 30 \
+  -output ../results/lme-observed-dev16-main-mem0
+```
+
+Candidate pgvector reuses the exact IDs and protocol with
+`-pgvector-update-policy reconcile` and
+`-pgvector-assistant-result-extraction=true`. The accepted three-arm baseline
+uses default reconcile and remains immutable. Two saved-retrieval re-answer
+runs use fresh, distinct answer ledgers; all result sets use three judge votes
+per answer. One incomplete replicate is replaced across all arms and all cases,
+as frozen before its replacement calls. The final candidate refreshes only
+retrieval from the exact accepted candidate memory snapshot, then performs
+three fresh answer/judge repetitions. The original replicate manifest freezes
+its quality and cost gate.
+
+| Provenance item | Digest or revision |
+| --- | --- |
+| Formal three-arm benchmark | `f7cf9370057daa382db925ca67500b9f66f173da` |
+| Compact-ablation benchmark | `8eb0bac316ee67938ab6ecb6052ff227f94363e0` |
+| pgvector main | `0c7774187da9330144df2a038ef18ee89ef2ae1c` |
+| pgvector parent candidate | `0797067f40743fbe789eff65315d74b05b7c454c` |
+| pgvector three-arm candidate | `bd6b31f92a904023df0c77c6762fa95b5e359456` (evaluated tree: `eaf5f49f1fa47856ff919798bcc93a41be71f6ec`) |
+| pgvector prompt-compaction candidate | `969fb16a918d6abae8bb06d52cb784490c8a2eb4` |
+| pgvector final reconcile candidate | `2432019572845c182d37a2872f056a6e7bee33c7` |
+| Full reconcile-configuration benchmark | `536b0979345e607bc06e6975040c7f51336a6abe` |
+| Simplification-run benchmark | `126a585b6a68530d5ec17d9c69eee33317adbf12` |
+| Dataset SHA-256 | `821a2034d219ab45846873dd14c14f12cfe7776e73527a483f9dac095d38620c` |
+| Selection SHA-256 | `b10651ad0caa76696a2d885da060969d0d24d2e1cdba4130308ef745f95621fb` |
+| Protocol SHA-256 | `9b001708920522d7ad2cd477824208b5692eb52bcd1c205e46fb9fbb5b57b9a4` |
+| Replicate manifest SHA-256 | `7baecdce61be140d5cbe3163519b8ee5503eaafdca842f37c087417e297871d2` |
+| Aggregate SHA-256 | `fb5e37a2327d00802055e388c2125f564c402ccbb1261fbfffc486f8f7819974` |
+| Audit SHA-256 | `17ae45dc27ffc3d89f8f1c244ac420ba73c1b9aa741fbe52c7a45cb71e2e158b` |
+| Compact-ablation audit SHA-256 | `d48ae6d6731c45ae05bc52c753df331cf204a38150896b748d7d1ac0db071981` |
+| Assistant-prompt formal gate SHA-256 | `f82f35299d319e64a30a32a24b022aceef7e90a308f687275dffd679c9d8f335` |
+| Assistant-prompt quality diagnostic SHA-256 | `902629cfdf1a924282c58300e93afacdda7a9c3c044afdc342762de5384755fa` |
+| Fresh LoCoMo prompt-pair audit SHA-256 | `64963ebd8b481873012631a85adb21fc1aa9d87b6491accb751a7b8d945a5d2c` |
+| Repeated fixed-memory LoCoMo audit SHA-256 | `4bb1d7606099029d2cbb8ed00600ef2a38570b0bbac89ccffe2bc540d9632fbf` |
+| Engineering synthesis audit SHA-256 | `7298a75fc436e90d84d6adcbf06cee779120fd7450ac8d10297b51b50d3423a5` |
+| Final reconcile dev16 audit SHA-256 | `92585f5c1dd67983ed241c9ae55c885183409163d276e58b33d267b6e5ab952c` |
+| Final reconcile dev16 checksum-manifest SHA-256 | `aadc7233009a05ea6d49bfca406b049d1b5a6e2b8556960df7fa6273f45558cb` |
+| LoCoMo update-policy audit SHA-256 | `15e16594cfe59cb30883c4d91911b81384d501e0389591fb0cf4806cc2cfbdd8` |
+| LoCoMo update-policy checksum-manifest SHA-256 | `292ff0a81b805978e7822ff5ee2b6a0bb5b22c10fdf52ee7c8976314d6017a61` |
+| Final implementation-smoke audit SHA-256 | `0415aa9bdb973f178aadd4d83cc8db0c3caaa157d395663627a56cca2d8765aa` |
+| Final implementation-smoke checksum-manifest SHA-256 | `7a3f0b0d5e31b2dfb4880769f98f10aea62673e6f0862e1882614040b5ce6a92` |
+| Accepted replacement-manifest comparison SHA-256 | `38bd9117ef320d1d76d7ee833030e51ab2db37a589165ff1ff03b3dcffec707b` |
+| Accepted replacement audit SHA-256 | `6c64bb71f90fd5a56c2e8f3b004f9214b665e5b361d37a7846091331f3f0974a` |
+| Provenance-ranking candidate | `22455426803a478535fae28a6c8c103b4f8668c7` |
+| Provenance-ranking robust audit SHA-256 | `18d842890676130d3f332cbaeb37c2df48f5f017d56db0ff62f87497e8a78861` |
+| Tightened-classifier equivalence audit SHA-256 | `bf61ac7a005981354ac201fa2262bea0e41063096d1a252af75af596f40ac3b2` |
+| LoCoMo provenance replay audit SHA-256 | `66c748d28c860832a5e28bfef2bf00201973a9aaff058153df219f40b565e898` |
+| Mem0 | source `b05cce58`, runtime `9d027353`, image `81d80e337521` |
+
+The audit verifies exact builds, complete provider usage, zero errors, isolated
+stores, all 16 cases and 183 pairs per arm, and `blind_holdout_authorized=false`.
+Raw model traces and stores remain local evaluation artifacts; the report
+contains only aggregate and stage-level diagnostic evidence.
+
 ---
 
 ## References
 
 1. Maharana, A., Lee, D., Tulyakov, S., Bansal, M., Barbieri, F., and Fang, Y. "Evaluating Very Long-Term Conversational Memory of LLM Agents." arXiv:2402.17753, 2024.
-2. Chhikara, P., Khant, D., Aryan, S., Singh, T., and Yadav, D. "Mem0: Building Production-Ready AI Agents with Scalable Long-Term Memory." arXiv:2504.19413, 2025.
-3. Hu, C., et al. "Memory in the Age of AI Agents." arXiv:2512.13564, 2024.
+2. Wu, D., Wang, H., Yu, W., Zhang, Y., Chang, K.-W., and Yu, D. "LongMemEval: Benchmarking Chat Assistants on Long-Term Interactive Memory." arXiv:2410.10813, 2024.
+3. Chhikara, P., Khant, D., Aryan, S., Singh, T., and Yadav, D. "Mem0: Building Production-Ready AI Agents with Scalable Long-Term Memory." arXiv:2504.19413, 2025.
+4. Hu, C., et al. "Memory in the Age of AI Agents." arXiv:2512.13564, 2025.

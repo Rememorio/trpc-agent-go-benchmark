@@ -3,13 +3,13 @@ module trpc.group/trpc-go/trpc-agent-go-benchmark/memory/trpc-agent-go-impl
 go 1.24.0
 
 replace (
-	trpc.group/trpc-go/trpc-agent-go => github.com/trpc-group/trpc-agent-go v1.7.1-0.20260402032440-a4e36132659f
+	trpc.group/trpc-go/trpc-agent-go => github.com/Rememorio/trpc-agent-go v0.0.0-20260725102639-1f3a421afe0c
 	trpc.group/trpc-go/trpc-agent-go/memory/mysql => github.com/trpc-group/trpc-agent-go/memory/mysql v1.7.1-0.20260402032440-a4e36132659f
-	trpc.group/trpc-go/trpc-agent-go/memory/pgvector => github.com/trpc-group/trpc-agent-go/memory/pgvector v1.7.1-0.20260402032440-a4e36132659f
+	trpc.group/trpc-go/trpc-agent-go/memory/pgvector => github.com/Rememorio/trpc-agent-go/memory/pgvector v0.0.0-20260725102639-1f3a421afe0c
 	trpc.group/trpc-go/trpc-agent-go/memory/sqlite => github.com/trpc-group/trpc-agent-go/memory/sqlite v1.7.1-0.20260402032440-a4e36132659f
 	trpc.group/trpc-go/trpc-agent-go/memory/sqlitevec => github.com/trpc-group/trpc-agent-go/memory/sqlitevec v1.7.1-0.20260402032440-a4e36132659f
-	trpc.group/trpc-go/trpc-agent-go/session/pgvector => github.com/trpc-group/trpc-agent-go/session/pgvector v0.0.0-20260402032440-a4e36132659f
-	trpc.group/trpc-go/trpc-agent-go/storage/postgres => github.com/trpc-group/trpc-agent-go/storage/postgres v1.7.1-0.20260402032440-a4e36132659f
+	trpc.group/trpc-go/trpc-agent-go/session/pgvector => github.com/Rememorio/trpc-agent-go/session/pgvector v0.0.0-20260725102639-1f3a421afe0c
+	trpc.group/trpc-go/trpc-agent-go/storage/postgres => github.com/Rememorio/trpc-agent-go/storage/postgres v0.0.0-20260725102639-1f3a421afe0c
 )
 
 require (
@@ -67,10 +67,10 @@ require (
 	golang.org/x/sync v0.19.0 // indirect
 	golang.org/x/sys v0.41.0 // indirect
 	golang.org/x/text v0.34.0 // indirect
-	google.golang.org/genproto/googleapis/api v0.0.0-20240822170219-fc7c04adadcd // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20240822170219-fc7c04adadcd // indirect
-	google.golang.org/grpc v1.65.0 // indirect
-	google.golang.org/protobuf v1.34.2 // indirect
+	google.golang.org/genproto/googleapis/api v0.0.0-20251202230838-ff82c1b0f217 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20251202230838-ff82c1b0f217 // indirect
+	google.golang.org/grpc v1.79.3 // indirect
+	google.golang.org/protobuf v1.36.10 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	trpc.group/trpc-go/trpc-a2a-go v0.2.5 // indirect
 	trpc.group/trpc-go/trpc-agent-go/storage/mysql v0.0.0-20251126064502-c8c2594d2519 // indirect

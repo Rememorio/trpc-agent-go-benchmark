@@ -34,7 +34,6 @@ const agenticAppName = "memory-eval-agentic"
 const (
 	agenticWriteMaxToolIterations = 50
 	agenticReadMaxToolIterations  = 8
-	agenticQAMaxTokens            = 100
 
 	agenticUnknownDate      = "unknown"
 	agenticDatePrefixFormat = "[DATE: %s] "
@@ -279,18 +278,13 @@ func newAgenticQAAgent(
 	tools []tool.Tool,
 	searchPasses int,
 ) agent.Agent {
-	genConfig := model.GenerationConfig{
-		Stream:      false,
-		MaxTokens:   intPtr(agenticQAMaxTokens),
-		Temperature: float64Ptr(0),
-	}
 	return llmagent.New(
 		defaultAgentName,
 		llmagent.WithModel(m),
 		llmagent.WithInstruction(
 			qaMemorySearchInstruction(searchPasses),
 		),
-		llmagent.WithGenerationConfig(genConfig),
+		llmagent.WithGenerationConfig(memoryQAGenerationConfig()),
 		llmagent.WithTools(tools),
 		llmagent.WithMaxToolIterations(
 			agenticReadMaxToolIterations,
@@ -329,7 +323,7 @@ func (e *AgenticEvaluator) processConversation(
 
 	for _, sess := range sample.Conversation {
 		writeMemSvc.SetSessionDate(sess.SessionDate)
-		msgs := sessionMessages(sample, sess)
+		msgs := sessionMessages(sess)
 		sessionID := fmt.Sprintf("seed-%s", sess.SessionID)
 		ch, err := runner.RunWithMessages(
 			ctx,
@@ -363,7 +357,7 @@ func (e *AgenticEvaluator) evaluateQA(
 	start := time.Now()
 
 	sessionID := fmt.Sprintf("qa-%s", qa.QuestionID)
-	msg := model.NewUserMessage(qa.Question)
+	msg := memoryQAUserMessage(qa.Question)
 
 	var runOpts []agent.RunOption
 	if len(historyMsgs) > 0 {
@@ -383,6 +377,9 @@ func (e *AgenticEvaluator) evaluateQA(
 	if err != nil {
 		return nil, fmt.Errorf("runner run: %w", err)
 	}
+	res, answerRecovery := recoverMemoryQAAnswer(
+		ctx, e.model, qa.Question, res,
+	)
 	predicted := res.text
 
 	m := metrics.QAMetrics{
@@ -403,15 +400,21 @@ func (e *AgenticEvaluator) evaluateQA(
 	}
 
 	tu := res.usage
+	searchCalls, protocolError := memorySearchProtocol(
+		res.steps, e.config.QASearchPasses,
+	)
 	return &QAResult{
-		QuestionID: qa.QuestionID,
-		Question:   qa.Question,
-		Category:   qa.Category,
-		Expected:   qa.Answer,
-		Predicted:  predicted,
-		Metrics:    m,
-		LatencyMs:  time.Since(start).Milliseconds(),
-		TokenUsage: &tu,
-		Steps:      res.steps,
+		QuestionID:     qa.QuestionID,
+		Question:       qa.Question,
+		Category:       qa.Category,
+		Expected:       qa.Answer,
+		Predicted:      predicted,
+		Metrics:        m,
+		LatencyMs:      time.Since(start).Milliseconds(),
+		TokenUsage:     &tu,
+		Steps:          res.steps,
+		SearchCalls:    searchCalls,
+		ProtocolError:  protocolError,
+		AnswerRecovery: answerRecovery,
 	}, nil
 }

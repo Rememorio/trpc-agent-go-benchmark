@@ -26,10 +26,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
-const (
-	sessionRecallAppName     = "memory-eval-session-recall"
-	sessionRecallQAMaxTokens = 80
-)
+const sessionRecallAppName = "memory-eval-session-recall"
 
 const sessionRecallInstructionTemplate = `You are a memory retrieval assistant. Your ONLY job is to read recalled session events and output a short factual answer.
 
@@ -205,11 +202,6 @@ func newSessionRecallQAAgent(
 	m model.Model,
 	cfg Config,
 ) agent.Agent {
-	genConfig := model.GenerationConfig{
-		Stream:      false,
-		MaxTokens:   intPtr(sessionRecallQAMaxTokens),
-		Temperature: float64Ptr(0),
-	}
 	return llmagent.New(
 		defaultAgentName,
 		llmagent.WithModel(m),
@@ -219,7 +211,7 @@ func newSessionRecallQAAgent(
 				fallbackAnswer,
 			),
 		),
-		llmagent.WithGenerationConfig(genConfig),
+		llmagent.WithGenerationConfig(memoryQAGenerationConfig()),
 		llmagent.WithPreloadSessionRecall(
 			cfg.SessionRecallResults,
 		),
@@ -395,7 +387,7 @@ func (e *SessionRecallEvaluator) seedSession(
 		return fmt.Errorf("create session: %w", err)
 	}
 
-	msgs := sessionRecallMessages(sample, sess)
+	msgs := sessionRecallMessages(sess)
 	for i, msg := range msgs {
 		if msg.Role != model.RoleUser &&
 			msg.Role != model.RoleAssistant {
@@ -437,11 +429,8 @@ func (e *SessionRecallEvaluator) cleanupSessions(
 	}
 }
 
-func sessionRecallMessages(
-	sample *dataset.LoCoMoSample,
-	sess dataset.Session,
-) []model.Message {
-	msgs := sessionMessages(sample, sess)
+func sessionRecallMessages(sess dataset.Session) []model.Message {
+	msgs := sessionMessages(sess)
 	datePrefix := ""
 	if sess.SessionDate != "" {
 		datePrefix = fmt.Sprintf(

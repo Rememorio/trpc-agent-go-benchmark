@@ -54,6 +54,14 @@ type Config struct {
 	// Only applies to agentic and auto scenarios.
 	QASearchPasses int
 
+	// ReuseMemories skips auto extraction and answers against memories already
+	// stored for the sample. It only applies to the auto scenario.
+	ReuseMemories bool
+	// AutoExtractionTimeout overrides the total wait for all asynchronous
+	// extraction jobs in one LoCoMo sample. Zero derives a bounded timeout from
+	// the number of sessions.
+	AutoExtractionTimeout time.Duration
+
 	// SessionRecallResults controls how many recalled
 	// session events are preloaded during QA.
 	// Only applies to session_recall scenario.
@@ -68,6 +76,14 @@ type Config struct {
 	DebugDumpMemories bool
 	DebugMemLimit     int
 	DebugQALimit      int
+
+	// ExtractionTracker records auto-memory model calls. It is nil for
+	// scenarios that do not use the built-in extractor.
+	ExtractionTracker *TokenTracker
+	// SnapshotEmbeddingUsage returns and resets provider-reported embedding
+	// usage. Keeping this as a callback avoids coupling scenarios to a concrete
+	// embedding implementation.
+	SnapshotEmbeddingUsage func() EmbeddingUsage
 }
 
 // DefaultConfig returns default configuration.
@@ -89,17 +105,34 @@ func DefaultConfig() Config {
 
 // QAResult holds the result of a single QA evaluation.
 type QAResult struct {
-	QuestionID    string              `json:"question_id"`
-	Question      string              `json:"question"`
-	Category      string              `json:"category"`
-	Expected      string              `json:"expected"`
-	Predicted     string              `json:"predicted"`
-	Metrics       metrics.QAMetrics   `json:"metrics"`
-	LatencyMs     int64               `json:"latency_ms"`
-	TokensUsed    int                 `json:"tokens_used,omitempty"`
-	TokenUsage    *TokenUsage         `json:"token_usage,omitempty"`
-	Steps         []StepTrace         `json:"steps,omitempty"`
-	SessionRecall *SessionRecallTrace `json:"session_recall,omitempty"`
+	QuestionID     string               `json:"question_id"`
+	Question       string               `json:"question"`
+	Category       string               `json:"category"`
+	Expected       string               `json:"expected"`
+	Predicted      string               `json:"predicted"`
+	Metrics        metrics.QAMetrics    `json:"metrics"`
+	LatencyMs      int64                `json:"latency_ms"`
+	TokensUsed     int                  `json:"tokens_used,omitempty"`
+	TokenUsage     *TokenUsage          `json:"token_usage,omitempty"`
+	Steps          []StepTrace          `json:"steps,omitempty"`
+	SearchCalls    int                  `json:"memory_search_calls,omitempty"`
+	ProtocolError  string               `json:"protocol_error,omitempty"`
+	AnswerRecovery *AnswerRecoveryTrace `json:"answer_recovery,omitempty"`
+	SessionRecall  *SessionRecallTrace  `json:"session_recall,omitempty"`
+}
+
+// AnswerRecoveryTrace records a direct retry after generation or format failure.
+type AnswerRecoveryTrace struct {
+	Trigger               string `json:"trigger"`
+	Succeeded             bool   `json:"succeeded"`
+	Applied               bool   `json:"applied,omitempty"`
+	InitialAnswerRetained bool   `json:"initial_answer_retained,omitempty"`
+	FallbackApplied       bool   `json:"fallback_applied,omitempty"`
+	InitialAnswer         string `json:"initial_answer,omitempty"`
+	RecoveredAnswer       string `json:"recovered_answer,omitempty"`
+	SelectedAnswerSource  string `json:"selected_answer_source,omitempty"`
+	Error                 string `json:"error,omitempty"`
+	FinishReason          string `json:"finish_reason,omitempty"`
 }
 
 // SessionRecallTrace records the query-time session recall
@@ -127,12 +160,37 @@ type SessionRecallHit struct {
 
 // SampleResult holds evaluation results for a single sample.
 type SampleResult struct {
-	SampleID    string                             `json:"sample_id"`
-	QAResults   []*QAResult                        `json:"qa_results"`
-	ByCategory  map[string]metrics.CategoryMetrics `json:"by_category"`
-	Overall     metrics.CategoryMetrics            `json:"overall"`
-	TotalTimeMs int64                              `json:"total_time_ms"`
-	TokenUsage  *TokenUsage                        `json:"token_usage,omitempty"`
+	SampleID                 string                             `json:"sample_id"`
+	QAResults                []*QAResult                        `json:"qa_results"`
+	ByCategory               map[string]metrics.CategoryMetrics `json:"by_category"`
+	Overall                  metrics.CategoryMetrics            `json:"overall"`
+	TotalTimeMs              int64                              `json:"total_time_ms"`
+	TokenUsage               *TokenUsage                        `json:"token_usage,omitempty"`
+	ExtractionTokenUsage     *TokenUsage                        `json:"extraction_token_usage,omitempty"`
+	QATokenUsage             *TokenUsage                        `json:"qa_token_usage,omitempty"`
+	EmbeddingUsage           *EmbeddingUsage                    `json:"embedding_usage,omitempty"`
+	ExtractionEmbeddingUsage *EmbeddingUsage                    `json:"extraction_embedding_usage,omitempty"`
+	QAEmbeddingUsage         *EmbeddingUsage                    `json:"qa_embedding_usage,omitempty"`
+	ExtractionCalls          []ExtractionCallTrace              `json:"extraction_calls,omitempty"`
+}
+
+// EmbeddingUsage holds provider-reported embedding cost for one phase.
+type EmbeddingUsage struct {
+	PromptTokens int `json:"prompt_tokens"`
+	TotalTokens  int `json:"total_tokens"`
+	Calls        int `json:"calls"`
+}
+
+// Add merges another embedding usage value into the receiver.
+func (u *EmbeddingUsage) Add(other EmbeddingUsage) {
+	u.PromptTokens += other.PromptTokens
+	u.TotalTokens += other.TotalTokens
+	u.Calls += other.Calls
+}
+
+// IsZero reports whether no embedding usage was recorded.
+func (u EmbeddingUsage) IsZero() bool {
+	return u.PromptTokens == 0 && u.TotalTokens == 0 && u.Calls == 0
 }
 
 // Evaluator is the interface for scenario evaluators.
@@ -319,13 +377,9 @@ func (e *LongContextEvaluator) evaluateQA(
 		e.tokenCounter.Count(predicted)
 
 	var tu *TokenUsage
-	if result.usage != nil {
-		tu = &TokenUsage{
-			PromptTokens:     result.usage.PromptTokens,
-			CompletionTokens: result.usage.CompletionTokens,
-			TotalTokens:      result.usage.TotalTokens,
-			LLMCalls:         1,
-		}
+	if !result.usage.IsZero() {
+		usage := result.usage
+		tu = &usage
 	}
 	return &QAResult{
 		QuestionID: qa.QuestionID,
@@ -342,8 +396,10 @@ func (e *LongContextEvaluator) evaluateQA(
 
 // runModelResult holds the output of a model call.
 type runModelResult struct {
-	text  string
-	usage *model.Usage
+	text         string
+	usage        TokenUsage
+	finishReason string
+	toolCalls    []model.ToolCall
 }
 
 // runModelWithRateLimitRetry calls model.GenerateContent with
@@ -353,15 +409,20 @@ func runModelWithRateLimitRetry(
 	m model.Model,
 	req *model.Request,
 ) (runModelResult, error) {
+	var result runModelResult
 	backoff := rateLimitInitialBackoff
 	for attempt := 0; attempt <= maxRateLimitRetries; attempt++ {
 		respCh, err := m.GenerateContent(ctx, req)
 		if err != nil {
+			result.usage.LLMCalls++
 			if isRateLimitError(err) {
+				if attempt == maxRateLimitRetries {
+					return result, err
+				}
 				if sleepErr := sleepWithContext(
 					ctx, backoff,
 				); sleepErr != nil {
-					return runModelResult{}, sleepErr
+					return result, sleepErr
 				}
 				backoff = minDuration(
 					backoff*time.Duration(rateLimitBackoffMultiplier),
@@ -369,57 +430,75 @@ func runModelWithRateLimitRetry(
 				)
 				continue
 			}
-			return runModelResult{}, err
+			return result, err
 		}
 
 		var lastContent string
 		var lastUsage *model.Usage
+		var lastFinishReason string
+		var lastToolCalls []model.ToolCall
+		var responseErr error
+		var sawChoice bool
 		for resp := range respCh {
 			if resp == nil {
 				continue
 			}
 			if resp.Error != nil {
-				errMsg := resp.Error.Message
-				if isRateLimitError(
-					fmt.Errorf("%s", errMsg),
-				) {
+				responseErr = fmt.Errorf(
+					"model error: %s", resp.Error.Message,
+				)
+				if isRateLimitError(responseErr) {
 					// Drain remaining responses.
 					for range respCh {
 					}
-					if sleepErr := sleepWithContext(
-						ctx, backoff,
-					); sleepErr != nil {
-						return runModelResult{}, sleepErr
-					}
-					backoff = minDuration(
-						backoff*time.Duration(
-							rateLimitBackoffMultiplier,
-						),
-						rateLimitMaxBackoff,
-					)
-					lastContent = ""
-					lastUsage = nil
 					break
 				}
-				return runModelResult{}, fmt.Errorf(
-					"model error: %s", errMsg,
-				)
+				break
 			}
 			if len(resp.Choices) > 0 {
-				c := resp.Choices[0].Message.Content
+				sawChoice = true
+				choice := resp.Choices[0]
+				c := choice.Message.Content
 				if c != "" {
 					lastContent = c
+				}
+				if len(choice.Message.ToolCalls) > 0 {
+					lastToolCalls = append(
+						[]model.ToolCall(nil), choice.Message.ToolCalls...,
+					)
+				}
+				if choice.FinishReason != nil {
+					lastFinishReason = *choice.FinishReason
 				}
 			}
 			if resp.Usage != nil {
 				lastUsage = resp.Usage
 			}
 		}
-		if lastContent != "" {
-			return runModelResult{
-				text:  strings.TrimSpace(lastContent),
-				usage: lastUsage,
-			}, nil
+		callUsage := tokenUsageFromModelUsage(lastUsage)
+		if lastUsage == nil {
+			callUsage.LLMCalls = 1
+		}
+		result.usage.Add(callUsage)
+		if responseErr != nil {
+			if !isRateLimitError(responseErr) ||
+				attempt == maxRateLimitRetries {
+				return result, responseErr
+			}
+			if sleepErr := sleepWithContext(ctx, backoff); sleepErr != nil {
+				return result, sleepErr
+			}
+			backoff = minDuration(
+				backoff*time.Duration(rateLimitBackoffMultiplier),
+				rateLimitMaxBackoff,
+			)
+			continue
+		}
+		if lastContent != "" || sawChoice || lastUsage != nil {
+			result.text = strings.TrimSpace(lastContent)
+			result.finishReason = lastFinishReason
+			result.toolCalls = lastToolCalls
+			return result, nil
 		}
 		// Empty response (possibly rate limit or model overload).
 		// Apply backoff before retrying.
@@ -427,7 +506,7 @@ func runModelWithRateLimitRetry(
 			if sleepErr := sleepWithContext(
 				ctx, backoff,
 			); sleepErr != nil {
-				return runModelResult{}, sleepErr
+				return result, sleepErr
 			}
 			backoff = minDuration(
 				backoff*time.Duration(
@@ -438,7 +517,7 @@ func runModelWithRateLimitRetry(
 			continue
 		}
 	}
-	return runModelResult{}, fmt.Errorf("model returned empty response after retries")
+	return result, fmt.Errorf("model returned empty response after retries")
 }
 
 // buildTranscript concatenates all sessions into a single transcript

@@ -11,19 +11,112 @@
 package scenarios
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go-benchmark/memory/trpc-agent-go-impl/evaluation/dataset"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
+type recoveryModel struct {
+	request      *model.Request
+	text         string
+	toolArgs     string
+	empty        bool
+	finishReason string
+	calls        int
+}
+
+func (m *recoveryModel) GenerateContent(
+	_ context.Context,
+	request *model.Request,
+) (<-chan *model.Response, error) {
+	m.request = request
+	m.calls++
+	responseText := m.text
+	message := model.NewAssistantMessage(responseText)
+	if !m.empty {
+		toolArgs := m.toolArgs
+		if toolArgs == "" {
+			toolArgs = `{"answer":"recovered answer"}`
+		}
+		message.ToolCalls = []model.ToolCall{{
+			ID: "submit-answer-id",
+			Function: model.FunctionDefinitionParam{
+				Name:      memoryQASubmitAnswerToolName,
+				Arguments: []byte(toolArgs),
+			},
+		}}
+	}
+	finishReason := m.finishReason
+	if finishReason == "" {
+		finishReason = "stop"
+	}
+	ch := make(chan *model.Response, 1)
+	ch <- &model.Response{
+		Choices: []model.Choice{{
+			Message:      message,
+			FinishReason: &finishReason,
+		}},
+		Usage: &model.Usage{
+			PromptTokens:     20,
+			CompletionTokens: 3,
+			TotalTokens:      23,
+			PromptTokensDetails: model.PromptTokensDetails{
+				CachedTokens: 4,
+			},
+		},
+	}
+	close(ch)
+	return ch, nil
+}
+
+func (*recoveryModel) Info() model.Info {
+	return model.Info{}
+}
+
+func TestSessionMessagesAnchorsOpeningSpeakerAsUser(t *testing.T) {
+	sess := dataset.Session{
+		SessionDate: "2:24 pm on 14 August, 2023",
+		Turns: []dataset.Turn{
+			{Speaker: "Melanie", Text: "We celebrated my daughter's birthday."},
+			{Speaker: "Caroline", Text: "What concert was it?"},
+			{Speaker: "Melanie", Text: "It was Matt Patterson."},
+		},
+	}
+
+	got := sessionMessages(sess)
+	if len(got) != 4 {
+		t.Fatalf("messages = %d, want 4", len(got))
+	}
+	if got[0].Role != model.RoleSystem {
+		t.Fatalf("date role = %q, want system", got[0].Role)
+	}
+	wantRoles := []model.Role{
+		model.RoleUser,
+		model.RoleAssistant,
+		model.RoleUser,
+	}
+	for i, want := range wantRoles {
+		if got[i+1].Role != want {
+			t.Fatalf("message %d role = %q, want %q", i, got[i+1].Role, want)
+		}
+	}
+	if !strings.HasPrefix(got[1].Content, "[Melanie]:") ||
+		!strings.HasPrefix(got[2].Content, "[Caroline]:") {
+		t.Fatalf("speaker prefixes not retained: %+v", got)
+	}
+}
+
 func TestQAMemorySearchInstruction_SingleSearch(t *testing.T) {
 	got := qaMemorySearchInstruction(1)
-	if got != qaSingleSearchInstruction {
-		t.Fatalf("unexpected instruction for single search")
+	if !strings.Contains(got, "exactly once") {
+		t.Fatalf("missing single-search rule: %q", got)
 	}
+	assertGroundedQAPrompt(t, got)
 }
 
 func TestQAMemorySearchInstruction_MultiSearch(t *testing.T) {
@@ -36,6 +129,513 @@ func TestQAMemorySearchInstruction_MultiSearch(t *testing.T) {
 	}
 	if !strings.Contains(got, "Search #1") {
 		t.Fatalf("missing workflow search marker: %q", got)
+	}
+	assertGroundedQAPrompt(t, got)
+}
+
+func assertGroundedQAPrompt(t *testing.T, got string) {
+	t.Helper()
+	for _, want := range []string{
+		"Topical relevance is not answer support",
+		"support the exact subject",
+		"unambiguous paraphrase",
+		"Never transfer a fact",
+		"Never output an empty answer",
+		`output exactly "Yes" or "No"`,
+		"shortest complete answer span",
+		"never replace it with a pronoun or vague category label",
+		"every supported part",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing grounding rule %q: %q", want, got)
+		}
+	}
+	for _, unwanted := range []string{
+		"When in doubt between answering",
+		"If ANY retrieved memory is topically related",
+	} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("stale guessing rule %q: %q", unwanted, got)
+		}
+	}
+}
+
+func TestMemorySearchProtocol(t *testing.T) {
+	search := ToolCallTrace{Name: "memory_search"}
+	tests := []struct {
+		name          string
+		steps         []StepTrace
+		expected      int
+		wantCalls     int
+		wantViolation bool
+	}{
+		{
+			name: "sequential calls",
+			steps: []StepTrace{
+				{ToolCalls: []ToolCallTrace{search}},
+				{ToolCalls: []ToolCallTrace{search}},
+				{},
+			},
+			expected:  2,
+			wantCalls: 2,
+		},
+		{
+			name: "batched calls",
+			steps: []StepTrace{
+				{ToolCalls: []ToolCallTrace{search, search}},
+				{},
+			},
+			expected:      2,
+			wantCalls:     2,
+			wantViolation: true,
+		},
+		{
+			name: "missing call",
+			steps: []StepTrace{
+				{ToolCalls: []ToolCallTrace{search}},
+				{},
+			},
+			expected:      2,
+			wantCalls:     1,
+			wantViolation: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			calls, violation := memorySearchProtocol(
+				test.steps, test.expected,
+			)
+			if calls != test.wantCalls {
+				t.Fatalf("calls = %d, want %d", calls, test.wantCalls)
+			}
+			if got := violation != ""; got != test.wantViolation {
+				t.Fatalf(
+					"violation present = %v, want %v: %q",
+					got, test.wantViolation, violation,
+				)
+			}
+		})
+	}
+}
+
+func TestRecoverMemoryQAAnswer(t *testing.T) {
+	if MemoryQARecoveryMaxTokens != 2048 {
+		t.Fatalf(
+			"MemoryQARecoveryMaxTokens = %d, want 2048",
+			MemoryQARecoveryMaxTokens,
+		)
+	}
+	m := &recoveryModel{}
+	res := collectResult{
+		usage: TokenUsage{LLMCalls: 3},
+		steps: []StepTrace{
+			{
+				Step:  1,
+				Phase: "memory-search",
+				ToolCalls: []ToolCallTrace{{
+					Name:   "memory_search",
+					Args:   `{"query":"first"}`,
+					Result: `{"results":[{"memory":"evidence"}]}`,
+				}},
+			},
+			{Step: 2, Phase: "answer", FinishReason: "length"},
+		},
+	}
+	got, trace := recoverMemoryQAAnswer(
+		context.Background(), m, "What happened?", res,
+	)
+	if trace == nil || !trace.Succeeded || !trace.Applied ||
+		trace.SelectedAnswerSource != memoryQAAnswerSourceRecovery {
+		t.Fatalf("recovery trace = %+v", trace)
+	}
+	if trace.Trigger != "empty-answer,finish-reason:length" {
+		t.Fatalf("trigger = %q", trace.Trigger)
+	}
+	if got.text != "recovered answer" {
+		t.Fatalf("answer = %q", got.text)
+	}
+	if got.usage.LLMCalls != 4 || got.usage.TotalTokens != 23 ||
+		got.usage.CachedTokens != 4 {
+		t.Fatalf("usage = %+v", got.usage)
+	}
+	if len(got.steps) != 3 || got.steps[2].Phase != "answer-recovery" ||
+		got.steps[2].FinishReason != "stop" {
+		t.Fatalf("steps = %+v", got.steps)
+	}
+	if m.request == nil || len(m.request.Messages) != 1 {
+		t.Fatalf("request = %+v", m.request)
+	}
+	if m.request.GenerationConfig.MaxTokens == nil ||
+		*m.request.GenerationConfig.MaxTokens != MemoryQARecoveryMaxTokens {
+		t.Fatalf(
+			"recovery max tokens = %v, want %d",
+			m.request.GenerationConfig.MaxTokens,
+			MemoryQARecoveryMaxTokens,
+		)
+	}
+	answerTool, ok := m.request.Tools[memoryQASubmitAnswerToolName]
+	if !ok || answerTool.Declaration().Name != memoryQASubmitAnswerToolName {
+		t.Fatalf("tools = %+v", m.request.Tools)
+	}
+	toolChoice, ok := m.request.ExtraFields["tool_choice"].(map[string]any)
+	if !ok || toolChoice["type"] != "function" {
+		t.Fatalf("tool choice = %+v", m.request.ExtraFields["tool_choice"])
+	}
+	function, ok := toolChoice["function"].(map[string]string)
+	if !ok || function["name"] != memoryQASubmitAnswerToolName {
+		t.Fatalf("tool choice function = %+v", toolChoice["function"])
+	}
+	prompt := m.request.Messages[0].Content
+	for _, want := range []string{
+		"What happened?", "Memory: evidence", "submit_answer",
+		"Previous answer:", "<answer><empty></answer>",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("recovery prompt missing %q: %q", want, prompt)
+		}
+	}
+}
+
+func TestMemoryQARetrievalEvidenceCompactsAndDeduplicates(t *testing.T) {
+	result := `{"query":"q","results":[` +
+		`{"id":"same","memory":"evidence","topics":["topic"],` +
+		`"kind":"fact","event_time":"2023-01-02T00:00:00Z",` +
+		`"participants":["Caroline"],"location":"center",` +
+		`"created":"ignored","score":0.9}]}`
+	steps := []StepTrace{
+		{ToolCalls: []ToolCallTrace{{Name: "memory_search", Result: result}}},
+		{ToolCalls: []ToolCallTrace{{Name: "memory_search", Result: result}}},
+	}
+	got := memoryQARetrievalEvidence(steps)
+	for _, want := range []string{
+		"1. Memory: evidence",
+		"Topics: topic",
+		"Kind: fact",
+		"Event time: 2023-01-02T00:00:00Z",
+		"Participants: Caroline",
+		"Location: center",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("evidence missing %q: %q", want, got)
+		}
+	}
+	if strings.Count(got, "Memory: evidence") != 1 ||
+		strings.Contains(got, "created") || strings.Contains(got, "score") {
+		t.Fatalf("evidence was not compacted and deduplicated: %q", got)
+	}
+}
+
+func TestRecoverMemoryQAAnswerSkipsCompleteAnswer(t *testing.T) {
+	res := collectResult{
+		text:  "complete",
+		steps: []StepTrace{{FinishReason: "stop"}},
+	}
+	got, trace := recoverMemoryQAAnswer(
+		context.Background(), nil, "question", res,
+	)
+	if trace != nil || got.text != res.text {
+		t.Fatalf("got = %+v, trace = %+v", got, trace)
+	}
+}
+
+func TestMemoryQARecoveryTriggerFormatViolation(t *testing.T) {
+	tests := []struct {
+		name    string
+		answer  string
+		trigger string
+	}{
+		{
+			name:    "multiline",
+			answer:  "Sweden\nBased on the memories, Sweden",
+			trigger: "answer-format:multiline",
+		},
+		{
+			name: "too many words",
+			answer: strings.Repeat("word ", memoryQAMaxPrimaryAnswerWords) +
+				"overflow",
+			trigger: "answer-format:too-many-words",
+		},
+		{
+			name: "reference length answer",
+			answer: "her own journey and the support she received, and how " +
+				"counseling improved her life",
+			trigger: "answer-format:too-many-words",
+		},
+		{
+			name:    "complete short answer",
+			answer:  "Friends, family, and mentors",
+			trigger: "",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := memoryQARecoveryTrigger(collectResult{text: test.answer})
+			if got != test.trigger {
+				t.Fatalf("trigger = %q, want %q", got, test.trigger)
+			}
+		})
+	}
+}
+
+func TestRecoverMemoryQAAnswerRejectsMalformedRecovery(t *testing.T) {
+	m := &recoveryModel{
+		toolArgs: `{"answer":"` +
+			strings.TrimSpace(strings.Repeat(
+				"word ", memoryQAMaxRecoveryAnswerWords,
+			)) +
+			` overflow"}`,
+	}
+	res := collectResult{
+		text: strings.Repeat(
+			"word ", memoryQAMaxPrimaryAnswerWords,
+		) + "overflow",
+		usage: TokenUsage{LLMCalls: 3},
+		steps: []StepTrace{{
+			Step:  1,
+			Phase: "memory-search",
+			ToolCalls: []ToolCallTrace{{
+				Name:   "memory_search",
+				Result: `{"results":[{"memory":"evidence"}]}`,
+			}},
+		}},
+	}
+
+	got, trace := recoverMemoryQAAnswer(
+		context.Background(), m, "What happened?", res,
+	)
+	if trace == nil || trace.Succeeded ||
+		!strings.Contains(trace.Error, "too-many-words") {
+		t.Fatalf("trace = %+v", trace)
+	}
+	if got.text != strings.TrimSpace(res.text) ||
+		!trace.InitialAnswerRetained || trace.FallbackApplied ||
+		trace.SelectedAnswerSource != memoryQAAnswerSourceInitial {
+		t.Fatalf("initial answer was not retained: answer=%q trace=%+v", got.text, trace)
+	}
+	if got.usage.LLMCalls != 4 || got.usage.TotalTokens != 23 {
+		t.Fatalf("usage = %+v", got.usage)
+	}
+	if len(got.steps) != 2 || got.steps[1].Phase != "answer-recovery" {
+		t.Fatalf("steps = %+v", got.steps)
+	}
+	if got.steps[1].Error == "" {
+		t.Fatalf("recovery failure missing from step: %+v", got.steps[1])
+	}
+}
+
+func TestRecoverMemoryQAAnswerRetainsInitialWhenRecoveryIsNotShorter(
+	t *testing.T,
+) {
+	const initial = "her own journey and the support she received and counseling improved her life"
+	const recovered = "her own journey and the support she received and how counseling greatly improved her life"
+	m := &recoveryModel{toolArgs: `{"answer":"` + recovered + `"}`}
+	res := collectResult{
+		text: initial,
+		steps: []StepTrace{{
+			Phase: "memory-search",
+			ToolCalls: []ToolCallTrace{{
+				Name:   "memory_search",
+				Result: `{"results":[{"memory":"evidence"}]}`,
+			}},
+		}},
+	}
+
+	got, trace := recoverMemoryQAAnswer(
+		context.Background(), m, "What motivated Caroline?", res,
+	)
+	if trace == nil || !trace.Succeeded || trace.Applied ||
+		!trace.InitialAnswerRetained || trace.InitialAnswer != initial ||
+		trace.RecoveredAnswer != recovered ||
+		trace.SelectedAnswerSource != memoryQAAnswerSourceInitial {
+		t.Fatalf("trace = %+v", trace)
+	}
+	if got.text != initial {
+		t.Fatalf("answer = %q, want initial %q", got.text, initial)
+	}
+}
+
+func TestRecoverMemoryQAAnswerAppliesShorterRecovery(t *testing.T) {
+	const initial = "her own journey and the support she received and counseling improved her life"
+	const recovered = "Her journey and support"
+	m := &recoveryModel{toolArgs: `{"answer":"` + recovered + `"}`}
+	res := collectResult{
+		text: initial,
+		steps: []StepTrace{{
+			Phase: "memory-search",
+			ToolCalls: []ToolCallTrace{{
+				Name:   "memory_search",
+				Result: `{"results":[{"memory":"evidence"}]}`,
+			}},
+		}},
+	}
+
+	got, trace := recoverMemoryQAAnswer(
+		context.Background(), m, "What motivated Caroline?", res,
+	)
+	if trace == nil || !trace.Succeeded || !trace.Applied ||
+		trace.InitialAnswerRetained || trace.InitialAnswer != initial ||
+		trace.RecoveredAnswer != recovered ||
+		trace.SelectedAnswerSource != memoryQAAnswerSourceRecovery {
+		t.Fatalf("trace = %+v", trace)
+	}
+	if got.text != recovered {
+		t.Fatalf("answer = %q, want recovery %q", got.text, recovered)
+	}
+}
+
+func TestRecoverMemoryQAAnswerFallsBackWhenBothAnswersAreUnusable(
+	t *testing.T,
+) {
+	tooLong := strings.TrimSpace(strings.Repeat(
+		"word ", memoryQAMaxRecoveryAnswerWords+1,
+	))
+	m := &recoveryModel{toolArgs: `{"answer":"` + tooLong + `"}`}
+	res := collectResult{
+		text: tooLong,
+		steps: []StepTrace{{
+			Phase: "memory-search",
+			ToolCalls: []ToolCallTrace{{
+				Name:   "memory_search",
+				Result: `{"results":[{"memory":"evidence"}]}`,
+			}},
+		}},
+	}
+
+	got, trace := recoverMemoryQAAnswer(
+		context.Background(), m, "What happened?", res,
+	)
+	if trace == nil || trace.Succeeded || trace.InitialAnswerRetained ||
+		!trace.FallbackApplied ||
+		trace.SelectedAnswerSource != memoryQAAnswerSourceFallback {
+		t.Fatalf("trace = %+v", trace)
+	}
+	if got.text != fallbackAnswer {
+		t.Fatalf("answer = %q, want fallback", got.text)
+	}
+}
+
+func TestParseMemoryQARecoveryToolCallRequiresSubmitAnswer(t *testing.T) {
+	_, err := parseMemoryQARecoveryToolCall(
+		nil, "free-form response",
+	)
+	if err == nil || !strings.Contains(err.Error(), "did not call") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestParseMemoryQARecoveryAnswerRejectsInvalidJSON(t *testing.T) {
+	_, err := parseMemoryQARecoveryAnswer("not JSON")
+	if err == nil || !strings.Contains(err.Error(), "invalid JSON") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestParseMemoryQARecoveryAnswerTrimsAnswer(t *testing.T) {
+	got, err := parseMemoryQARecoveryAnswer(`{"answer":"  Sweden  "}`)
+	if err != nil || got != "Sweden" {
+		t.Fatalf("answer = %q, error = %v", got, err)
+	}
+}
+
+func TestParseMemoryQARecoveryAnswerAllowsReferenceLength(t *testing.T) {
+	const answer = "her own journey and the support she received, and how " +
+		"counseling improved her life"
+	got, err := parseMemoryQARecoveryAnswer(`{"answer":"` + answer + `"}`)
+	if err != nil || got != answer {
+		t.Fatalf("answer = %q, error = %v", got, err)
+	}
+}
+
+func TestRecoverMemoryQAAnswerRecordsTerminalEmptyResponse(t *testing.T) {
+	m := &recoveryModel{empty: true, finishReason: "length"}
+	res := collectResult{
+		usage: TokenUsage{LLMCalls: 3},
+		steps: []StepTrace{{
+			Step:  1,
+			Phase: "memory-search",
+			ToolCalls: []ToolCallTrace{{
+				Name:   "memory_search",
+				Result: `{"results":[{"memory":"Sweden"}]}`,
+			}},
+		}},
+	}
+
+	got, trace := recoverMemoryQAAnswer(
+		context.Background(), m, "Where did Caroline move from?", res,
+	)
+	if m.calls != 1 {
+		t.Fatalf("model calls = %d, want 1", m.calls)
+	}
+	if trace == nil || trace.Succeeded || trace.FinishReason != "length" ||
+		trace.Error != "recovery returned an empty answer" ||
+		!trace.FallbackApplied {
+		t.Fatalf("trace = %+v", trace)
+	}
+	if got.usage.LLMCalls != 4 || got.usage.TotalTokens != 23 {
+		t.Fatalf("usage = %+v", got.usage)
+	}
+	if len(got.steps) != 2 {
+		t.Fatalf("steps = %+v", got.steps)
+	}
+	step := got.steps[1]
+	if step.Phase != "answer-recovery" || step.LLMCalls != 1 ||
+		step.FinishReason != "length" || step.TotalTokens != 23 ||
+		step.Error != trace.Error {
+		t.Fatalf("recovery step = %+v", step)
+	}
+}
+
+func TestRecoverMemoryQAAnswerRequiresEvidence(t *testing.T) {
+	res := collectResult{
+		steps: []StepTrace{{FinishReason: "length"}},
+	}
+	got, trace := recoverMemoryQAAnswer(
+		context.Background(), nil, "question", res,
+	)
+	if trace == nil || trace.Error !=
+		"no memory_search evidence available for recovery" {
+		t.Fatalf("trace = %+v", trace)
+	}
+	if got.text != fallbackAnswer || !trace.FallbackApplied ||
+		len(got.steps) != len(res.steps) {
+		t.Fatalf("got = %+v", got)
+	}
+}
+
+func TestMemoryQAUserMessageReinforcesAnswerFormat(t *testing.T) {
+	msg := memoryQAUserMessage("What happened?")
+	if msg.Role != model.RoleUser {
+		t.Fatalf("role = %q, want user", msg.Role)
+	}
+	for _, want := range []string{
+		"What happened?",
+		"shortest complete final answer span",
+		"explicit entity names",
+		"every directly requested part",
+		"For yes/no, output only Yes or No",
+	} {
+		if !strings.Contains(msg.Content, want) {
+			t.Fatalf("missing %q in %q", want, msg.Content)
+		}
+	}
+}
+
+func TestMemoryQAGenerationConfig(t *testing.T) {
+	config := memoryQAGenerationConfig()
+	if config.Stream {
+		t.Fatal("memory QA must use non-streaming generation")
+	}
+	if config.MaxTokens == nil || *config.MaxTokens != memoryQAMaxTokens {
+		t.Fatalf("MaxTokens = %v, want %d", config.MaxTokens, memoryQAMaxTokens)
+	}
+	if config.Temperature == nil || *config.Temperature != 0 {
+		t.Fatalf("Temperature = %v, want 0", config.Temperature)
+	}
+	if config.ReasoningEffort == nil || *config.ReasoningEffort != "low" {
+		t.Fatalf("ReasoningEffort = %v, want low", config.ReasoningEffort)
+	}
+	if config.ThinkingEnabled == nil || *config.ThinkingEnabled {
+		t.Fatalf("ThinkingEnabled = %v, want false", config.ThinkingEnabled)
 	}
 }
 
@@ -53,13 +653,22 @@ func TestCollectFinalTextAndUsage_WaitsForRunnerCompletion(t *testing.T) {
 		resultCh <- res
 	}()
 
+	finishReason := "length"
 	final := event.NewResponseEvent(
 		"invocation",
 		"author",
 		&model.Response{
 			Done: true,
 			Choices: []model.Choice{
-				{Message: model.NewAssistantMessage("answer")},
+				{
+					Message:      model.NewAssistantMessage("answer"),
+					FinishReason: &finishReason,
+				},
+			},
+			Usage: &model.Usage{
+				PromptTokens:     10,
+				CompletionTokens: 4,
+				TotalTokens:      14,
 			},
 		},
 	)
@@ -91,7 +700,103 @@ func TestCollectFinalTextAndUsage_WaitsForRunnerCompletion(t *testing.T) {
 		if res.text != "answer" {
 			t.Fatalf("unexpected collected text: %q", res.text)
 		}
+		if len(res.steps) != 1 {
+			t.Fatalf("steps = %d, want 1", len(res.steps))
+		}
+		if got := res.steps[0].FinishReason; got != finishReason {
+			t.Fatalf("finish reason = %q, want %q", got, finishReason)
+		}
+		if got := res.steps[0].TotalTokens; got != 14 {
+			t.Fatalf("step tokens = %d, want 14", got)
+		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for runner completion")
+	}
+}
+
+func TestCollectFinalTextAndUsage_RecordsEveryAssistantStep(t *testing.T) {
+	toolFinish := "tool_calls"
+	finalFinish := "stop"
+	ch := make(chan *event.Event, 5)
+	ch <- event.NewResponseEvent(
+		"invocation",
+		"author",
+		&model.Response{
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role: model.RoleAssistant,
+					ToolCalls: []model.ToolCall{
+						{
+							Function: model.FunctionDefinitionParam{
+								Name:      "memory_search",
+								Arguments: []byte(`{"query":"first"}`),
+							},
+						},
+						{
+							Function: model.FunctionDefinitionParam{
+								Name:      "memory_search",
+								Arguments: []byte(`{"query":"second"}`),
+							},
+						},
+					},
+				},
+				FinishReason: &toolFinish,
+			}},
+		},
+	)
+	for _, result := range []string{"first result", "second result"} {
+		ch <- event.NewResponseEvent(
+			"invocation",
+			"author",
+			&model.Response{
+				Object: model.ObjectTypeToolResponse,
+				Choices: []model.Choice{{
+					Message: model.NewToolMessage(
+						"tool-id", "memory_search", result,
+					),
+				}},
+			},
+		)
+	}
+	ch <- event.NewResponseEvent(
+		"invocation",
+		"author",
+		&model.Response{
+			Choices: []model.Choice{{
+				Message:      model.NewAssistantMessage("answer"),
+				FinishReason: &finalFinish,
+			}},
+		},
+	)
+	ch <- event.NewResponseEvent(
+		"invocation",
+		"author",
+		&model.Response{
+			Object: model.ObjectTypeRunnerCompletion,
+			Done:   true,
+		},
+	)
+	close(ch)
+
+	res, err := collectFinalTextAndUsage(ch)
+	if err != nil {
+		t.Fatalf("collect events: %v", err)
+	}
+	if res.text != "answer" {
+		t.Fatalf("text = %q, want answer", res.text)
+	}
+	if len(res.steps) != 2 {
+		t.Fatalf("steps = %d, want 2", len(res.steps))
+	}
+	if got := res.steps[0].FinishReason; got != toolFinish {
+		t.Fatalf("tool finish reason = %q, want %q", got, toolFinish)
+	}
+	if got := res.steps[1].FinishReason; got != finalFinish {
+		t.Fatalf("final finish reason = %q, want %q", got, finalFinish)
+	}
+	if got := res.steps[0].ToolCalls; len(got) != 2 ||
+		got[0].Result != "first result" ||
+		got[1].Result != "second result" {
+		t.Fatalf("tool traces = %+v", got)
 	}
 }
