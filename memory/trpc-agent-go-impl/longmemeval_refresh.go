@@ -121,9 +121,16 @@ func validateLongMemEvalRetrievalRefresh(result *runResult) error {
 	}
 	recordedSuffix, _ := result.Metadata["table_suffix"].(string)
 	if recordedSuffix == "" {
-		return errors.New("retrieval refresh source is missing table_suffix")
+		if err := validateLongMemEvalSharedTableRefresh(result); err != nil {
+			return err
+		}
+	} else if recordedSuffix != *flagTableSuffix {
+		return fmt.Errorf(
+			"table-suffix %q does not match retrieval source %q",
+			*flagTableSuffix, recordedSuffix,
+		)
 	}
-	if recordedSuffix != *flagTableSuffix {
+	if recordedSuffix == "" && *flagTableSuffix != "" {
 		return fmt.Errorf(
 			"table-suffix %q does not match retrieval source %q",
 			*flagTableSuffix, recordedSuffix,
@@ -169,6 +176,58 @@ func validateLongMemEvalRetrievalRefresh(result *runResult) error {
 	}
 	if !hasPGVector {
 		return errors.New("retrieval refresh source has no pgvector results")
+	}
+	return nil
+}
+
+func validateLongMemEvalSharedTableRefresh(result *runResult) error {
+	if !*flagLMEAllowSharedTableRefresh {
+		return errors.New(
+			"retrieval refresh source is missing table_suffix; " +
+				"use -lme-allow-shared-table-refresh only for an audited legacy run",
+		)
+	}
+	scope, ok := lmeMetadataString(result.Metadata, "user_scope")
+	if !ok || strings.TrimSpace(scope) == "" {
+		return errors.New(
+			"shared-table retrieval refresh source is missing user_scope",
+		)
+	}
+	explicit, ok := result.Metadata["user_scope_explicit"].(bool)
+	if !ok || !explicit {
+		return errors.New(
+			"shared-table retrieval refresh requires user_scope_explicit=true",
+		)
+	}
+	seen := make(map[string]struct{}, len(result.Cases))
+	pgvectorResults := 0
+	for _, cr := range result.Cases {
+		if cr == nil {
+			continue
+		}
+		br := cr.BackendResults["pgvector"]
+		if br == nil {
+			continue
+		}
+		pgvectorResults++
+		want := fmt.Sprintf("pgvector-%s-%s", cr.QuestionID, scope)
+		if br.UserID != want {
+			return fmt.Errorf(
+				"shared-table retrieval refresh user_id does not match its " +
+					"question and explicit user scope",
+			)
+		}
+		if _, duplicate := seen[br.UserID]; duplicate {
+			return errors.New(
+				"shared-table retrieval refresh contains duplicate pgvector user_id",
+			)
+		}
+		seen[br.UserID] = struct{}{}
+	}
+	if pgvectorResults == 0 {
+		return errors.New(
+			"shared-table retrieval refresh source has no pgvector results",
+		)
 	}
 	return nil
 }
@@ -246,6 +305,12 @@ func refreshLongMemEvalRetrievalResult(
 		"refreshed_at":          refreshedAt,
 		"memory_verification":   "canonical persisted memories match source final_memories",
 		"preserved_cost_scope":  preservedCostScope,
+	}
+	if *flagTableSuffix == "" {
+		refresh["shared_table_refresh"] = true
+		refresh["shared_table_isolation"] =
+			"legacy opt-in; every persisted lookup uses an exact user_id " +
+				"validated against the source question_id and explicit user_scope"
 	}
 	result.Metadata["retrieval_refresh"] = refresh
 	result.Metadata["implementation"] = implementation

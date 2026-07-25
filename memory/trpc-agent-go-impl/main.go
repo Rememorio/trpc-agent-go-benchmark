@@ -247,6 +247,11 @@ var (
 		"",
 		"Re-run PGVector retrieval and answers against memories persisted by an existing LongMemEval results.json",
 	)
+	flagLMEAllowSharedTableRefresh = flag.Bool(
+		"lme-allow-shared-table-refresh",
+		false,
+		"Allow retrieval refresh from a legacy LongMemEval run without a table suffix after validating its explicit user scope",
+	)
 	flagLMERefreshMemorySnapshots = flag.String(
 		"lme-refresh-memory-snapshots",
 		"",

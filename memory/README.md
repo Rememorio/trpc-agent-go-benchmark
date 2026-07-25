@@ -257,6 +257,12 @@ extractor options and rejects non-default extraction settings; without a
 replacement, the profile defaults to `candidate`. Plain `go run .` remains
 useful for local smoke tests, but its output may omit formal provenance and is
 then intentionally rejected by strict comparison.
+LongMemEval PGVector ingestion requires an explicit `-table-suffix` so separate
+runs cannot share physical storage accidentally. Retrieval refresh preserves
+that suffix. The opt-in `-lme-allow-shared-table-refresh` exists only for
+audited legacy results without one; it additionally requires an explicit
+recorded user scope and validates every PGVector user ID against its question
+before accessing the shared table.
 
 ```bash
 export PGVECTOR_DSN="postgres://user:password@localhost:5432/vectordb?sslmode=disable"
@@ -800,6 +806,7 @@ LongMemEval-specific options:
 | `-lme-reanswer-reuse-source-answers` | true | Seed cache from compatible source answers |
 | `-lme-refresh-memory-snapshots` | | Refresh final snapshots without model calls  |
 | `-lme-refresh-retrieval-results` | | Refresh persisted pgvector retrieval         |
+| `-lme-allow-shared-table-refresh` | false | Refresh an audited legacy shared table |
 | `-lme-rerank-results`     |         | Rerank saved hits for every result backend   |
 | `-lme-rerank-topn`        | 12      | Maximum memories selected by the reranker    |
 | `-lme-judge-results`     |         | Add semantic judge results to `results.json` |

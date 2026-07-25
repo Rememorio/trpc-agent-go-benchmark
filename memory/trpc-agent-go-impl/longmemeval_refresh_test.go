@@ -21,6 +21,7 @@ import (
 
 func TestValidateLongMemEvalRetrievalRefresh(t *testing.T) {
 	restoreStringFlag(t, flagTableSuffix, "_refresh_test")
+	restoreBoolFlag(t, flagLMEAllowSharedTableRefresh, false)
 	restoreStringFlag(t, flagModel, "answer-model")
 	restoreStringFlag(t, flagModelVariant, "variant")
 	restoreStringFlag(t, flagEmbedModel, "embedding-model")
@@ -45,6 +46,54 @@ func TestValidateLongMemEvalRetrievalRefresh(t *testing.T) {
 	result.Metadata["table_suffix"] = "_other"
 	if err := validateLongMemEvalRetrievalRefresh(result); err == nil {
 		t.Fatal("validate retrieval refresh accepted a different table")
+	}
+}
+
+func TestValidateLongMemEvalRetrievalRefreshSharedTable(t *testing.T) {
+	restoreStringFlag(t, flagTableSuffix, "")
+	restoreBoolFlag(t, flagLMEAllowSharedTableRefresh, false)
+	restoreStringFlag(t, flagModel, "answer-model")
+	restoreStringFlag(t, flagModelVariant, "variant")
+	restoreStringFlag(t, flagEmbedModel, "embedding-model")
+	restoreIntFlag(t, flagVectorTopK, 30)
+
+	result := &runResult{
+		Metadata: map[string]any{
+			"table_suffix":        "",
+			"user_scope":          "legacy-run",
+			"user_scope_explicit": true,
+			"model":               getModelName(),
+			"model_variant":       getModelVariant(),
+			"embedding_model":     getEmbedModelName(),
+			"top_k":               float64(30),
+		},
+		Cases: []*caseResult{{
+			QuestionID: "question-1",
+			BackendResults: map[string]*backendResult{
+				"pgvector": {
+					UserID: "pgvector-question-1-legacy-run",
+				},
+			},
+		}},
+	}
+	if err := validateLongMemEvalRetrievalRefresh(result); err == nil {
+		t.Fatal("shared-table refresh did not require explicit opt-in")
+	}
+
+	*flagLMEAllowSharedTableRefresh = true
+	if err := validateLongMemEvalRetrievalRefresh(result); err != nil {
+		t.Fatalf("validate audited shared-table refresh: %v", err)
+	}
+
+	result.Metadata["user_scope_explicit"] = false
+	if err := validateLongMemEvalRetrievalRefresh(result); err == nil {
+		t.Fatal("shared-table refresh accepted an implicit user scope")
+	}
+	result.Metadata["user_scope_explicit"] = true
+
+	result.Cases[0].BackendResults["pgvector"].UserID = "pgvector-question-1-other"
+	if err := validateLongMemEvalRetrievalRefresh(result); err == nil {
+		t.Fatal("shared-table refresh accepted a user outside its scope")
 	}
 }
 

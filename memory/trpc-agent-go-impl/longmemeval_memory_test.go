@@ -1337,6 +1337,26 @@ func TestValidateLongMemEvalAttributionBackendsRejectsMem0Cloud(t *testing.T) {
 	}
 }
 
+func TestValidateLongMemEvalIngestionTableIsolation(t *testing.T) {
+	restoreStringFlag(t, flagTableSuffix, "")
+	if err := validateLongMemEvalIngestionTableIsolation(
+		[]string{"mem0"},
+	); err != nil {
+		t.Fatalf("Mem0-only ingestion unexpectedly requires a table suffix: %v", err)
+	}
+	if err := validateLongMemEvalIngestionTableIsolation(
+		[]string{"pgvector"},
+	); err == nil {
+		t.Fatal("PGVector ingestion accepted an empty table suffix")
+	}
+	*flagTableSuffix = "_isolated"
+	if err := validateLongMemEvalIngestionTableIsolation(
+		[]string{"pgvector", "mem0"},
+	); err != nil {
+		t.Fatalf("isolated PGVector ingestion failed validation: %v", err)
+	}
+}
+
 func TestPrepareLongMemEvalMem0Failures(t *testing.T) {
 	oldHost := *flagMem0Host
 	oldCloud := *flagMem0Cloud

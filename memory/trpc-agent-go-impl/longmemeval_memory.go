@@ -825,6 +825,18 @@ func validateLongMemEvalAttributionBackends(backends []string) error {
 	)
 }
 
+func validateLongMemEvalIngestionTableIsolation(backends []string) error {
+	if !containsString(backends, "pgvector") {
+		return nil
+	}
+	if strings.TrimSpace(*flagTableSuffix) != "" {
+		return nil
+	}
+	return errors.New(
+		"LongMemEval PGVector ingestion requires an explicit -table-suffix",
+	)
+}
+
 func prepareLongMemEvalMem0(
 	ctx context.Context,
 	backends []string,
@@ -1051,6 +1063,9 @@ func runLongMemEvalMemory(ctx context.Context) error {
 	}
 	backends := parseMemoryBackends(*flagMemoryBackends)
 	if err := validateLongMemEvalAttributionBackends(backends); err != nil {
+		return err
+	}
+	if err := validateLongMemEvalIngestionTableIsolation(backends); err != nil {
 		return err
 	}
 
