@@ -984,7 +984,12 @@ func TestMem0OSSSearchRetriesProviderRateLimit(t *testing.T) {
 		t.Fatalf("new mem0 service: %v", err)
 	}
 	defer svc.Close()
-	backend := &mem0Backend{svc: svc, selfHosted: true}
+	backend := &mem0Backend{
+		svc:        svc,
+		host:       server.URL,
+		selfHosted: true,
+		httpClient: server.Client(),
+	}
 	_, err = backend.Search(context.Background(), memory.UserKey{
 		AppName: lmeAppName,
 		UserID:  "user",
@@ -1022,6 +1027,7 @@ func TestMem0OSSSnapshotUsesServerLimitAndReportsBoundary(t *testing.T) {
 						"user_id": "user",
 						"metadata": map[string]any{
 							"trpc_app_name": lmeAppName,
+							"attributed_to": "user",
 						},
 					}
 				}
@@ -1040,7 +1046,12 @@ func TestMem0OSSSnapshotUsesServerLimitAndReportsBoundary(t *testing.T) {
 				t.Fatalf("new mem0 service: %v", err)
 			}
 			defer svc.Close()
-			backend := &mem0Backend{svc: svc, selfHosted: true}
+			backend := &mem0Backend{
+				svc:        svc,
+				host:       server.URL,
+				selfHosted: true,
+				httpClient: server.Client(),
+			}
 			memories, truncated, err := backend.Read(context.Background(), memory.UserKey{
 				AppName: lmeAppName,
 				UserID:  "user",

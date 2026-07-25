@@ -756,6 +756,9 @@ func (b *mem0Backend) ingestPairOSS(ctx context.Context, sess *session.Session, 
 }
 
 func (b *mem0Backend) Search(ctx context.Context, userKey memory.UserKey, query string, topK int) ([]memoryHit, error) {
+	if b.selfHosted {
+		return b.searchMem0OSS(ctx, userKey, query, topK)
+	}
 	searchOptions := memory.WithSearchOptions(memory.SearchOptions{
 		Query: query, MaxResults: topK,
 	})
@@ -787,15 +790,15 @@ func (b *mem0Backend) Read(
 	ctx context.Context,
 	userKey memory.UserKey,
 ) ([]memorySnapshot, bool, error) {
-	limit := 0
 	if b.selfHosted {
-		limit = lmeMem0OSSSnapshotLimit
+		return b.readMem0OSS(ctx, userKey, lmeMem0OSSSnapshotLimit)
 	}
+	limit := 0
 	entries, err := b.svc.ReadMemories(ctx, userKey, limit)
 	if err != nil {
 		return nil, false, err
 	}
-	return snapshotsFromEntries(entries), b.selfHosted && len(entries) >= limit, nil
+	return snapshotsFromEntries(entries), false, nil
 }
 
 func (b *mem0Backend) SnapshotProviderUsage() lmeProviderUsage {
