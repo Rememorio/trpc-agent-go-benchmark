@@ -1550,6 +1550,123 @@ func TestLongMemEvalRuntimeError(t *testing.T) {
 	}
 }
 
+func TestValidateLongMemEvalMem0ProviderUsage(t *testing.T) {
+	t.Parallel()
+
+	healthy := func() *backendResult {
+		return &backendResult{
+			Backend:       "mem0",
+			IngestedPairs: 2,
+			IngestTraces: []ingestTrace{
+				{
+					TokenUsage: &lmeTokenUsage{LLMCalls: 1},
+					EmbeddingUsage: &lmeEmbeddingUsage{
+						Calls: 1,
+					},
+					ProviderUsageReported: true,
+				},
+				{
+					TokenUsage:            &lmeTokenUsage{LLMCalls: 1},
+					ProviderUsageReported: true,
+				},
+			},
+			TokenUsage: &lmeTokenUsage{LLMCalls: 2},
+			EmbeddingUsage: &lmeEmbeddingUsage{
+				Calls: 2,
+			},
+			ProviderUsageReported: true,
+		}
+	}
+	if err := validateLongMemEvalMem0ProviderUsage(healthy()); err != nil {
+		t.Fatalf("healthy usage: %v", err)
+	}
+
+	tests := []struct {
+		name string
+		edit func(*backendResult)
+		want string
+	}{
+		{
+			name: "missing trace report",
+			edit: func(br *backendResult) {
+				br.IngestTraces[0].ProviderUsageReported = false
+			},
+			want: "no provider usage report",
+		},
+		{
+			name: "missing extraction call",
+			edit: func(br *backendResult) {
+				br.IngestTraces[0].TokenUsage = nil
+			},
+			want: "no extraction LLM call",
+		},
+		{
+			name: "missing LLM usage",
+			edit: func(br *backendResult) {
+				br.IngestTraces[0].TokenUsage.UsageMissingCalls = 1
+			},
+			want: "LLM call(s) with missing usage",
+		},
+		{
+			name: "missing embedding usage",
+			edit: func(br *backendResult) {
+				br.EmbeddingUsage.UsageMissingCalls = 1
+			},
+			want: "aggregate embedding usage",
+		},
+		{
+			name: "no search embedding call",
+			edit: func(br *backendResult) {
+				br.EmbeddingUsage.Calls = 0
+			},
+			want: "no embedding call",
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			result := healthy()
+			test.edit(result)
+			err := validateLongMemEvalMem0ProviderUsage(result)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("usage error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestLongMemEvalRuntimeErrorRejectsIncompleteMem0Usage(t *testing.T) {
+	t.Parallel()
+
+	result := &runResult{Cases: []*caseResult{{
+		QuestionID: "secret-question",
+		BackendResults: map[string]*backendResult{
+			"mem0": {
+				Backend:               "mem0",
+				IngestedPairs:         1,
+				IngestTraces:          []ingestTrace{{}},
+				ProviderUsageReported: true,
+			},
+		},
+	}}}
+	err := longMemEvalRuntimeError(result, false)
+	if err == nil ||
+		!strings.Contains(err.Error(), "no provider usage report") {
+		t.Fatalf("runtime error = %v", err)
+	}
+	blindErr := longMemEvalRuntimeError(result, true)
+	if blindErr == nil ||
+		!strings.Contains(blindErr.Error(), "provider usage integrity failure") {
+		t.Fatalf("blind runtime error = %v", blindErr)
+	}
+	if strings.Contains(blindErr.Error(), "secret-question") ||
+		strings.Contains(blindErr.Error(), "no provider usage report") {
+		t.Fatalf("blind runtime error leaked details: %v", blindErr)
+	}
+}
+
 func TestFilterCasesByQuestionIDs(t *testing.T) {
 	oldID := *flagLMEQuestionID
 	oldIDs := *flagLMEQuestionIDs

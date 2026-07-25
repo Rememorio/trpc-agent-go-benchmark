@@ -1134,7 +1134,7 @@ func runLongMemEvalMemory(ctx context.Context) error {
 			"model_variant":                modelVariant,
 			"model_temperature":            0,
 			"memory_attribution_version":   lmeAttributionProtocolVersion,
-			"memory_attribution_note":      "pgvector derives assistant attribution from its internal memory marker and otherwise defaults to user; self-hosted Mem0 OSS reads attributed_to from persisted record metadata.",
+			"memory_attribution_note":      "pgvector derives assistant attribution from its internal memory marker and otherwise defaults to user; self-hosted Mem0 OSS reads attributed_to from the structured API record, falling back to record metadata, and rejects missing or invalid attribution.",
 			"model_call_timeout":           flagLMEModelCallTimeout.String(),
 			"embedding_model":              getEmbedModelName(),
 			"pgvector_extraction":          pgExtractionConfig,
@@ -1304,6 +1304,18 @@ func longMemEvalRuntimeError(results *runResult, blind bool) error {
 					"%s/%s answer: %s", caseLabel, backendName, message,
 				))
 			}
+			if backendName == "mem0" && br.IngestedPairs > 0 {
+				if err := validateLongMemEvalMem0ProviderUsage(br); err != nil {
+					message := err.Error()
+					if blind {
+						message = "provider usage integrity failure"
+					}
+					failures = append(failures, fmt.Sprintf(
+						"%s/%s usage: %s",
+						caseLabel, backendName, message,
+					))
+				}
+			}
 		}
 	}
 	if len(failures) == 0 {
@@ -1311,6 +1323,77 @@ func longMemEvalRuntimeError(results *runResult, blind bool) error {
 	}
 	return fmt.Errorf("LongMemEval run completed with %d backend error(s): %s",
 		len(failures), strings.Join(failures, "; "))
+}
+
+func validateLongMemEvalMem0ProviderUsage(br *backendResult) error {
+	if br == nil {
+		return errors.New("missing backend result")
+	}
+	if br.ProviderUsageError != "" {
+		return errors.New("aggregate provider usage error is present")
+	}
+	if !br.ProviderUsageReported {
+		return errors.New("aggregate provider usage is not reported")
+	}
+	if len(br.IngestTraces) != br.IngestedPairs {
+		return fmt.Errorf(
+			"ingest trace count %d does not match ingested pairs %d",
+			len(br.IngestTraces), br.IngestedPairs,
+		)
+	}
+	for index := range br.IngestTraces {
+		trace := &br.IngestTraces[index]
+		if trace.ProviderUsageError != "" {
+			return fmt.Errorf(
+				"ingest trace %d has a provider usage error", index,
+			)
+		}
+		if !trace.ProviderUsageReported {
+			return fmt.Errorf(
+				"ingest trace %d has no provider usage report", index,
+			)
+		}
+		if trace.TokenUsage == nil || trace.TokenUsage.LLMCalls < 1 {
+			return fmt.Errorf(
+				"ingest trace %d has no extraction LLM call", index,
+			)
+		}
+		if trace.TokenUsage.UsageMissingCalls != 0 {
+			return fmt.Errorf(
+				"ingest trace %d has %d LLM call(s) with missing usage",
+				index, trace.TokenUsage.UsageMissingCalls,
+			)
+		}
+		if trace.EmbeddingUsage != nil &&
+			trace.EmbeddingUsage.UsageMissingCalls != 0 {
+			return fmt.Errorf(
+				"ingest trace %d has %d embedding call(s) with missing usage",
+				index, trace.EmbeddingUsage.UsageMissingCalls,
+			)
+		}
+	}
+	if br.TokenUsage == nil || br.TokenUsage.LLMCalls < br.IngestedPairs {
+		return fmt.Errorf(
+			"aggregate extraction LLM calls are incomplete: calls=%d pairs=%d",
+			tokenCalls(br.TokenUsage), br.IngestedPairs,
+		)
+	}
+	if br.TokenUsage.UsageMissingCalls != 0 {
+		return fmt.Errorf(
+			"aggregate LLM usage has %d missing call(s)",
+			br.TokenUsage.UsageMissingCalls,
+		)
+	}
+	if br.EmbeddingUsage == nil || br.EmbeddingUsage.Calls < 1 {
+		return errors.New("aggregate provider usage has no embedding call")
+	}
+	if br.EmbeddingUsage.UsageMissingCalls != 0 {
+		return fmt.Errorf(
+			"aggregate embedding usage has %d missing call(s)",
+			br.EmbeddingUsage.UsageMissingCalls,
+		)
+	}
+	return nil
 }
 
 func longMemEvalCaseProgress(index, total int, inst *lmeInstance, blind bool) string {
