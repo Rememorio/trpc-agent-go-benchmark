@@ -773,7 +773,7 @@ build provenance.
 | `-scenario`         | long_context           | Evaluation scenario (comma-separated)  |
 | `-memory-backend`   | inmemory               | Memory backend (comma-separated)       |
 | `-pgvector-dsn`     | (env)                  | PostgreSQL DSN for pgvector            |
-| `-pgvector-update-policy` | reconcile            | `reconcile` or `add-only`               |
+| `-pgvector-update-policy` | reconcile            | `reconcile`, `history-preserving`, or `add-only` |
 | `-pgvector-assistant-result-extraction` | false | Retain concrete assistant results   |
 | `-mysql-dsn`        | (env)                  | MySQL DSN for mysql backend            |
 | `-embed-model`      | text-embedding-3-small | Embedding model for vector backends    |
