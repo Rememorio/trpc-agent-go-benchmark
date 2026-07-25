@@ -452,6 +452,12 @@ func (e *lmeTrackingEmbedder) GetEmbeddingWithUsage(
 			e.mu.Unlock()
 			return embedding, nil, nil
 		}
+		if e.responseCache.RequireHit() {
+			e.responseCache.recordError()
+			return nil, nil, fmt.Errorf(
+				"required LongMemEval embedding response cache entry is missing",
+			)
+		}
 	}
 
 	embedding, usage, err := e.base.GetEmbeddingWithUsage(ctx, text)

@@ -51,25 +51,36 @@ type lmeEmbeddingResponseCacheRecord struct {
 }
 
 type longMemEvalEmbeddingResponseCache struct {
-	mu       sync.Mutex
-	path     string
-	ledgerID string
-	entries  map[string]lmeEmbeddingResponseCacheEntry
-	hits     int
-	misses   int
-	errors   int
+	mu         sync.Mutex
+	path       string
+	ledgerID   string
+	entries    map[string]lmeEmbeddingResponseCacheEntry
+	requireHit bool
+	hits       int
+	misses     int
+	errors     int
 }
 
 func openConfiguredLongMemEvalEmbeddingResponseCache() (
 	*longMemEvalEmbeddingResponseCache,
 	error,
 ) {
-	if strings.TrimSpace(*flagLMEEmbeddingResponseCache) == "" {
+	path := strings.TrimSpace(*flagLMEEmbeddingResponseCache)
+	if path == "" {
+		if *flagLMEEmbeddingResponseCacheRequireHit {
+			return nil, fmt.Errorf(
+				"-lme-embedding-response-cache-require-hit requires " +
+					"-lme-embedding-response-cache",
+			)
+		}
 		return nil, nil
 	}
-	return openLongMemEvalEmbeddingResponseCache(
-		*flagLMEEmbeddingResponseCache,
-	)
+	cache, err := openLongMemEvalEmbeddingResponseCache(path)
+	if err != nil {
+		return nil, err
+	}
+	cache.requireHit = *flagLMEEmbeddingResponseCacheRequireHit
+	return cache, nil
 }
 
 func openLongMemEvalEmbeddingResponseCache(
@@ -203,6 +214,10 @@ func (c *longMemEvalEmbeddingResponseCache) loadHeader(
 
 func (c *longMemEvalEmbeddingResponseCache) Persistent() bool {
 	return c != nil && c.path != ""
+}
+
+func (c *longMemEvalEmbeddingResponseCache) RequireHit() bool {
+	return c != nil && c.requireHit
 }
 
 func (c *longMemEvalEmbeddingResponseCache) LedgerID() string {
@@ -394,6 +409,7 @@ func initializeLongMemEvalEmbeddingResponseCacheMetadata(
 		metadata["embedding_response_cache_ledger_id"] = ledgerID
 	}
 	metadata["embedding_response_cache_initial_entries"] = cache.Len()
+	metadata["embedding_response_cache_require_hit"] = cache.RequireHit()
 	metadata["embedding_response_cache_note"] = "Identical embedding texts share an exact vector across paired runs; raw text is represented only by a hash. Embedding usage requests count logical embedder calls, calls and tokens count provider misses, and response_cache_hits count ledger hits."
 }
 
@@ -417,6 +433,7 @@ func clearLongMemEvalEmbeddingResponseCacheMetadata(metadata map[string]any) {
 		"embedding_response_cache_shared",
 		"embedding_response_cache_ledger_id",
 		"embedding_response_cache_initial_entries",
+		"embedding_response_cache_require_hit",
 		"embedding_response_cache_final_entries",
 		"embedding_response_cache_hits",
 		"embedding_response_cache_misses",

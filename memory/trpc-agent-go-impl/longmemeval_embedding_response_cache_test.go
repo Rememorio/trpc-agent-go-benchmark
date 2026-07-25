@@ -145,6 +145,65 @@ func TestLongMemEvalTrackingEmbedderSeparatesLogicalAndProviderCalls(
 	}
 }
 
+func TestLongMemEvalTrackingEmbedderRequireHitBlocksProviderCall(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	providerCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, _ *http.Request) {
+			providerCalls++
+			w.WriteHeader(http.StatusInternalServerError)
+		},
+	))
+	defer server.Close()
+
+	cache, err := openLongMemEvalEmbeddingResponseCache(
+		filepath.Join(t.TempDir(), "embeddings.jsonl"),
+	)
+	if err != nil {
+		t.Fatalf("open cache: %v", err)
+	}
+	cache.requireHit = true
+	base := embeddingopenai.New(
+		embeddingopenai.WithAPIKey("test"),
+		embeddingopenai.WithBaseURL(server.URL),
+		embeddingopenai.WithModel("text-embedding-3-small"),
+		embeddingopenai.WithDimensions(2),
+	)
+	tracker := newLongMemEvalTrackingEmbedderWithCache(
+		base, cache, "text-embedding-3-small",
+	)
+	if _, err := tracker.GetEmbedding(
+		context.Background(), "uncached text",
+	); err == nil || !strings.Contains(err.Error(), "cache entry is missing") {
+		t.Fatalf("required cache miss error = %v", err)
+	}
+	if providerCalls != 0 {
+		t.Fatalf("provider calls = %d, want 0", providerCalls)
+	}
+	hits, misses, cacheErrors := cache.Stats()
+	if hits != 0 || misses != 1 || cacheErrors != 1 {
+		t.Fatalf(
+			"cache stats hits=%d misses=%d errors=%d",
+			hits, misses, cacheErrors,
+		)
+	}
+}
+
+func TestConfiguredLongMemEvalEmbeddingCacheRequireHitNeedsPath(
+	t *testing.T,
+) {
+	restoreStringFlag(t, flagLMEEmbeddingResponseCache, "")
+	restoreBoolFlag(t, flagLMEEmbeddingResponseCacheRequireHit, true)
+
+	if _, err := openConfiguredLongMemEvalEmbeddingResponseCache(); err == nil ||
+		!strings.Contains(err.Error(), "requires -lme-embedding-response-cache") {
+		t.Fatalf("missing required cache path error = %v", err)
+	}
+}
+
 func TestValidateLongMemEvalComparisonRequiresSharedEmbeddingResponseLedger(
 	t *testing.T,
 ) {

@@ -297,6 +297,11 @@ var (
 		"",
 		"Shared content-addressed embedding response cache for LongMemEval runs",
 	)
+	flagLMEEmbeddingResponseCacheRequireHit = flag.Bool(
+		"lme-embedding-response-cache-require-hit",
+		false,
+		"Fail before an embedding provider call when a LongMemEval cache entry is missing",
+	)
 	flagLoCoMoReuseMemories = flag.Bool(
 		"locomo-reuse-memories",
 		false,
