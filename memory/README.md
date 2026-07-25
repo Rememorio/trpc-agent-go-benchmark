@@ -799,6 +799,7 @@ LongMemEval-specific options:
 | `-lme-answer`            | true    | Generate answers from retrieved memories     |
 | `-lme-answer-cache`      |         | Shared content-addressed answer cache         |
 | `-lme-model-response-cache` |      | Shared primary-run model response ledger      |
+| `-lme-model-response-cache-require-hit` | false | Fail before an uncached model provider call |
 | `-lme-embedding-response-cache` |  | Shared exact-vector embedding response ledger |
 | `-lme-embedding-response-cache-require-hit` | false | Fail before an uncached embedding provider call |
 | `-lme-blind-progress`    | false   | Hide identifiers and outcome content from progress and case logs |

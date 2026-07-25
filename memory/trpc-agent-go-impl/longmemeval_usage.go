@@ -235,6 +235,14 @@ func (m *lmeTrackingModel) GenerateContent(
 			call.LogicalTokenUsage = logicalUsage
 			return m.replayLongMemEvalModelResponses(responses, call), nil
 		}
+		if m.responseCache.RequireHit() {
+			m.responseCache.recordError()
+			call.Source = lmeModelCallSourceCacheMiss
+			call.Error =
+				"required LongMemEval model response cache entry is missing"
+			m.tracker.RecordCall(call)
+			return nil, errors.New(call.Error)
+		}
 	}
 	var cancel context.CancelFunc
 	if m.timeout > 0 {

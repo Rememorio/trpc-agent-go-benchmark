@@ -292,6 +292,11 @@ var (
 		"",
 		"Shared content-addressed model response cache for primary LongMemEval runs",
 	)
+	flagLMEModelResponseCacheRequireHit = flag.Bool(
+		"lme-model-response-cache-require-hit",
+		false,
+		"Fail before a model provider call when a LongMemEval cache entry is missing",
+	)
 	flagLMEEmbeddingResponseCache = flag.String(
 		"lme-embedding-response-cache",
 		"",

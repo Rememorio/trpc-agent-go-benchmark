@@ -27,6 +27,7 @@ const (
 	lmeModelCallSourceModel      = "model"
 	lmeModelCallSourceCurrentRun = "current-run-cache"
 	lmeModelCallSourcePersistent = "persistent-cache"
+	lmeModelCallSourceCacheMiss  = "required-cache-miss"
 )
 
 type lmeModelResponseCacheIdentity struct {
@@ -54,6 +55,7 @@ type longMemEvalModelResponseCache struct {
 	path       string
 	file       lmeModelResponseCacheFile
 	persistent map[string]struct{}
+	requireHit bool
 	hits       int
 	misses     int
 	errors     int
@@ -77,10 +79,22 @@ func openConfiguredLongMemEvalModelResponseCache() (
 	*longMemEvalModelResponseCache,
 	error,
 ) {
-	if strings.TrimSpace(*flagLMEModelResponseCache) == "" {
+	path := strings.TrimSpace(*flagLMEModelResponseCache)
+	if path == "" {
+		if *flagLMEModelResponseCacheRequireHit {
+			return nil, fmt.Errorf(
+				"-lme-model-response-cache-require-hit requires " +
+					"-lme-model-response-cache",
+			)
+		}
 		return nil, nil
 	}
-	return openLongMemEvalModelResponseCache(*flagLMEModelResponseCache)
+	cache, err := openLongMemEvalModelResponseCache(path)
+	if err != nil {
+		return nil, err
+	}
+	cache.requireHit = *flagLMEModelResponseCacheRequireHit
+	return cache, nil
 }
 
 func openLongMemEvalModelResponseCache(
@@ -144,6 +158,10 @@ func openLongMemEvalModelResponseCache(
 
 func (c *longMemEvalModelResponseCache) Persistent() bool {
 	return c != nil && c.path != ""
+}
+
+func (c *longMemEvalModelResponseCache) RequireHit() bool {
+	return c != nil && c.requireHit
 }
 
 func (c *longMemEvalModelResponseCache) LedgerID() string {
@@ -415,6 +433,7 @@ func initializeLongMemEvalModelResponseCacheMetadata(
 		metadata["model_response_cache_ledger_id"] = ledgerID
 	}
 	metadata["model_response_cache_initial_entries"] = cache.Len()
+	metadata["model_response_cache_require_hit"] = cache.RequireHit()
 	metadata["model_response_cache_note"] = "Identical primary-run model requests share a content-addressed response stream; request prompts and headers are represented only by a hash. Cache hits contribute zero provider calls and tokens, while each model-call trace retains the cached response's original logical_token_usage."
 }
 
@@ -438,6 +457,7 @@ func clearLongMemEvalModelResponseCacheMetadata(metadata map[string]any) {
 		"model_response_cache_shared",
 		"model_response_cache_ledger_id",
 		"model_response_cache_initial_entries",
+		"model_response_cache_require_hit",
 		"model_response_cache_final_entries",
 		"model_response_cache_hits",
 		"model_response_cache_misses",

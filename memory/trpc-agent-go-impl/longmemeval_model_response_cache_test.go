@@ -239,6 +239,59 @@ func TestLongMemEvalTrackingModelPersistsAndReplaysResponse(t *testing.T) {
 	}
 }
 
+func TestLongMemEvalTrackingModelRequireHitBlocksProviderCall(t *testing.T) {
+	t.Parallel()
+
+	cache, err := openLongMemEvalModelResponseCache(
+		filepath.Join(t.TempDir(), "model-responses.json"),
+	)
+	if err != nil {
+		t.Fatalf("open cache: %v", err)
+	}
+	cache.requireHit = true
+	base := &lmeCacheTestModel{err: errors.New("base model must not run")}
+	tracker := &lmeTokenTracker{}
+	wrapped := &lmeTrackingModel{
+		base:          base,
+		tracker:       tracker,
+		responseCache: cache,
+		modelName:     "glm52",
+		modelVariant:  "glm",
+	}
+	if _, err := wrapped.GenerateContent(
+		context.Background(), newLongMemEvalModelCacheTestRequest(false),
+	); err == nil || !strings.Contains(err.Error(), "cache entry is missing") {
+		t.Fatalf("required cache miss error = %v", err)
+	}
+	if base.calls != 0 {
+		t.Fatalf("base model calls = %d, want 0", base.calls)
+	}
+	calls := tracker.SnapshotCalls()
+	if len(calls) != 1 ||
+		calls[0].Source != lmeModelCallSourceCacheMiss ||
+		calls[0].CacheKey == "" ||
+		!strings.Contains(calls[0].Error, "cache entry is missing") {
+		t.Fatalf("cache miss trace = %#v", calls)
+	}
+	hits, misses, cacheErrors := cache.Stats()
+	if hits != 0 || misses != 1 || cacheErrors != 1 {
+		t.Fatalf(
+			"cache stats hits=%d misses=%d errors=%d",
+			hits, misses, cacheErrors,
+		)
+	}
+}
+
+func TestConfiguredLongMemEvalModelCacheRequireHitNeedsPath(t *testing.T) {
+	restoreStringFlag(t, flagLMEModelResponseCache, "")
+	restoreBoolFlag(t, flagLMEModelResponseCacheRequireHit, true)
+
+	if _, err := openConfiguredLongMemEvalModelResponseCache(); err == nil ||
+		!strings.Contains(err.Error(), "requires -lme-model-response-cache") {
+		t.Fatalf("missing required cache path error = %v", err)
+	}
+}
+
 func TestLongMemEvalTrackingModelDoesNotCacheErrors(t *testing.T) {
 	t.Parallel()
 
