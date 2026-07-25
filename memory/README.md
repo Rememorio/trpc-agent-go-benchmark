@@ -337,8 +337,15 @@ LME_AGENT_REPLACEMENT="trpc.group/trpc-go/trpc-agent-go@<candidate-pseudo-versio
 # Additional case filters, resampling, max-tasks truncation, and model,
 # embedding, answer-generation, or judge drift are rejected before provider
 # initialization. Use a fresh answer ledger for each replicate and share that
-# ledger across all three arms. The path must not exist before the first arm.
+# ledger across all three arms. Give the two source runs independent, initially
+# empty model and embedding ledgers while keeping one explicit user scope. None
+# of these paths may exist before its first run.
 LME_BLIND_ANSWER_CACHE=../results/lme-holdout-answer-replicate-1-cache.json
+LME_BLIND_USER_SCOPE=lme-holdout-replicate-1
+LME_UPSTREAM_MODEL_CACHE=../results/lme-holdout-upstream-model-cache.jsonl
+LME_UPSTREAM_EMBEDDING_CACHE=../results/lme-holdout-upstream-embedding-cache.jsonl
+LME_CANDIDATE_MODEL_CACHE=../results/lme-holdout-candidate-model-cache.jsonl
+LME_CANDIDATE_EMBEDDING_CACHE=../results/lme-holdout-candidate-embedding-cache.jsonl
 LME_AGENT_PROFILE=upstream \
 LME_AGENT_REPLACEMENT="trpc.group/trpc-go/trpc-agent-go@<upstream-pseudo-version>" \
 ./run-longmemeval.sh \
@@ -358,6 +365,9 @@ LME_AGENT_REPLACEMENT="trpc.group/trpc-go/trpc-agent-go@<upstream-pseudo-version
   -lme-judge-runs 3 \
   -lme-answer=true \
   -lme-answer-cache "$LME_BLIND_ANSWER_CACHE" \
+  -lme-user-scope "$LME_BLIND_USER_SCOPE" \
+  -lme-model-response-cache "$LME_UPSTREAM_MODEL_CACHE" \
+  -lme-embedding-response-cache "$LME_UPSTREAM_EMBEDDING_CACHE" \
   -mem0-llm-temperature 0 \
   -vector-topk 30 \
   -table-suffix _lme_holdout_upstream \
@@ -382,6 +392,9 @@ LME_AGENT_REPLACEMENT="trpc.group/trpc-go/trpc-agent-go@<candidate-pseudo-versio
   -lme-judge-runs 3 \
   -lme-answer=true \
   -lme-answer-cache "$LME_BLIND_ANSWER_CACHE" \
+  -lme-user-scope "$LME_BLIND_USER_SCOPE" \
+  -lme-model-response-cache "$LME_CANDIDATE_MODEL_CACHE" \
+  -lme-embedding-response-cache "$LME_CANDIDATE_EMBEDDING_CACHE" \
   -pgvector-update-policy reconcile \
   -pgvector-assistant-result-extraction=true \
   -vector-topk 30 \
@@ -798,9 +811,9 @@ LongMemEval-specific options:
 | `-lme-model-call-timeout` | 5m      | Model timeout; mem0 OSS allows 1m overhead   |
 | `-lme-answer`            | true    | Generate answers from retrieved memories     |
 | `-lme-answer-cache`      |         | Shared content-addressed answer cache         |
-| `-lme-model-response-cache` |      | Shared primary-run model response ledger      |
+| `-lme-model-response-cache` |      | Persistent primary-run model response ledger  |
 | `-lme-model-response-cache-require-hit` | false | Fail before an uncached model provider call |
-| `-lme-embedding-response-cache` |  | Shared exact-vector embedding response ledger |
+| `-lme-embedding-response-cache` |  | Persistent exact-vector embedding ledger      |
 | `-lme-embedding-response-cache-require-hit` | false | Fail before an uncached embedding provider call |
 | `-lme-blind-progress`    | false   | Hide identifiers and outcome content from progress and case logs |
 | `-lme-implementation`    | (env)   | Reproducible implementation label            |

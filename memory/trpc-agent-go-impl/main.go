@@ -290,7 +290,7 @@ var (
 	flagLMEModelResponseCache = flag.String(
 		"lme-model-response-cache",
 		"",
-		"Shared content-addressed model response cache for primary LongMemEval runs",
+		"Persistent content-addressed model response cache for primary LongMemEval runs",
 	)
 	flagLMEModelResponseCacheRequireHit = flag.Bool(
 		"lme-model-response-cache-require-hit",
@@ -300,7 +300,7 @@ var (
 	flagLMEEmbeddingResponseCache = flag.String(
 		"lme-embedding-response-cache",
 		"",
-		"Shared content-addressed embedding response cache for LongMemEval runs",
+		"Persistent content-addressed embedding response cache for LongMemEval runs",
 	)
 	flagLMEEmbeddingResponseCacheRequireHit = flag.Bool(
 		"lme-embedding-response-cache-require-hit",
