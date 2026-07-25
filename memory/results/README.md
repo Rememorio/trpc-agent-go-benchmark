@@ -15,18 +15,18 @@ The current production-style LongMemEval Oracle evaluation uses one fixed,
 already-observed 16-question development regression spanning all six types.
 Every arm replays all 183 selected user/assistant pairs, generates three
 independent answers per question, and judges every answer three times.
-Pgvector main scores 12/16 (36/48 answer replicates), self-hosted Mem0 OSS
-scores 14/16 (41/48), and both the frozen and final pgvector candidates score
-16/16 (48/48). The frozen candidate used history-preserving updates plus
-assistant-result extraction. Subsequent component ablations retained the
-assistant-result mechanism but found no independent LoCoMo support for the
-ordinary history policy, so the final candidate returns ordinary memories to
-default reconcile and keeps strict preservation private to assistant results.
-A fresh full regression of the behavior-equivalent configuration retains
-48/48 while using 1,639,589 memory LLM tokens and 291 final memories, 2.77%
-and 30.88% below the compact history reference; embedding tokens increase
-16.54%. A separate exact-build smoke validates the post-deletion code. No
-unseen protocol-v2 holdout has been selected or run. See the unified reports
+Pgvector main scores 11/16 (33/48 answer replicates), self-hosted Mem0 OSS
+scores 14/16 (42/48), and pgvector with default reconcile plus
+assistant-result extraction scores 15/16 (46/48). A retrieval-only,
+query-aware provenance RRF refinement over the exact same memories reaches
+16/16 (48/48). Direct LoCoMo ablation found no support for a separate
+history-preserving policy, so ordinary memories retain default reconcile while
+assistant results keep a private provenance boundary. The final candidate
+inherits 1,641,809 memory LLM tokens and 311 final memories from its byte-stable
+pre-ranking snapshot: 1.3866x and 2.2057x pgvector main, while using 6.99% fewer
+memory LLM tokens and 36.79% fewer memories than Mem0. These are
+already-observed development results, not a generalization claim; the
+preregistered unseen protocol-v2 holdout has not run. See the unified reports
 for replay design, usage, bad cases, provenance, and limitations.
 
 ## LoCoMo Benchmark Evaluation Summary
