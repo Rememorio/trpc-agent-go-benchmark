@@ -136,7 +136,7 @@ func rerankLongMemEvalResult(
 	}
 
 	completed := 0
-	for _, cr := range result.Cases {
+	for caseIndex, cr := range result.Cases {
 		if cr == nil {
 			continue
 		}
@@ -158,8 +158,13 @@ func rerankLongMemEvalResult(
 			if br == nil {
 				continue
 			}
-			log.Printf("reranking %s backend=%s type=%s",
-				cr.QuestionID, backendName, cr.QuestionType)
+			log.Printf("%s backend=%s", longMemEvalCaseActionProgress(
+				"reranking",
+				caseIndex+1,
+				len(result.Cases),
+				cr,
+				*flagLMEBlindProgress,
+			), backendName)
 			sourceHits := br.Retrieval
 			if len(br.PreRerankRetrieval) > 0 {
 				sourceHits = br.PreRerankRetrieval

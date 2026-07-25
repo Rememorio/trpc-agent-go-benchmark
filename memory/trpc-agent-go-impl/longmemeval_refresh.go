@@ -294,28 +294,59 @@ func refreshLongMemEvalRetrievalResult(
 
 	var embeddingUsage lmeEmbeddingUsage
 	completed := 0
-	for _, cr := range result.Cases {
+	for caseIndex, cr := range result.Cases {
 		if cr == nil {
 			continue
 		}
+		caseLabel := longMemEvalCaseLabel(
+			caseIndex+1, cr.QuestionID, *flagLMEBlindProgress,
+		)
 		br := cr.BackendResults[backend.Name()]
 		if br == nil {
 			continue
 		}
 		if strings.TrimSpace(br.UserID) == "" {
-			return fmt.Errorf("case %s is missing %s user_id", cr.QuestionID, backend.Name())
+			return fmt.Errorf(
+				"case %s is missing %s user_id", caseLabel, backend.Name(),
+			)
 		}
-		log.Printf("refreshing retrieval %s type=%s", cr.QuestionID, cr.QuestionType)
+		log.Print(longMemEvalCaseActionProgress(
+			"refreshing retrieval",
+			caseIndex+1,
+			len(result.Cases),
+			cr,
+			*flagLMEBlindProgress,
+		))
 		userKey := memory.UserKey{AppName: lmeAppName, UserID: br.UserID}
 		stored, snapshotTruncated, readErr := backend.Read(ctx, userKey)
 		if readErr != nil {
-			return fmt.Errorf("read persisted memories for %s: %w", cr.QuestionID, readErr)
+			if *flagLMEBlindProgress {
+				return fmt.Errorf(
+					"read persisted memories for %s: error present",
+					caseLabel,
+				)
+			}
+			return fmt.Errorf(
+				"read persisted memories for %s: %w",
+				caseLabel, readErr,
+			)
 		}
 		if snapshotTruncated {
-			return fmt.Errorf("verify persisted memories for %s: snapshot is truncated", cr.QuestionID)
+			return fmt.Errorf(
+				"verify persisted memories for %s: snapshot is truncated",
+				caseLabel,
+			)
 		}
 		if err := verifyLongMemEvalPersistedMemories(br.FinalMemories, stored); err != nil {
-			return fmt.Errorf("verify persisted memories for %s: %w", cr.QuestionID, err)
+			if *flagLMEBlindProgress {
+				return fmt.Errorf(
+					"verify persisted memories for %s: error present",
+					caseLabel,
+				)
+			}
+			return fmt.Errorf(
+				"verify persisted memories for %s: %w", caseLabel, err,
+			)
 		}
 		inst := &lmeInstance{
 			QuestionID:       cr.QuestionID,
@@ -401,8 +432,9 @@ func refreshLongMemEvalRetrievalResult(
 			return fmt.Errorf("checkpoint retrieval refresh results: %w", err)
 		}
 		if *flagLMEBlindProgress || !answerEnabled {
-			log.Printf("  %s hits=%d embed_calls=%d err=%v",
-				backend.Name(), len(hits), providerUsage.Embedding.Calls, searchErr)
+			log.Printf("  %s hits=%d embed_calls=%d error_present=%t",
+				backend.Name(), len(hits),
+				providerUsage.Embedding.Calls, searchErr != nil)
 		} else {
 			log.Printf("  %s hits=%d answer=%q embed_calls=%d err=%v",
 				backend.Name(), len(hits), truncate(br.Answer, 80),

@@ -382,8 +382,9 @@ LME_AGENT_REPLACEMENT="trpc.group/trpc-go/trpc-agent-go@<candidate-pseudo-versio
   -table-suffix _lme_holdout_candidate \
   -output ../results/lme-holdout-candidate
 
-# Blind progress hides outcome content from the console and per-case logs,
-# while retaining operational counts, latency, and usage. Raw results.json
+# Blind progress hides question/session identifiers and outcome content from
+# the console and per-case logs, while retaining operational counts, latency,
+# and usage. Blind per-case log names use ordinal case numbers. Raw results.json
 # files still contain questions, references, retrievals, answers, and metrics.
 # Keep them sealed until every arm in the replicate finishes. Then judge all
 # arm outputs with one new shared judge cache. Do not inspect results or run
@@ -793,7 +794,7 @@ LongMemEval-specific options:
 | `-lme-answer-cache`      |         | Shared content-addressed answer cache         |
 | `-lme-model-response-cache` |      | Shared primary-run model response ledger      |
 | `-lme-embedding-response-cache` |  | Shared exact-vector embedding response ledger |
-| `-lme-blind-progress`    | false   | Hide outcome content from progress and case logs |
+| `-lme-blind-progress`    | false   | Hide identifiers and outcome content from progress and case logs |
 | `-lme-implementation`    | (env)   | Reproducible implementation label            |
 | `-lme-reanswer-results`   |         | Re-answer using saved ranked retrieval hits  |
 | `-lme-reanswer-reuse-source-answers` | true | Seed cache from compatible source answers |

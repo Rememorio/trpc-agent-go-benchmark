@@ -136,12 +136,29 @@ func TestLongMemEvalBlindProgressRedactsOutcomes(t *testing.T) {
 		}
 	}
 	for _, operational := range []string{
-		"case-1", "sessions=2", "pairs=3", "memories=4", "hits=5",
+		"sessions=2", "pairs=3", "memories=4", "hits=5",
 	} {
 		if !strings.Contains(caseProgress+backendProgress, operational) {
 			t.Fatalf("blind progress omitted %q: %q / %q",
 				operational, caseProgress, backendProgress)
 		}
+	}
+	if strings.Contains(caseProgress, "case-1") {
+		t.Fatalf("blind progress exposed question ID: %q", caseProgress)
+	}
+	actionProgress := longMemEvalCaseActionProgress(
+		"judging",
+		1,
+		2,
+		&caseResult{
+			QuestionID:   "case-1",
+			QuestionType: "knowledge-update",
+		},
+		true,
+	)
+	if strings.Contains(actionProgress, "case-1") ||
+		!strings.Contains(actionProgress, "judging case-0001 (1/2)") {
+		t.Fatalf("blind action progress = %q", actionProgress)
 	}
 
 	normalProgress := longMemEvalCaseProgress(1, 2, inst, false) +
@@ -151,6 +168,61 @@ func TestLongMemEvalBlindProgressRedactsOutcomes(t *testing.T) {
 	} {
 		if !strings.Contains(normalProgress, outcome) {
 			t.Fatalf("normal progress omitted %q: %q", outcome, normalProgress)
+		}
+	}
+}
+
+func TestLongMemEvalBlindIngestProgressRedactsIdentifiersAndErrors(t *testing.T) {
+	t.Parallel()
+
+	for _, verbose := range []bool{false, true} {
+		progress := longMemEvalIngestProgress(
+			"pgvector",
+			2,
+			5,
+			"session-secret",
+			3,
+			8,
+			2,
+			9,
+			time.Minute,
+			errors.New("provider-secret"),
+			verbose,
+			true,
+		)
+		for _, secret := range []string{"session-secret", "provider-secret"} {
+			if strings.Contains(progress, secret) {
+				t.Fatalf("blind progress exposed %q: %q", secret, progress)
+			}
+		}
+		for _, operational := range []string{
+			"pgvector", "session=2/5", "pairs=8",
+			"memories=9", "elapsed=1m0s", "error_present=true",
+		} {
+			if !strings.Contains(progress, operational) {
+				t.Fatalf("blind progress omitted %q: %q",
+					operational, progress)
+			}
+		}
+	}
+
+	normal := longMemEvalIngestProgress(
+		"pgvector",
+		2,
+		5,
+		"session-secret",
+		3,
+		8,
+		2,
+		9,
+		time.Minute,
+		errors.New("provider-secret"),
+		false,
+		false,
+	)
+	for _, detail := range []string{"session-secret", "provider-secret"} {
+		if !strings.Contains(normal, detail) {
+			t.Fatalf("normal progress omitted %q: %q", detail, normal)
 		}
 	}
 }
@@ -209,14 +281,15 @@ func TestSaveCaseLogBlindProgressRedactsOutcomeContent(t *testing.T) {
 		Retrieval:     []memoryHit{{Memory: "retrieval-secret"}},
 	}
 
-	saveCaseLog(outputDir, cr, br, true)
-	data, err := os.ReadFile(filepath.Join(outputDir, "case-1_pgvector.log"))
+	saveCaseLog(outputDir, 1, cr, br, true)
+	data, err := os.ReadFile(filepath.Join(outputDir, "case-0001_pgvector.log"))
 	if err != nil {
 		t.Fatalf("read blind case log: %v", err)
 	}
 	logText := string(data)
 	for _, secret := range []string{
 		"question-secret",
+		"case-1",
 		"reference-secret",
 		"answer-session-secret",
 		"user-1",
@@ -243,7 +316,7 @@ func TestSaveCaseLogBlindProgressRedactsOutcomeContent(t *testing.T) {
 	}
 	for _, operational := range []string{
 		"BlindProgress: true",
-		"QuestionID: case-1",
+		"CaseOrdinal: 1",
 		"Backend: pgvector",
 		"Pairs: 1",
 		"FinalMemories: 1",
@@ -286,7 +359,7 @@ func TestSaveCaseLogIncludesPersistenceTrace(t *testing.T) {
 		}},
 	}
 
-	saveCaseLog(outputDir, cr, br, false)
+	saveCaseLog(outputDir, 1, cr, br, false)
 	data, err := os.ReadFile(filepath.Join(outputDir, "case-1_pgvector.log"))
 	if err != nil {
 		t.Fatalf("read case log: %v", err)
@@ -1413,11 +1486,11 @@ func TestLongMemEvalRuntimeError(t *testing.T) {
 		BackendResults: map[string]*backendResult{
 			"pgvector": {Backend: "pgvector"},
 		},
-	}}}); err != nil {
+	}}}, false); err != nil {
 		t.Fatalf("healthy run: %v", err)
 	}
 
-	err := longMemEvalRuntimeError(&runResult{Cases: []*caseResult{{
+	result := &runResult{Cases: []*caseResult{{
 		QuestionID: "question",
 		BackendResults: map[string]*backendResult{
 			"mem0": {
@@ -1426,10 +1499,23 @@ func TestLongMemEvalRuntimeError(t *testing.T) {
 				AnswerError: "answer failed",
 			},
 		},
-	}}})
+	}}}
+	err := longMemEvalRuntimeError(result, false)
 	if err == nil || !strings.Contains(err.Error(), "question/mem0: ingest failed") ||
 		!strings.Contains(err.Error(), "question/mem0 answer: answer failed") {
 		t.Fatalf("runtime error = %v", err)
+	}
+
+	blindErr := longMemEvalRuntimeError(result, true)
+	if blindErr == nil ||
+		!strings.Contains(blindErr.Error(), "case-0001/mem0: backend error present") ||
+		!strings.Contains(blindErr.Error(), "case-0001/mem0 answer: answer error present") {
+		t.Fatalf("blind runtime error = %v", blindErr)
+	}
+	for _, secret := range []string{"question", "ingest failed", "answer failed"} {
+		if strings.Contains(blindErr.Error(), secret) {
+			t.Fatalf("blind runtime error exposed %q: %v", secret, blindErr)
+		}
 	}
 }
 

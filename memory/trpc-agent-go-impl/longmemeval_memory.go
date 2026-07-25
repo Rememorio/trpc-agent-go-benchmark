@@ -1232,7 +1232,7 @@ func runLongMemEvalMemory(ctx context.Context) error {
 			cr.BackendResults[backendName] = br
 			_ = backend.Close()
 			log.Print(longMemEvalBackendProgress(backendName, br, *flagLMEBlindProgress))
-			saveCaseLog(*flagOutput, cr, br, *flagLMEBlindProgress)
+			saveCaseLog(*flagOutput, i+1, cr, br, *flagLMEBlindProgress)
 		}
 		results.Cases = append(results.Cases, cr)
 		updateLongMemEvalAnswerCacheMetadata(results.Metadata, answerCache)
@@ -1247,31 +1247,44 @@ func runLongMemEvalMemory(ctx context.Context) error {
 	}
 	results.Summary = buildLongMemEvalSummary(results.Cases)
 	printLongMemEvalSummary(results)
-	return longMemEvalRuntimeError(results)
+	return longMemEvalRuntimeError(results, *flagLMEBlindProgress)
 }
 
-func longMemEvalRuntimeError(results *runResult) error {
+func longMemEvalRuntimeError(results *runResult, blind bool) error {
 	if results == nil {
 		return errors.New("LongMemEval run produced no results")
 	}
 	var failures []string
-	for _, cr := range results.Cases {
+	for caseIndex, cr := range results.Cases {
 		if cr == nil {
 			continue
 		}
+		caseLabel := longMemEvalCaseLabel(
+			caseIndex+1, cr.QuestionID, blind,
+		)
 		for backendName, br := range cr.BackendResults {
 			if br == nil {
 				failures = append(failures,
-					fmt.Sprintf("%s/%s: missing backend result", cr.QuestionID, backendName))
+					fmt.Sprintf("%s/%s: missing backend result", caseLabel, backendName))
 				continue
 			}
 			if br.Error != "" {
-				failures = append(failures,
-					fmt.Sprintf("%s/%s: %s", cr.QuestionID, backendName, br.Error))
+				message := br.Error
+				if blind {
+					message = "backend error present"
+				}
+				failures = append(failures, fmt.Sprintf(
+					"%s/%s: %s", caseLabel, backendName, message,
+				))
 			}
 			if br.AnswerError != "" {
-				failures = append(failures,
-					fmt.Sprintf("%s/%s answer: %s", cr.QuestionID, backendName, br.AnswerError))
+				message := br.AnswerError
+				if blind {
+					message = "answer error present"
+				}
+				failures = append(failures, fmt.Sprintf(
+					"%s/%s answer: %s", caseLabel, backendName, message,
+				))
 			}
 		}
 	}
@@ -1284,11 +1297,30 @@ func longMemEvalRuntimeError(results *runResult) error {
 
 func longMemEvalCaseProgress(index, total int, inst *lmeInstance, blind bool) string {
 	if blind {
-		return fmt.Sprintf("[%d/%d] %s type=%s sessions=%d",
-			index, total, inst.QuestionID, inst.QuestionType, len(inst.HaystackSessions))
+		return fmt.Sprintf("[%d/%d] type=%s sessions=%d",
+			index, total, inst.QuestionType, len(inst.HaystackSessions))
 	}
 	return fmt.Sprintf("[%d/%d] %s type=%s sessions=%d answer=%q",
 		index, total, inst.QuestionID, inst.QuestionType, len(inst.HaystackSessions), inst.Answer)
+}
+
+func longMemEvalCaseLabel(index int, questionID string, blind bool) string {
+	if blind {
+		return fmt.Sprintf("case-%04d", index)
+	}
+	return questionID
+}
+
+func longMemEvalCaseActionProgress(
+	action string,
+	index int,
+	total int,
+	cr *caseResult,
+	blind bool,
+) string {
+	label := longMemEvalCaseLabel(index, cr.QuestionID, blind)
+	return fmt.Sprintf("%s %s (%d/%d) type=%s",
+		action, label, index, total, cr.QuestionType)
 }
 
 func longMemEvalBackendProgress(backendName string, br *backendResult, blind bool) string {
@@ -1435,15 +1467,21 @@ func runCaseBackend(
 			br.IngestTraces = append(br.IngestTraces, trace)
 			pairsSeen++
 			br.IngestedPairs = pairsSeen
-			if *flagVerbose {
-				log.Printf("    %s session=%s pair=%d new=%d total=%d err=%v",
-					backend.Name(), s.ID, pairIdx, len(trace.NewMemories), trace.MemoryCount, err)
-			} else if pairIdx == len(pairs)-1 || err != nil {
-				log.Printf(
-					"    %s ingest progress session=%d/%d id=%s pairs=%d memories=%d elapsed=%s err=%v",
-					backend.Name(), sessIdx+1, sessionTotal, s.ID, pairsSeen,
-					trace.MemoryCount, time.Since(start).Round(time.Second), err,
-				)
+			if *flagVerbose || pairIdx == len(pairs)-1 || err != nil {
+				log.Print(longMemEvalIngestProgress(
+					backend.Name(),
+					sessIdx+1,
+					sessionTotal,
+					s.ID,
+					pairIdx,
+					pairsSeen,
+					len(trace.NewMemories),
+					trace.MemoryCount,
+					time.Since(start).Round(time.Second),
+					err,
+					*flagVerbose,
+					*flagLMEBlindProgress,
+				))
 			}
 			if err != nil {
 				goto afterIngest
@@ -2043,11 +2081,17 @@ func reanswerLongMemEvalResult(
 		}
 	}
 
-	for _, cr := range result.Cases {
+	for caseIndex, cr := range result.Cases {
 		if cr == nil {
 			continue
 		}
-		log.Printf("re-answering %s type=%s", cr.QuestionID, cr.QuestionType)
+		log.Print(longMemEvalCaseActionProgress(
+			"re-answering",
+			caseIndex+1,
+			len(result.Cases),
+			cr,
+			*flagLMEBlindProgress,
+		))
 		inst := &lmeInstance{
 			QuestionID:   cr.QuestionID,
 			QuestionType: cr.QuestionType,
@@ -2100,8 +2144,9 @@ func reanswerLongMemEvalResult(
 				br.FailureStage = classifyFailure(inst, br)
 			}
 			if *flagLMEBlindProgress {
-				log.Printf("  %s calls=%d tokens=%d err=%v",
-					backendName, usage.LLMCalls, usage.TotalTokens, answerErr)
+				log.Printf("  %s calls=%d tokens=%d error_present=%t",
+					backendName, usage.LLMCalls, usage.TotalTokens,
+					answerErr != nil)
 			} else {
 				log.Printf("  %s answer=%q calls=%d tokens=%d err=%v",
 					backendName, truncate(br.Answer, 80), usage.LLMCalls,
@@ -2238,11 +2283,20 @@ func judgeLongMemEvalResult(
 	}
 	incomplete := make([]string, 0)
 
-	for _, cr := range result.Cases {
+	for caseIndex, cr := range result.Cases {
 		if cr == nil {
 			continue
 		}
-		log.Printf("judging %s type=%s", cr.QuestionID, cr.QuestionType)
+		caseLabel := longMemEvalCaseLabel(
+			caseIndex+1, cr.QuestionID, *flagLMEBlindProgress,
+		)
+		log.Print(longMemEvalCaseActionProgress(
+			"judging",
+			caseIndex+1,
+			len(result.Cases),
+			cr,
+			*flagLMEBlindProgress,
+		))
 		backendNames := make([]string, 0, len(cr.BackendResults))
 		for backendName := range cr.BackendResults {
 			backendNames = append(backendNames, backendName)
@@ -2274,12 +2328,21 @@ func judgeLongMemEvalResult(
 				judgeCache,
 			)
 			if err != nil {
-				return fmt.Errorf("judge %s backend %s: %w", cr.QuestionID, backendName, err)
+				if *flagLMEBlindProgress {
+					return fmt.Errorf(
+						"judge %s backend %s: error present",
+						caseLabel, backendName,
+					)
+				}
+				return fmt.Errorf(
+					"judge %s backend %s: %w",
+					caseLabel, backendName, err,
+				)
 			}
 			br.Judge = judge
 			updateLongMemEvalEvaluatedFailureStage(br)
 			if !completeLongMemEvalJudgeConsensus(judge) {
-				incomplete = append(incomplete, cr.QuestionID+"/"+backendName)
+				incomplete = append(incomplete, caseLabel+"/"+backendName)
 			}
 			if *flagLMEBlindProgress {
 				log.Printf("  %s judge completed source=%s votes=%d/%d err=%t",
@@ -3307,17 +3370,63 @@ func writeLongMemEvalResults(path string, result *runResult) error {
 	return nil
 }
 
+func longMemEvalIngestProgress(
+	backendName string,
+	sessionIndex int,
+	sessionTotal int,
+	sessionID string,
+	pairIndex int,
+	pairsSeen int,
+	newMemories int,
+	memoryCount int,
+	elapsed time.Duration,
+	err error,
+	verbose bool,
+	blind bool,
+) string {
+	if blind {
+		if verbose {
+			return fmt.Sprintf(
+				"    %s ingest progress session=%d/%d pair=%d pairs=%d new=%d memories=%d elapsed=%s error_present=%t",
+				backendName, sessionIndex, sessionTotal, pairIndex,
+				pairsSeen, newMemories, memoryCount, elapsed, err != nil,
+			)
+		}
+		return fmt.Sprintf(
+			"    %s ingest progress session=%d/%d pairs=%d memories=%d elapsed=%s error_present=%t",
+			backendName, sessionIndex, sessionTotal, pairsSeen,
+			memoryCount, elapsed, err != nil,
+		)
+	}
+	if verbose {
+		return fmt.Sprintf(
+			"    %s session=%s pair=%d new=%d total=%d err=%v",
+			backendName, sessionID, pairIndex, newMemories, memoryCount, err,
+		)
+	}
+	return fmt.Sprintf(
+		"    %s ingest progress session=%d/%d id=%s pairs=%d memories=%d elapsed=%s err=%v",
+		backendName, sessionIndex, sessionTotal, sessionID, pairsSeen,
+		memoryCount, elapsed, err,
+	)
+}
+
 func saveCaseLog(
 	outputDir string,
+	caseIndex int,
 	cr *caseResult,
 	br *backendResult,
 	blindProgress bool,
 ) {
-	path := filepath.Join(outputDir, fmt.Sprintf("%s_%s.log", cr.QuestionID, br.Backend))
 	if blindProgress {
-		saveBlindCaseLog(path, cr, br)
+		path := filepath.Join(
+			outputDir,
+			fmt.Sprintf("case-%04d_%s.log", caseIndex, br.Backend),
+		)
+		saveBlindCaseLog(path, caseIndex, cr, br)
 		return
 	}
+	path := filepath.Join(outputDir, fmt.Sprintf("%s_%s.log", cr.QuestionID, br.Backend))
 	var b strings.Builder
 	fmt.Fprintf(&b, "QuestionID: %s\nType: %s\nDate: %s\n", cr.QuestionID, cr.QuestionType, cr.QuestionDate)
 	fmt.Fprintf(&b, "Question: %s\nReference: %s\nAnswerSessions: %s\n\n",
@@ -3488,11 +3597,16 @@ func saveCaseLog(
 	writeCaseLog(path, b.String())
 }
 
-func saveBlindCaseLog(path string, cr *caseResult, br *backendResult) {
+func saveBlindCaseLog(
+	path string,
+	caseIndex int,
+	cr *caseResult,
+	br *backendResult,
+) {
 	var b strings.Builder
 	fmt.Fprintln(&b, "BlindProgress: true")
 	fmt.Fprintln(&b, "OutcomeContent: retained in results.json; keep sealed until all arms finish")
-	fmt.Fprintf(&b, "QuestionID: %s\nType: %s\n", cr.QuestionID, cr.QuestionType)
+	fmt.Fprintf(&b, "CaseOrdinal: %d\nType: %s\n", caseIndex, cr.QuestionType)
 	fmt.Fprintf(
 		&b,
 		"Backend: %s\nPairs: %d\nFinalMemories: %d\nRetrievalHits: %d\nSnapshotTruncated: %v\nErrorPresent: %v\nAnswerErrorPresent: %v\n\n",

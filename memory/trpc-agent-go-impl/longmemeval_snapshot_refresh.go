@@ -160,10 +160,13 @@ func refreshLongMemEvalMemorySnapshotResult(
 	result.Metadata["snapshot_refresh"] = refresh
 
 	completed := 0
-	for _, cr := range result.Cases {
+	for caseIndex, cr := range result.Cases {
 		if cr == nil {
 			continue
 		}
+		caseLabel := longMemEvalCaseLabel(
+			caseIndex+1, cr.QuestionID, *flagLMEBlindProgress,
+		)
 		for _, backendName := range backendNames {
 			backend := backends[backendName]
 			if backend == nil {
@@ -174,25 +177,52 @@ func refreshLongMemEvalMemorySnapshotResult(
 				continue
 			}
 			if strings.TrimSpace(br.UserID) == "" {
-				return fmt.Errorf("case %s is missing %s user_id", cr.QuestionID, backendName)
+				return fmt.Errorf(
+					"case %s is missing %s user_id",
+					caseLabel, backendName,
+				)
 			}
-			log.Printf("refreshing memory snapshot %s backend=%s", cr.QuestionID, backendName)
+			log.Printf("%s backend=%s", longMemEvalCaseActionProgress(
+				"refreshing memory snapshot",
+				caseIndex+1,
+				len(result.Cases),
+				cr,
+				*flagLMEBlindProgress,
+			), backendName)
 			userKey := memory.UserKey{AppName: lmeAppName, UserID: br.UserID}
 			stored, truncated, readErr := backend.Read(ctx, userKey)
 			if readErr != nil {
+				if *flagLMEBlindProgress {
+					return fmt.Errorf(
+						"read persisted memories for %s/%s: error present",
+						caseLabel, backendName,
+					)
+				}
 				return fmt.Errorf("read persisted memories for %s/%s: %w",
-					cr.QuestionID, backendName, readErr)
+					caseLabel, backendName, readErr)
 			}
 			if err := verifyLongMemEvalPersistedMemoriesSubset(br.FinalMemories, stored); err != nil {
+				if *flagLMEBlindProgress {
+					return fmt.Errorf(
+						"verify persisted memories for %s/%s: error present",
+						caseLabel, backendName,
+					)
+				}
 				return fmt.Errorf("verify persisted memories for %s/%s: %w",
-					cr.QuestionID, backendName, err)
+					caseLabel, backendName, err)
 			}
 			provenance := longMemEvalSnapshotProvenance(br.FinalMemories)
 			if reader, ok := backend.(lmeSnapshotProvenanceReader); ok {
 				persistedProvenance, provenanceTruncated, err := reader.ReadSnapshotProvenance(ctx, userKey)
 				if err != nil {
+					if *flagLMEBlindProgress {
+						return fmt.Errorf(
+							"read persisted provenance for %s/%s: error present",
+							caseLabel, backendName,
+						)
+					}
 					return fmt.Errorf("read persisted provenance for %s/%s: %w",
-						cr.QuestionID, backendName, err)
+						caseLabel, backendName, err)
 				}
 				truncated = truncated || provenanceTruncated
 				for identity, item := range persistedProvenance {
@@ -203,8 +233,14 @@ func refreshLongMemEvalMemorySnapshotResult(
 				stored, provenance, backendName == "mem0",
 			)
 			if annotateErr != nil {
+				if *flagLMEBlindProgress {
+					return fmt.Errorf(
+						"annotate persisted memories for %s/%s: error present",
+						caseLabel, backendName,
+					)
+				}
 				return fmt.Errorf("annotate persisted memories for %s/%s: %w",
-					cr.QuestionID, backendName, annotateErr)
+					caseLabel, backendName, annotateErr)
 			}
 			br.FinalMemories = stored
 			br.SnapshotTruncated = truncated
