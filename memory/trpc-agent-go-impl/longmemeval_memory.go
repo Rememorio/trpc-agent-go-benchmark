@@ -942,7 +942,8 @@ func containsString(values []string, target string) bool {
 func runLongMemEvalMemory(ctx context.Context) error {
 	if strings.TrimSpace(*flagLMECompareResults) == "" &&
 		strings.TrimSpace(*flagLMECompareReplicates) == "" &&
-		strings.TrimSpace(*flagLMEAnalyzeResults) == "" {
+		strings.TrimSpace(*flagLMEAnalyzeResults) == "" &&
+		strings.TrimSpace(*flagLMEAuditResults) == "" {
 		if issue := longMemEvalBuildProvenanceIssue(
 			currentLongMemEvalBuildProvenance(),
 		); issue != "" {
@@ -993,6 +994,13 @@ func runLongMemEvalMemory(ctx context.Context) error {
 	}
 	if path := strings.TrimSpace(*flagLMEAnalyzeResults); path != "" {
 		return analyzeLongMemEvalResults(path, longMemEvalAnalysisOutputDir(path))
+	}
+	if path := strings.TrimSpace(*flagLMEAuditResults); path != "" {
+		return auditLongMemEvalResults(
+			path,
+			resolveLongMemEvalDatasetPath(),
+			longMemEvalAnalysisOutputDir(path),
+		)
 	}
 	datasetPath := resolveLongMemEvalDatasetPath()
 	instances, err := loadLongMemEval(datasetPath)

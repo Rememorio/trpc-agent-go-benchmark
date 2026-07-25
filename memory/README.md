@@ -462,6 +462,17 @@ LME_AGENT_PROFILE=upstream \
   -lme-judge-cache ../results/lme-judge-cache.json \
   -output ../results/lme-upstream
 
+# Audit a completed result before reading scores or comparing arms. This makes
+# no provider calls. It verifies the stored build and dataset digests, explicit
+# backend isolation, every canonical replay message/date against the source
+# dataset, memory attribution, Mem0 provider usage, retrieval bounds, complete
+# snapshots, error-free answer/judge execution, and a recomputed summary.
+./run-longmemeval.sh \
+  -dataset-format longmemeval \
+  -dataset ../../summary/data/longmemeval-cleaned/longmemeval_oracle.json \
+  -lme-audit-results ../results/lme-upstream/judged_results.json \
+  -output ../results/lme-upstream
+
 # Generate an independent answer replicate from saved retrieval hits under the
 # exact frozen protocol, then judge that output. Both commands validate the
 # recorded protocol hash before initializing a model.

@@ -228,6 +228,11 @@ var (
 		"",
 		"Analyze an existing LongMemEval results.json and write analysis files",
 	)
+	flagLMEAuditResults = flag.String(
+		"lme-audit-results",
+		"",
+		"Audit an existing LongMemEval results.json against its source dataset",
+	)
 	flagLMEHydrateLogicalUsageResults = flag.String(
 		"lme-hydrate-logical-usage-results",
 		"",
