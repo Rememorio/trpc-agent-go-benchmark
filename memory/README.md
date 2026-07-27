@@ -577,14 +577,14 @@ the input files. Paths are resolved relative to the manifest:
     {
       "name": "answer-2",
       "kind": "independent-reanswer",
-      "baseline_results": "answer-2/baseline/judged_results.json",
-      "candidate_results": "answer-2/candidate/judged_results.json"
+      "baseline_results": "answer-2/baseline/reanswered_judged_results.json",
+      "candidate_results": "answer-2/candidate/reanswered_judged_results.json"
     },
     {
       "name": "answer-3",
       "kind": "independent-reanswer",
-      "baseline_results": "answer-3/baseline/judged_results.json",
-      "candidate_results": "answer-3/candidate/judged_results.json"
+      "baseline_results": "answer-3/baseline/reanswered_judged_results.json",
+      "candidate_results": "answer-3/candidate/reanswered_judged_results.json"
     }
   ],
   "gate": {
@@ -606,6 +606,9 @@ empty, distinct answer and judge cache ledgers. The baseline and candidate
 memory source runs must also use separate, initially empty model and embedding
 response ledgers. This prevents arm order from changing provider-observed
 memory cost; cache-independent logical usage remains the promotion-gate basis.
+Judging a `reanswered_results.json` artifact writes
+`reanswered_judged_results.json`, which is the file referenced by each
+independent-reanswer manifest entry.
 The aggregator verifies that ingestion,
 persisted memories, retrieval hits, and memory-layer usage are byte-stable after
 normalizing answer and judge fields. It then reports primary accuracy, majority
