@@ -367,7 +367,7 @@ func main() {
 	validateFlags()
 
 	ctx := context.Background()
-	if isLongMemEvalDatasetFormat() {
+	if isLongMemEvalInvocation() {
 		if err := runLongMemEvalMemory(ctx); err != nil {
 			log.Fatalf("LongMemEval memory evaluation failed: %v", err)
 		}
@@ -464,6 +464,13 @@ func validateFlags() {
 
 func isLongMemEvalDatasetFormat() bool {
 	return strings.EqualFold(strings.TrimSpace(*flagDatasetFormat), datasetFormatLongMemEval)
+}
+
+func isLongMemEvalInvocation() bool {
+	if isLongMemEvalDatasetFormat() {
+		return true
+	}
+	return isLongMemEvalResultOperation()
 }
 
 func parseMemoryBackends(backendsStr string) []string {

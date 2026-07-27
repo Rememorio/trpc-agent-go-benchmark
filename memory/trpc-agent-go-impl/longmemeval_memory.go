@@ -939,11 +939,28 @@ func containsString(values []string, target string) bool {
 	return false
 }
 
+func isLongMemEvalResultOperation() bool {
+	for _, value := range []*string{
+		flagLMEAnalyzeResults,
+		flagLMEAuditResults,
+		flagLMEHydrateLogicalUsageResults,
+		flagLMEReanswerResults,
+		flagLMERefreshRetrievalResults,
+		flagLMERefreshMemorySnapshots,
+		flagLMERerankResults,
+		flagLMEJudgeResults,
+		flagLMECompareResults,
+		flagLMECompareReplicates,
+	} {
+		if strings.TrimSpace(*value) != "" {
+			return true
+		}
+	}
+	return false
+}
+
 func runLongMemEvalMemory(ctx context.Context) error {
-	if strings.TrimSpace(*flagLMECompareResults) == "" &&
-		strings.TrimSpace(*flagLMECompareReplicates) == "" &&
-		strings.TrimSpace(*flagLMEAnalyzeResults) == "" &&
-		strings.TrimSpace(*flagLMEAuditResults) == "" {
+	if !isLongMemEvalResultOperation() {
 		if issue := longMemEvalBuildProvenanceIssue(
 			currentLongMemEvalBuildProvenance(),
 		); issue != "" {
