@@ -25,6 +25,11 @@ func TestAssistantResultUpdatePolicy(t *testing.T) {
 		t.Fatalf("reconcile result policy = %q", got)
 	}
 	if got := assistantResultUpdatePolicy(
+		pgvectorUpdatePolicyConservative, true,
+	); got != assistantResultPolicyPreserving {
+		t.Fatalf("conservative result policy = %q", got)
+	}
+	if got := assistantResultUpdatePolicy(
 		pgvectorUpdatePolicyHistoryPreserving, true,
 	); got != assistantResultPolicyPreserving {
 		t.Fatalf("history-preserving result policy = %q", got)
@@ -50,6 +55,7 @@ func TestCurrentPGVectorExtractionConfig(t *testing.T) {
 	}{
 		{input: "", want: pgvectorUpdatePolicyReconcile},
 		{input: " RECONCILE ", want: pgvectorUpdatePolicyReconcile},
+		{input: " CONSERVATIVE ", want: pgvectorUpdatePolicyConservative},
 		{input: " HISTORY-PRESERVING ", want: pgvectorUpdatePolicyHistoryPreserving},
 		{input: "ADD-ONLY", want: pgvectorUpdatePolicyAddOnly},
 	} {
