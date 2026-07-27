@@ -78,7 +78,7 @@ func (*recoveryModel) Info() model.Info {
 	return model.Info{}
 }
 
-func TestSessionMessagesAnchorsOpeningSpeakerAsUser(t *testing.T) {
+func TestSessionMessagesUsesStableSpeakerRoles(t *testing.T) {
 	sess := dataset.Session{
 		SessionDate: "2:24 pm on 14 August, 2023",
 		Turns: []dataset.Turn{
@@ -88,7 +88,7 @@ func TestSessionMessagesAnchorsOpeningSpeakerAsUser(t *testing.T) {
 		},
 	}
 
-	got := sessionMessages(sess)
+	got := sessionMessages(sess, []string{"Caroline", "Melanie"})
 	if len(got) != 4 {
 		t.Fatalf("messages = %d, want 4", len(got))
 	}
@@ -96,9 +96,9 @@ func TestSessionMessagesAnchorsOpeningSpeakerAsUser(t *testing.T) {
 		t.Fatalf("date role = %q, want system", got[0].Role)
 	}
 	wantRoles := []model.Role{
-		model.RoleUser,
 		model.RoleAssistant,
 		model.RoleUser,
+		model.RoleAssistant,
 	}
 	for i, want := range wantRoles {
 		if got[i+1].Role != want {
@@ -108,6 +108,26 @@ func TestSessionMessagesAnchorsOpeningSpeakerAsUser(t *testing.T) {
 	if !strings.HasPrefix(got[1].Content, "[Melanie]:") ||
 		!strings.HasPrefix(got[2].Content, "[Caroline]:") {
 		t.Fatalf("speaker prefixes not retained: %+v", got)
+	}
+}
+
+func TestSessionMessagesFallsBackToOpeningSpeaker(t *testing.T) {
+	sess := dataset.Session{
+		Turns: []dataset.Turn{
+			{Speaker: "Melanie", Text: "Hello."},
+			{Speaker: "Caroline", Text: "Hi."},
+		},
+	}
+
+	got := sessionMessages(sess, nil)
+	if len(got) != 2 {
+		t.Fatalf("messages = %d, want 2", len(got))
+	}
+	if got[0].Role != model.RoleUser {
+		t.Fatalf("first role = %q, want user", got[0].Role)
+	}
+	if got[1].Role != model.RoleAssistant {
+		t.Fatalf("second role = %q, want assistant", got[1].Role)
 	}
 }
 

@@ -323,7 +323,7 @@ func (e *AgenticEvaluator) processConversation(
 
 	for _, sess := range sample.Conversation {
 		writeMemSvc.SetSessionDate(sess.SessionDate)
-		msgs := sessionMessages(sess)
+		msgs := sessionMessages(sess, sample.Speakers)
 		sessionID := fmt.Sprintf("seed-%s", sess.SessionID)
 		ch, err := runner.RunWithMessages(
 			ctx,

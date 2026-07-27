@@ -181,9 +181,9 @@ Auto mode uses the built-in memory extractor to generate memories in the
 background. The QA stage only performs memory search.
 
 LoCoMo sessions are replayed chronologically and extracted once per session.
-Because both participants are humans, each session's opening speaker is mapped
-to the transport `user` role and the other speaker to `assistant`; speaker names
-remain in the message text. This keeps every opening turn on strict chat APIs.
+Because both participants are humans, the dataset's `speaker_a` is mapped to the
+transport `user` role and `speaker_b` to `assistant` across every session;
+speaker names remain in the message text.
 
 ```bash
 go run . -scenario auto
