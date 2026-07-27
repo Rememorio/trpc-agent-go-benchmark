@@ -213,6 +213,12 @@ var (
 		true,
 		"Generate LongMemEval answers from retrieved memories",
 	)
+	flagLMEAnswerTopK = flag.Int(
+		"lme-answer-top-k",
+		0,
+		"Maximum ranked memories passed to the LongMemEval answer model "+
+			"(0=all retrieved memories)",
+	)
 	flagLMEBlindProgress = flag.Bool(
 		"lme-blind-progress",
 		false,
@@ -395,6 +401,14 @@ func validateFlags() {
 	}
 	if *flagVectorTopK < 1 {
 		log.Fatalf("Invalid vector-topk: %d", *flagVectorTopK)
+	}
+	if *flagLMEAnswerTopK < 0 ||
+		(*flagLMEAnswerTopK > 0 && *flagLMEAnswerTopK > *flagVectorTopK) {
+		log.Fatalf(
+			"Invalid lme-answer-top-k: %d (expected 0 or 1..%d)",
+			*flagLMEAnswerTopK,
+			*flagVectorTopK,
+		)
 	}
 	if *flagQASearchPasses < 1 ||
 		*flagQASearchPasses > maxQASearchPasses {
