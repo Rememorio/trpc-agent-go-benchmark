@@ -589,6 +589,7 @@ func TestLongMemEvalAnswerProvenanceMatchesStrictly(t *testing.T) {
 	for _, mutate := range []func(map[string]any){
 		func(metadata map[string]any) { metadata["model"] = "other-model" },
 		func(metadata map[string]any) { metadata["model_variant"] = "openai" },
+		func(metadata map[string]any) { metadata["answer_top_k"] = float64(10) },
 		func(metadata map[string]any) { metadata["answer_prompt_version"] = "old-prompt" },
 		func(metadata map[string]any) {
 			generation := currentLongMemEvalAnswerGeneration()

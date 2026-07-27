@@ -1635,6 +1635,30 @@ func TestBuildLongMemEvalAnswerPromptPreferenceGuidance(t *testing.T) {
 	}
 }
 
+func TestBuildLongMemEvalAnswerPromptAppliesAnswerTopK(t *testing.T) {
+	restoreIntFlag(t, flagLMEAnswerTopK, 0)
+	*flagLMEAnswerTopK = 2
+	hits := []memoryHit{
+		{Memory: "first ranked memory"},
+		{Memory: "second ranked memory"},
+		{Memory: "third ranked memory"},
+	}
+
+	prompt := buildLongMemEvalAnswerPrompt(
+		&lmeInstance{Question: "Where?"}, hits,
+	)
+	if !strings.Contains(prompt, "1. first ranked memory") ||
+		!strings.Contains(prompt, "2. second ranked memory") {
+		t.Fatalf("top-ranked memories missing from prompt: %s", prompt)
+	}
+	if strings.Contains(prompt, "third ranked memory") {
+		t.Fatalf("answer context exceeded configured top-k: %s", prompt)
+	}
+	if len(hits) != 3 {
+		t.Fatalf("answer context mutated retrieval hits: %d", len(hits))
+	}
+}
+
 func TestBuildLongMemEvalAnswerPromptNonPreference(t *testing.T) {
 	inst := &lmeInstance{
 		QuestionID:   "q-fact",
@@ -1912,6 +1936,9 @@ func TestReanswerLongMemEvalResult(t *testing.T) {
 	}
 	if got.Metadata["answer_prompt_version"] != lmeAnswerPromptVersion {
 		t.Fatalf("stale answer prompt version: %+v", got.Metadata)
+	}
+	if got.Metadata["answer_top_k"] != float64(*flagLMEAnswerTopK) {
+		t.Fatalf("missing answer top-k metadata: %+v", got.Metadata)
 	}
 	mem0 := got.Cases[0].BackendResults["mem0"]
 	pgvector := got.Cases[0].BackendResults["pgvector"]

@@ -489,6 +489,17 @@ func longMemEvalAnswerProvenanceMatches(
 	if !ok || promptVersion != lmeAnswerPromptVersion {
 		return false
 	}
+	answerTopK := 0
+	if raw, exists := metadata["answer_top_k"]; exists {
+		var valid bool
+		answerTopK, valid = longMemEvalMetadataInt(raw)
+		if !valid {
+			return false
+		}
+	}
+	if answerTopK != *flagLMEAnswerTopK {
+		return false
+	}
 	answerModel, ok := lmeMetadataString(metadata, "reanswer_model")
 	if !ok {
 		answerModel, ok = lmeMetadataString(metadata, "model")

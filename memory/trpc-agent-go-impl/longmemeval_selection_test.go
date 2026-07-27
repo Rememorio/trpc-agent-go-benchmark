@@ -748,6 +748,7 @@ func TestValidateLongMemEvalResultProtocol(t *testing.T) {
 	}
 	migrated := protocol
 	migrated.AnswerEnabled = !protocol.AnswerEnabled
+	migrated.AnswerTopK = 10
 	migrated.AnswerPromptVersion = "new-answer-prompt"
 	migrated.AnswerGeneration.RetryMaxTokens++
 	migrated.JudgePromptVersion = "new-judge-prompt"
@@ -898,6 +899,20 @@ func TestValidateLongMemEvalProtocolRejectsInvalidContracts(t *testing.T) {
 			name:   "top-k",
 			mutate: func(p *lmeProtocolProvenance) { p.TopK = 0 },
 			want:   "top-k must be positive",
+		},
+		{
+			name: "negative answer top-k",
+			mutate: func(p *lmeProtocolProvenance) {
+				p.AnswerTopK = -1
+			},
+			want: "answer top-k must be zero or within retrieval top-k",
+		},
+		{
+			name: "answer top-k exceeds retrieval",
+			mutate: func(p *lmeProtocolProvenance) {
+				p.AnswerTopK = p.TopK + 1
+			},
+			want: "answer top-k must be zero or within retrieval top-k",
 		},
 		{
 			name:   "negative session limit",

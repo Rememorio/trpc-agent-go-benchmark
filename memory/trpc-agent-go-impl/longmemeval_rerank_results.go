@@ -120,6 +120,7 @@ func rerankLongMemEvalResult(
 	result.Metadata["answer_generation"] = currentLongMemEvalAnswerGeneration()
 	result.Metadata["answer_execution"] = currentLongMemEvalAnswerExecution()
 	result.Metadata["answer_prompt_version"] = lmeAnswerPromptVersion
+	result.Metadata["answer_top_k"] = *flagLMEAnswerTopK
 	result.Metadata["judge_prompt_version"] = lmeJudgePromptVersion
 	result.Metadata["judge_protocol_version"] = lmeJudgeProtocolVersion
 	result.Metadata["judge_generation"] = currentLongMemEvalJudgeGeneration()

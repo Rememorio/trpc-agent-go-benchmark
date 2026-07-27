@@ -344,6 +344,7 @@ func refreshLongMemEvalRetrievalResult(
 		result.Metadata["answer_scoring"] = "disabled for retrieval-only refresh"
 	}
 	result.Metadata["answer_prompt_version"] = lmeAnswerPromptVersion
+	result.Metadata["answer_top_k"] = *flagLMEAnswerTopK
 	result.Metadata["judge_prompt_version"] = lmeJudgePromptVersion
 	result.Metadata["judge_protocol_version"] = lmeJudgeProtocolVersion
 	result.Metadata["judge_generation"] = currentLongMemEvalJudgeGeneration()

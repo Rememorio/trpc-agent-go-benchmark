@@ -1137,6 +1137,7 @@ func runLongMemEvalMemory(ctx context.Context) error {
 			"pgvector_extraction":          pgExtractionConfig,
 			"backends":                     backends,
 			"top_k":                        *flagVectorTopK,
+			"answer_top_k":                 *flagLMEAnswerTopK,
 			"table_suffix":                 *flagTableSuffix,
 			"answer_enabled":               *flagLMEAnswer,
 			"run_id":                       runID,
@@ -2078,6 +2079,7 @@ func reanswerLongMemEvalResult(
 	result.Metadata["answer_execution"] = currentLongMemEvalAnswerExecution()
 	result.Metadata["memory_attribution_version"] = lmeAttributionProtocolVersion
 	result.Metadata["answer_prompt_version"] = lmeAnswerPromptVersion
+	result.Metadata["answer_top_k"] = *flagLMEAnswerTopK
 	result.Metadata["judge_prompt_version"] = lmeJudgePromptVersion
 	result.Metadata["judge_protocol_version"] = lmeJudgeProtocolVersion
 	result.Metadata["judge_generation"] = currentLongMemEvalJudgeGeneration()
@@ -2984,6 +2986,7 @@ func (lmeAnswerRepairTool) Declaration() *tool.Declaration {
 }
 
 func buildLongMemEvalAnswerPrompt(inst *lmeInstance, hits []memoryHit) string {
+	hits = longMemEvalAnswerHits(hits)
 	var b strings.Builder
 	if len(hits) == 0 {
 		b.WriteString("(no memories retrieved)\n")
@@ -3056,7 +3059,15 @@ Question: %s
 Retrieved memories:
 %s
 
-Answer with a concise final answer only.`, guidance, inst.QuestionDate, inst.QuestionType, inst.Question, b.String())
+	Answer with a concise final answer only.`, guidance, inst.QuestionDate, inst.QuestionType, inst.Question, b.String())
+}
+
+func longMemEvalAnswerHits(hits []memoryHit) []memoryHit {
+	topK := *flagLMEAnswerTopK
+	if topK <= 0 || topK >= len(hits) {
+		return hits
+	}
+	return hits[:topK]
 }
 
 func longMemEvalAnswerGuidance(inst *lmeInstance) string {

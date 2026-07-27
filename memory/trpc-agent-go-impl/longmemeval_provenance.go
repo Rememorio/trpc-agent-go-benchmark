@@ -99,6 +99,7 @@ type lmeProtocolProvenance struct {
 	JudgeProtocolVersion string                        `json:"judge_protocol_version"`
 	JudgeGeneration      lmeJudgeGenerationProvenance  `json:"judge_generation"`
 	TopK                 int                           `json:"top_k"`
+	AnswerTopK           int                           `json:"answer_top_k,omitempty"`
 	MaxSessions          int                           `json:"max_sessions"`
 	MaxPairs             int                           `json:"max_pairs"`
 	UserScope            string                        `json:"user_scope,omitempty"`
@@ -232,6 +233,7 @@ func currentLongMemEvalProtocol() lmeProtocolProvenance {
 		JudgeProtocolVersion: lmeJudgeProtocolVersion,
 		JudgeGeneration:      currentLongMemEvalProtocolJudgeGeneration(),
 		TopK:                 *flagVectorTopK,
+		AnswerTopK:           *flagLMEAnswerTopK,
 		MaxSessions:          *flagLMEMaxSessions,
 		MaxPairs:             *flagLMEMaxPairs,
 		UserScope:            configuredLongMemEvalUserScope(),
@@ -270,6 +272,15 @@ func validateLongMemEvalProtocol(protocol lmeProtocolProvenance) error {
 	if protocol.TopK <= 0 {
 		return fmt.Errorf(
 			"LongMemEval protocol top-k must be positive, got %d",
+			protocol.TopK,
+		)
+	}
+	if protocol.AnswerTopK < 0 ||
+		(protocol.AnswerTopK > 0 && protocol.AnswerTopK > protocol.TopK) {
+		return fmt.Errorf(
+			"LongMemEval protocol answer top-k must be zero or within "+
+				"retrieval top-k, got answer=%d retrieval=%d",
+			protocol.AnswerTopK,
 			protocol.TopK,
 		)
 	}
@@ -457,6 +468,7 @@ func validateLongMemEvalReanswerSourceProtocol(
 	expected := current
 	expected.AnswerEnabled = recorded.AnswerEnabled
 	expected.ModelTemperature = recorded.ModelTemperature
+	expected.AnswerTopK = recorded.AnswerTopK
 	expected.AnswerPromptVersion = recorded.AnswerPromptVersion
 	expected.AnswerGeneration = recorded.AnswerGeneration
 	expected.JudgeModel = recorded.JudgeModel
