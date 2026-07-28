@@ -75,10 +75,6 @@ github.com/panjf2000/ants/v2 v2.10.0 h1:zhRg1pQUtkyRiOFo2Sbqwjp0GfBNo9cUY2/Grpx1
 github.com/panjf2000/ants/v2 v2.10.0/go.mod h1:7ZxyxsqE4vvW0M7LSD8aI3cKwgFhBHbxnlN8mDqHa1I=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
-github.com/qiefengying/trpc-agent-go v0.0.0-20260715064755-1d9c8ca2c432 h1:kU/ljLhplOcoct8GAnFFpPMzMMrSYWrMcJcTZ+o0gbI=
-github.com/qiefengying/trpc-agent-go v0.0.0-20260715064755-1d9c8ca2c432/go.mod h1:csXfevo6y6lEJm2D9rXtztbgxWdU6169/lwnv/dMipE=
-github.com/qiefengying/trpc-agent-go/evaluation v0.0.0-20260715064755-1d9c8ca2c432 h1:3elog2YgBYXhwXpaDVV7oRHp56EyJ+laxNOBaD48cVk=
-github.com/qiefengying/trpc-agent-go/evaluation v0.0.0-20260715064755-1d9c8ca2c432/go.mod h1:dLQaQoO2/AOtXNO+CeS3m99bHKPWy9a8/eGYFVBzu0A=
 github.com/rogpeppe/go-internal v1.14.1 h1:UQB4HGPB6osV0SQTLymcB4TgvyWu6ZyliaW0tI/otEQ=
 github.com/rogpeppe/go-internal v1.14.1/go.mod h1:MaRKkUm5W0goXpeCfT7UZI6fk/L7L7so1lCWt35ZSgc=
 github.com/santhosh-tekuri/jsonschema/v6 v6.0.2 h1:KRzFb2m7YtdldCEkzs6KqmJw4nqEVZGK7IN2kJkjTuQ=
