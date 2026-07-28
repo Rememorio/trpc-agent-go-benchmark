@@ -1,0 +1,205 @@
+//
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
+package experiment
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
+
+func TestAggregatePassesCompleteImprovingMatrix(t *testing.T) {
+	protocol := DefaultProtocol()
+	var paths []string
+	for run, seed := range []int64{10, 11, 12} {
+		input := completeInput(protocol, seed)
+		path := filepath.Join(t.TempDir(), fmt.Sprintf("run-%d", run), "results.json")
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+		writeInput(t, path, input)
+		paths = append(paths, path)
+	}
+
+	evidence, err := Aggregate(paths, protocol)
+	require.NoError(t, err)
+	require.True(t, evidence.PromotionEligible)
+	require.Equal(t, 3, evidence.Coverage.Runs)
+	require.Len(t, evidence.Runs, 3)
+	require.Equal(t, int64(10), evidence.Runs[0].RootSeed)
+	require.Equal(t, "test-model", evidence.Runs[0].RequestedModel)
+	require.Equal(t, "test-model", evidence.Runs[0].RequestedReviewerModel)
+	require.Equal(t, 80, evidence.Runs[0].MaxToolIterations)
+	require.InDelta(t, 0, *evidence.Runs[0].EvaluationTemperature, 0)
+	require.Equal(t, 30, evidence.Runs[0].Arms[armOptimized].Tasks)
+	require.Equal(t, 6,
+		evidence.Runs[0].Families["recipe-cookbook-builder"][armOptimized].Tasks,
+	)
+	require.InDelta(t, 800,
+		evidence.Runs[0].Families["recipe-cookbook-builder"][armOptimized].AverageEndToEndTokens,
+		0.001,
+	)
+	require.Empty(t, evidence.Failures)
+	require.InDelta(t, -11.11,
+		evidence.Runs[0].OptimizedEvolutionVsEvolution.Delta.EndToEndTokensPC,
+		0.001,
+	)
+	require.Equal(t, 30, evidence.Coverage.TasksPerArm)
+	require.Equal(t, 90, evidence.OptimizedEvolutionVsEvolution.Pairs.Pairs)
+	require.Equal(t, 90, evidence.OptimizedEvolutionVsEvolution.Pairs.QualityWins)
+	require.InDelta(t, 1.0, evidence.OptimizedEvolutionVsEvolution.Delta.QualityPP, 0.001)
+	require.InDelta(t, -11.11, evidence.OptimizedEvolutionVsEvolution.Delta.EndToEndTokensPC, 0.001)
+}
+
+func TestAggregateRejectsFamilyPassRegression(t *testing.T) {
+	protocol := DefaultProtocol()
+	var paths []string
+	for run, seed := range []int64{10, 11, 12} {
+		input := completeInput(protocol, seed)
+		if run == 0 {
+			input.OptimizedEvolution.Cases[0].Evaluation.Passed = false
+		}
+		path := filepath.Join(t.TempDir(), fmt.Sprintf("run-%d", run), "results.json")
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+		writeInput(t, path, input)
+		paths = append(paths, path)
+	}
+
+	evidence, err := Aggregate(paths, protocol)
+	require.NoError(t, err)
+	require.False(t, evidence.PromotionEligible)
+	require.False(t, gateByName(t, evidence.Gates, "family-pass-non-regression").Passed)
+	require.Equal(t, []CaseFailure{{
+		RootSeed:       10,
+		Arm:            armOptimized,
+		TaskID:         "cat-facts-collector/e1",
+		Quality:        96,
+		AgentTokens:    700,
+		ReviewerTokens: 100,
+		EndToEndTokens: 800,
+		ToolCalls:      2,
+	}}, evidence.Failures)
+}
+
+func TestAggregateRoundsTokenAveragesToWholeTokens(t *testing.T) {
+	protocol := DefaultProtocol()
+	input := completeInput(protocol, 10)
+	input.OptimizedEvolution.Cases[0].TotalTokens = 720
+	input.OptimizedEvolution.Cases[0].EndToEndTotalTokens = 820
+	path := filepath.Join(t.TempDir(), "results.json")
+	writeInput(t, path, input)
+
+	evidence, err := Aggregate([]string{path}, protocol)
+	require.NoError(t, err)
+	require.Equal(t, float64(701), evidence.Arms[armOptimized].AverageAgentTokens)
+	require.Equal(t, float64(801), evidence.Arms[armOptimized].AverageEndToEndTokens)
+}
+
+func TestAggregateRejectsUnpairedTaskSeed(t *testing.T) {
+	protocol := DefaultProtocol()
+	input := completeInput(protocol, 10)
+	badSeed := int64(999)
+	input.OptimizedEvolution.Cases[0].EvaluationSeed = &badSeed
+	path := filepath.Join(t.TempDir(), "results.json")
+	writeInput(t, path, input)
+
+	_, err := Aggregate([]string{path}, protocol)
+	require.ErrorContains(t, err, "not seed-paired across arms")
+}
+
+func TestAggregateRejectsMixedRuntimeModels(t *testing.T) {
+	protocol := DefaultProtocol()
+	first := completeInput(protocol, 10)
+	second := completeInput(protocol, 11)
+	second.Model = "other-model"
+	var paths []string
+	for run, input := range []inputResult{first, second} {
+		path := filepath.Join(t.TempDir(), fmt.Sprintf("run-%d", run), "results.json")
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+		writeInput(t, path, input)
+		paths = append(paths, path)
+	}
+
+	_, err := Aggregate(paths, protocol)
+	require.ErrorContains(t, err, "runtime configuration differs")
+}
+
+func completeInput(protocol Protocol, rootSeed int64) inputResult {
+	temperature := 0.0
+	maxTokens := 8192
+	input := inputResult{
+		Model:                 "test-model",
+		ReviewerModel:         "test-model",
+		EvaluationSeed:        &rootSeed,
+		EvaluationTemperature: &temperature,
+		MaxToolIterations:     80,
+		MaxTokens:             &maxTokens,
+		RunOrder:              []string{armBaseline, armEvolution, armOptimized},
+		Baseline:              &inputArm{},
+		Evolution:             &inputArm{},
+		OptimizedEvolution:    &inputArm{},
+	}
+	index := int64(0)
+	for _, family := range protocol.ExpectedFamilies {
+		for _, scale := range protocol.ExpectedScales {
+			index++
+			seed := rootSeed*100 + index
+			input.Baseline.Cases = append(input.Baseline.Cases,
+				testCase(family, scale, seed, 90, 1000, 0))
+			input.Evolution.Cases = append(input.Evolution.Cases,
+				testCase(family, scale, seed, 95, 800, 100))
+			input.OptimizedEvolution.Cases = append(input.OptimizedEvolution.Cases,
+				testCase(family, scale, seed, 96, 700, 100))
+		}
+	}
+	return input
+}
+
+func testCase(
+	family, scale string,
+	seed int64,
+	quality float64,
+	agentTokens, reviewerTokens int,
+) inputCase {
+	evaluation := &inputEval{Passed: true}
+	evaluation.Score.Percent = quality
+	return inputCase{
+		TaskID:              family + "/" + scale,
+		BaseTask:            family,
+		Scale:               scale,
+		EvaluationSeed:      &seed,
+		DurationSeconds:     10,
+		TotalTokens:         agentTokens,
+		ReviewerTotalTokens: reviewerTokens,
+		EndToEndTotalTokens: agentTokens + reviewerTokens,
+		ToolCalls:           []string{"one", "two"},
+		Evaluation:          evaluation,
+	}
+}
+
+func writeInput(t *testing.T, path string, input inputResult) {
+	t.Helper()
+	payload, err := json.Marshal(input)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(path, payload, 0o644))
+}
+
+func gateByName(t *testing.T, gates []GateCheck, name string) GateCheck {
+	t.Helper()
+	for _, gate := range gates {
+		if gate.Name == name {
+			return gate
+		}
+	}
+	t.Fatalf("gate %q not found", name)
+	return GateCheck{}
+}

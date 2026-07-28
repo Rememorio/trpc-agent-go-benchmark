@@ -1,0 +1,257 @@
+{
+  "protocol": {
+    "name": "skillcraft-frozen-holdout-v1",
+    "validationScales": [
+      "e2",
+      "m2"
+    ],
+    "holdoutScales": [
+      "e3",
+      "h1"
+    ],
+    "repeats": 2,
+    "minimumSeedsPerFamily": 2,
+    "knownRegressionCases": [
+      "recipe-cookbook-builder/h1"
+    ],
+    "meaningfulQualityBenefitPP": 0.5,
+    "meaningfulTokenReduction": 0.05
+  },
+  "sources": [
+    {
+      "name": "reflective_frozen_recipe_501",
+      "family": "recipe-cookbook-builder",
+      "randomSeed": 501,
+      "candidateHash": "a0274680abc5fd48",
+      "promoted": false
+    },
+    {
+      "name": "reflective_frozen_recipe_502",
+      "family": "recipe-cookbook-builder",
+      "randomSeed": 502,
+      "candidateHash": "a0274680abc5fd48",
+      "promoted": true
+    }
+  ],
+  "validation": {
+    "seed": {
+      "pairs": 8,
+      "passRate": 100,
+      "averageQuality": 95.5,
+      "averageScore": 0.99,
+      "averageAgentTokens": 167544.63,
+      "averageToolCalls": 22,
+      "averageDurationSeconds": 116.23
+    },
+    "candidate": {
+      "pairs": 8,
+      "passRate": 100,
+      "averageQuality": 95.5,
+      "averageScore": 0.99,
+      "averageAgentTokens": 150211,
+      "averageToolCalls": 20.13,
+      "averageDurationSeconds": 125.58
+    },
+    "delta": {
+      "passRatePP": 0,
+      "qualityPP": 0,
+      "averageScore": 0,
+      "averageAgentTokens": -17333.63,
+      "agentTokensPercent": -10.35,
+      "averageToolCalls": -1.87,
+      "averageDurationSeconds": 9.35
+    },
+    "outcomes": {
+      "pairs": 8,
+      "passWins": 0,
+      "passTies": 8,
+      "passLosses": 0,
+      "qualityWins": 0,
+      "qualityTies": 8,
+      "qualityLosses": 0
+    }
+  },
+  "holdout": {
+    "seed": {
+      "pairs": 8,
+      "passRate": 100,
+      "averageQuality": 95.5,
+      "averageScore": 0.99,
+      "averageAgentTokens": 271326.75,
+      "averageToolCalls": 24.88,
+      "averageDurationSeconds": 171.84
+    },
+    "candidate": {
+      "pairs": 8,
+      "passRate": 87.5,
+      "averageQuality": 83.41,
+      "averageScore": 0.87,
+      "averageAgentTokens": 201963.38,
+      "averageToolCalls": 25.38,
+      "averageDurationSeconds": 177.01
+    },
+    "delta": {
+      "passRatePP": -12.5,
+      "qualityPP": -12.09,
+      "averageScore": -0.12,
+      "averageAgentTokens": -69363.37,
+      "agentTokensPercent": -25.56,
+      "averageToolCalls": 0.5,
+      "averageDurationSeconds": 5.17
+    },
+    "outcomes": {
+      "pairs": 8,
+      "passWins": 0,
+      "passTies": 7,
+      "passLosses": 1,
+      "qualityWins": 0,
+      "qualityTies": 7,
+      "qualityLosses": 1
+    }
+  },
+  "untouchedHoldout": {
+    "seed": {
+      "pairs": 4,
+      "passRate": 100,
+      "averageQuality": 96.7,
+      "averageScore": 0.99,
+      "averageAgentTokens": 161271.75,
+      "averageToolCalls": 18.25,
+      "averageDurationSeconds": 148.51
+    },
+    "candidate": {
+      "pairs": 4,
+      "passRate": 75,
+      "averageQuality": 72.53,
+      "averageScore": 0.74,
+      "averageAgentTokens": 154466.25,
+      "averageToolCalls": 19.25,
+      "averageDurationSeconds": 163.08
+    },
+    "delta": {
+      "passRatePP": -25,
+      "qualityPP": -24.17,
+      "averageScore": -0.25,
+      "averageAgentTokens": -6805.5,
+      "agentTokensPercent": -4.22,
+      "averageToolCalls": 1,
+      "averageDurationSeconds": 14.57
+    },
+    "outcomes": {
+      "pairs": 4,
+      "passWins": 0,
+      "passTies": 3,
+      "passLosses": 1,
+      "qualityWins": 0,
+      "qualityTies": 3,
+      "qualityLosses": 1
+    }
+  },
+  "knownRegressionHoldout": {
+    "seed": {
+      "pairs": 4,
+      "passRate": 100,
+      "averageQuality": 94.3,
+      "averageScore": 0.99,
+      "averageAgentTokens": 381381.75,
+      "averageToolCalls": 31.5,
+      "averageDurationSeconds": 195.17
+    },
+    "candidate": {
+      "pairs": 4,
+      "passRate": 100,
+      "averageQuality": 94.3,
+      "averageScore": 0.99,
+      "averageAgentTokens": 249460.5,
+      "averageToolCalls": 31.5,
+      "averageDurationSeconds": 190.95
+    },
+    "delta": {
+      "passRatePP": 0,
+      "qualityPP": 0,
+      "averageScore": 0,
+      "averageAgentTokens": -131921.25,
+      "agentTokensPercent": -34.59,
+      "averageToolCalls": 0,
+      "averageDurationSeconds": -4.22
+    },
+    "outcomes": {
+      "pairs": 4,
+      "passWins": 0,
+      "passTies": 4,
+      "passLosses": 0,
+      "qualityWins": 0,
+      "qualityTies": 4,
+      "qualityLosses": 0
+    }
+  },
+  "families": {
+    "recipe-cookbook-builder": {
+      "seed": {
+        "pairs": 8,
+        "passRate": 100,
+        "averageQuality": 95.5,
+        "averageScore": 0.99,
+        "averageAgentTokens": 271326.75,
+        "averageToolCalls": 24.88,
+        "averageDurationSeconds": 171.84
+      },
+      "candidate": {
+        "pairs": 8,
+        "passRate": 87.5,
+        "averageQuality": 83.41,
+        "averageScore": 0.87,
+        "averageAgentTokens": 201963.38,
+        "averageToolCalls": 25.38,
+        "averageDurationSeconds": 177.01
+      },
+      "delta": {
+        "passRatePP": -12.5,
+        "qualityPP": -12.09,
+        "averageScore": -0.12,
+        "averageAgentTokens": -69363.37,
+        "agentTokensPercent": -25.56,
+        "averageToolCalls": 0.5,
+        "averageDurationSeconds": 5.17
+      },
+      "outcomes": {
+        "pairs": 8,
+        "passWins": 0,
+        "passTies": 7,
+        "passLosses": 1,
+        "qualityWins": 0,
+        "qualityTies": 7,
+        "qualityLosses": 1
+      }
+    }
+  },
+  "gates": [
+    {
+      "name": "per-run-promotion",
+      "passed": false,
+      "details": "every canonical fixed comparison must pass its validation and holdout gate"
+    },
+    {
+      "name": "holdout-pass-non-regression",
+      "passed": false,
+      "details": "candidate 87.50% vs seed 100.00%"
+    },
+    {
+      "name": "holdout-quality-non-regression",
+      "passed": false,
+      "details": "candidate 83.41 vs seed 95.50"
+    },
+    {
+      "name": "untouched-non-regression",
+      "passed": false,
+      "details": "4 untouched pair(s)"
+    },
+    {
+      "name": "meaningful-benefit",
+      "passed": true,
+      "details": "quality delta -12.09pp or token delta -25.56%"
+    }
+  ],
+  "promotionEligible": false,
+  "promotionReason": "one or more frozen confirmation gates failed"
+}

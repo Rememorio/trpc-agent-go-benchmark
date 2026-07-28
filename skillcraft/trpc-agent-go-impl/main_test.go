@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -108,6 +109,97 @@ func TestBuildComparisonUsesWarmStartSubset(t *testing.T) {
 	require.InDelta(t, 50.0, comp.SkillToolInvokedDelta, 0.02)
 }
 
+func TestBenchmarkRunOrderIncludesControlledOptimizedArm(t *testing.T) {
+	evenSeed := int64(12)
+	oddSeed := int64(13)
+	cfg := &benchmarkConfig{
+		Mode:                modeCompare,
+		OptimizedSkillsFrom: "/optimized",
+		EvaluationSeed:      &evenSeed,
+	}
+
+	require.Equal(t, []runMode{
+		modeBaseline,
+		modeEvolution,
+		modeOptimizedEvolution,
+	}, benchmarkRunOrder(cfg))
+
+	cfg.EvaluationSeed = &oddSeed
+	require.Equal(t, []runMode{
+		modeOptimizedEvolution,
+		modeEvolution,
+		modeBaseline,
+	}, benchmarkRunOrder(cfg))
+}
+
+func TestManagedSkillInputsAreIsolatedByArm(t *testing.T) {
+	cfg := &benchmarkConfig{
+		LoadSkillsFrom:      "/legacy",
+		OptimizedSkillsFrom: "/optimized",
+	}
+
+	require.True(t, modeLearnsSkills(modeEvolution))
+	require.True(t, modeLearnsSkills(modeOptimizedEvolution))
+	require.False(t, modeLearnsSkills(modeBaseline))
+	require.Equal(t, "managed_skills", managedSkillsDirName(modeEvolution))
+	require.Equal(t, "optimized_managed_skills", managedSkillsDirName(modeOptimizedEvolution))
+	require.Equal(t, []string{"/legacy"}, managedSkillsSeeds(cfg, modeEvolution))
+	require.Equal(t, []string{"/legacy", "/optimized"}, managedSkillsSeeds(cfg, modeOptimizedEvolution))
+}
+
+func TestSetModeResultPublishesPartialArmState(t *testing.T) {
+	result := &benchmarkResult{}
+	partial := &modeResult{Mode: modeOptimizedEvolution}
+
+	setModeResult(result, modeOptimizedEvolution, partial)
+
+	require.Same(t, partial, result.OptimizedEvolution)
+	require.Nil(t, result.Baseline)
+	require.Nil(t, result.Evolution)
+}
+
+func TestTaskFinalizationIssueRequiresArtifactAndClaim(t *testing.T) {
+	workspace := t.TempDir()
+	task := &taskDefinition{
+		TaskDoc:          "Save results to `result.json`:",
+		NeededLocalTools: []string{"claim_done"},
+	}
+	stats := &runStats{}
+
+	require.Equal(
+		t,
+		"required output result.json is missing; local-claim_done was not called",
+		taskFinalizationIssue(task, workspace, stats),
+	)
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, "result.json"), []byte("{}"), 0o644))
+	stats.ClaimDoneCalled = true
+	require.Empty(t, taskFinalizationIssue(task, workspace, stats))
+}
+
+func TestMergeRunStatsPreservesBothAttempts(t *testing.T) {
+	merged := mergeRunStats(
+		&runStats{
+			TotalTokens:      10,
+			ToolCalls:        []string{"domain"},
+			LoadedSkillNames: []string{"shared", "first"},
+			FinalResponse:    "unfinished",
+		},
+		&runStats{
+			TotalTokens:      7,
+			ToolCalls:        []string{"write", "claim"},
+			LoadedSkillNames: []string{"shared", "second"},
+			ClaimDoneCalled:  true,
+			FinalResponse:    "done",
+		},
+	)
+
+	require.Equal(t, 17, merged.TotalTokens)
+	require.Equal(t, []string{"domain", "write", "claim"}, merged.ToolCalls)
+	require.Equal(t, []string{"shared", "first", "second"}, merged.LoadedSkillNames)
+	require.True(t, merged.ClaimDoneCalled)
+	require.Equal(t, "done", merged.FinalResponse)
+}
+
 func TestBuildInstructionPrioritizesTaskSpecOverSkills(t *testing.T) {
 	task := &taskDefinition{
 		TaskDoc:          "SEQ_01: ATGC...\n\nSave results to `dna_results.json`:",
@@ -179,6 +271,28 @@ func TestExtractTaskEntitiesParsesPrimaryTaskTable(t *testing.T) {
 	require.Equal(t, []string{"Tokyo", "New York", "London", "Sydney"}, entities.Values)
 }
 
+func TestExtractTaskEntitiesParsesPokemonAndBreedTables(t *testing.T) {
+	pokemon := extractTaskEntities(`## Pokemon to Analyze
+
+| # | ID | Name | Type |
+|---|----|------|------|
+| 1 | 25 | Pikachu | Electric |
+| 2 | 6 | Charizard | Fire/Flying |`)
+	require.NotNil(t, pokemon)
+	require.Equal(t, "pokemon", pokemon.Label)
+	require.Equal(t, []string{"Pikachu", "Charizard"}, pokemon.Values)
+
+	breeds := extractTaskEntities(`## Featured Breeds
+
+| # | Breed | Country | Coat |
+|---|-------|---------|------|
+| 1 | Persian | Iran | Long |
+| 2 | Siamese | Thailand | Short |`)
+	require.NotNil(t, breeds)
+	require.Equal(t, "breeds", breeds.Label)
+	require.Equal(t, []string{"Persian", "Siamese"}, breeds.Values)
+}
+
 func TestBuildInstructionEnforcesExactTaskEntitiesOverInitialFiles(t *testing.T) {
 	task := &taskDefinition{
 		TaskDoc: `## Countries to Analyze
@@ -216,6 +330,20 @@ func TestBuildUserPromptPutsTaskSpecBeforeManagedSkills(t *testing.T) {
 	)
 	require.Contains(t, prompt, "Skill-first protocol")
 	require.Contains(t, prompt, "task specification always overrides the skill")
+}
+
+func TestWorldBankTasksRequireSequentialDomainCalls(t *testing.T) {
+	task := &taskDefinition{
+		TaskDoc:   "Save results to `economic_report.json`:",
+		ToolsUsed: []string{"worldbank_economic_snapshot", "worldbank_gdp"},
+	}
+
+	require.True(t, taskNeedsSequentialDomainCalls(task))
+	require.Contains(t, buildInstruction(task, "/tmp/workspace", nil), "exactly one domain tool at a time")
+	require.Contains(t, buildUserPrompt(task, "/tmp/workspace", nil), "## Domain Tool Scheduling")
+	require.False(t, taskNeedsSequentialDomainCalls(&taskDefinition{
+		ToolsUsed: []string{"weather_get_current"},
+	}))
 }
 
 func TestBuildUserPromptIncludesExactTaskEntities(t *testing.T) {
@@ -284,11 +412,48 @@ Output ONLY summary statistics, NOT raw data arrays!`,
 	prompt := buildInstruction(task, "/tmp/workspace", nil)
 
 	require.Contains(t, prompt, "do not rely on raw tool outputs staying in context forever")
-	require.Contains(t, prompt, "single compact helper JSON file such as working_notes.json")
-	require.Contains(t, prompt, "read it back later")
+	require.Contains(t, prompt, "Process exactly one entity end-to-end at a time")
+	require.Contains(t, prompt, "Do not batch the same endpoint across several entities")
+	require.Contains(t, prompt, "After completing each entity")
+	require.Contains(t, prompt, "This is mandatory before starting the next entity")
+	require.Contains(t, prompt, "overwrite the entire file with exactly one valid JSON document")
+	require.Contains(t, prompt, "Never append another JSON object or use JSON Lines")
+	require.Contains(t, prompt, "when assembling the final artifact")
 	require.Contains(t, prompt, "Do not store raw arrays or raw tool dumps")
 	require.True(t, taskNeedsWorkingNotes(task))
-	require.True(t, taskNeedsLowerCompletionBudget(task))
+}
+
+func TestFinalizationRetryUsesWorkingNotesWithoutDomainCalls(t *testing.T) {
+	workspace := t.TempDir()
+	require.NoError(t, os.WriteFile(
+		filepath.Join(workspace, "working_notes.json"), []byte(`{"items":[]}`), 0o644,
+	))
+
+	prompt := finalizationRetryPrompt(
+		workspace, "required output result.json is missing",
+	)
+
+	require.Contains(t, prompt, "finalize-only retry")
+	require.Contains(t, prompt, "Do not call any domain or API tool")
+	require.Contains(t, prompt, "Read working_notes.json now")
+	require.Contains(t, prompt, "local-write_final_json")
+	require.Contains(t, prompt, "local-claim_done")
+}
+
+func TestFinalizationRetryNormalizesInvalidWorkingNotes(t *testing.T) {
+	workspace := t.TempDir()
+	require.NoError(t, os.WriteFile(
+		filepath.Join(workspace, "working_notes.json"), []byte(`{"US":{}}{"CHN":{}}`), 0o644,
+	))
+
+	prompt := finalizationRetryPrompt(
+		workspace, "required output result.json is missing",
+	)
+
+	require.Contains(t, prompt, "not one valid JSON document")
+	require.Contains(t, prompt, "Merge every object into one JSON object")
+	require.Contains(t, prompt, "overwrite the entire file")
+	require.Contains(t, prompt, "Do not call any domain or API tool")
 }
 
 func TestResultStatusFromEvaluation(t *testing.T) {
@@ -327,7 +492,7 @@ func TestOutcomeFromEval(t *testing.T) {
 		}, nil)
 		require.Equal(t, evolution.OutcomeSuccess, o.Status)
 		require.NotNil(t, o.Score)
-		require.InDelta(t, 100.0, *o.Score, 1e-9)
+		require.InDelta(t, 1.0, *o.Score, 1e-9)
 	})
 
 	t.Run("passed=true status=partial becomes partial with notes", func(t *testing.T) {
@@ -341,6 +506,7 @@ func TestOutcomeFromEval(t *testing.T) {
 		}, nil)
 		require.Equal(t, evolution.OutcomePartial, o.Status)
 		require.NotNil(t, o.Score)
+		require.InDelta(t, 0.5, *o.Score, 1e-9)
 		require.Contains(t, o.Notes, "indicator GDP")
 		require.Contains(t, o.Notes, "wrong code")
 	})
@@ -363,6 +529,17 @@ func TestOutcomeFromEval(t *testing.T) {
 		require.LessOrEqual(t, len(o.Notes), 600)
 		require.Contains(t, o.Notes, "agent error: ")
 	})
+}
+
+func TestExecuteBenchmarkRejectsUnsupportedMode(t *testing.T) {
+	err := executeBenchmark(
+		context.Background(),
+		&benchmarkConfig{Mode: runMode("unknown")},
+		nil,
+		&benchmarkResult{},
+		nil,
+	)
+	require.ErrorContains(t, err, "unsupported mode")
 }
 
 func TestSeedManagedSkillsCopiesFolderTreeAndSkipsTopLevelFiles(t *testing.T) {

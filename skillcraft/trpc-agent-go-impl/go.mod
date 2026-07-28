@@ -4,7 +4,7 @@ go 1.21
 
 require (
 	github.com/stretchr/testify v1.10.0
-	trpc.group/trpc-go/trpc-agent-go v1.10.1-0.20260616104537-c6c3bb29ab60
+	trpc.group/trpc-go/trpc-agent-go v1.10.1-0.20260723044225-99a8667aa8ad
 )
 
 require (

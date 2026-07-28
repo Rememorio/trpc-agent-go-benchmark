@@ -1,0 +1,15 @@
+{
+  "purpose": "Post-run verification of model routing on the configured OpenAI-compatible endpoint",
+  "method": "POST /chat/completions with each requested model ID, temperature 0, and a minimal prompt; endpoint and credentials omitted",
+  "routes": [
+    {
+      "requestedModel": "gpt-5.2",
+      "responseModel": "gpt-5.2-2025-12-11"
+    },
+    {
+      "requestedModel": "glm52",
+      "responseModel": "glm52"
+    }
+  ],
+  "conclusion": "gpt-5.2 and glm52 resolve to distinct model routes and must not be treated as aliases"
+}

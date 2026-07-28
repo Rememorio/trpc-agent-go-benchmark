@@ -3,15 +3,8 @@ module trpc.group/trpc-go/trpc-agent-go-benchmark/toolsearch/trpc-agent-go-impl
 go 1.24.1
 
 require (
-	trpc.group/trpc-go/trpc-agent-go v1.7.0
-	trpc.group/trpc-go/trpc-agent-go/evaluation v1.7.0
-)
-
-// Pin the public revision used by this benchmark until the corresponding
-// toolsearch changes are released by trpc-agent-go.
-replace (
-	trpc.group/trpc-go/trpc-agent-go => github.com/qiefengying/trpc-agent-go v0.0.0-20260715064755-1d9c8ca2c432
-	trpc.group/trpc-go/trpc-agent-go/evaluation => github.com/qiefengying/trpc-agent-go/evaluation v0.0.0-20260715064755-1d9c8ca2c432
+	trpc.group/trpc-go/trpc-agent-go v1.10.1-0.20260723044225-99a8667aa8ad
+	trpc.group/trpc-go/trpc-agent-go/evaluation v1.10.1-0.20260723044225-99a8667aa8ad
 )
 
 require (
@@ -42,6 +35,7 @@ require (
 	github.com/ollama/ollama v0.17.1 // indirect
 	github.com/openai/openai-go v1.12.0 // indirect
 	github.com/panjf2000/ants/v2 v2.10.0 // indirect
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2 // indirect
 	github.com/tidwall/gjson v1.18.0 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect

@@ -7,8 +7,9 @@
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 
-// Package main runs SkillCraft tasks with trpc-agent-go and compares a plain
-// baseline against the evolution skill-learning loop.
+// Package main runs SkillCraft tasks with trpc-agent-go. Compare mode evaluates
+// a plain baseline, online evolution, and optionally an offline-optimized
+// warm-start under the same online evolution loop.
 package main
 
 import (
@@ -24,10 +25,12 @@ import (
 	"regexp"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	skilloptimization "trpc.group/trpc-go/trpc-agent-go-benchmark/skillcraft/trpc-agent-go-impl/internal/optimization"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/evolution"
@@ -44,18 +47,18 @@ import (
 type runMode string
 
 const (
-	modeBaseline  runMode = "baseline"
-	modeEvolution runMode = "evolution"
-	modeCompare   runMode = "compare"
+	modeBaseline           runMode = "baseline"
+	modeEvolution          runMode = "evolution"
+	modeOptimizedEvolution runMode = "optimized_evolution"
+	modeCompare            runMode = "compare"
+	modeOptimize           runMode = "optimize"
 )
 
 // modeLearnsSkills reports whether the given mode runs the background
-// evolution reviewer + publisher pipeline. trpc-agent-go intentionally
-// keeps skill management on the reviewer-driven async path, so this is
-// a single-mode predicate today; it stays as a function for clarity at
-// the call sites and to make future modes easy to add.
+// evolution reviewer + publisher pipeline. Optimized evolution has the same
+// runtime behavior as evolution; only its warm-start skill library differs.
 func modeLearnsSkills(m runMode) bool {
-	return m == modeEvolution
+	return m == modeEvolution || m == modeOptimizedEvolution
 }
 
 const (
@@ -96,7 +99,7 @@ var (
 	flagMode = flag.String(
 		"mode",
 		string(modeCompare),
-		"Run mode: baseline, evolution, or compare (runs baseline + evolution back-to-back)",
+		"Run mode: baseline, evolution, compare, or optimize",
 	)
 	flagModel = flag.String(
 		"model",
@@ -155,6 +158,24 @@ var (
 			"Each subdirectory is treated as one skill and copied verbatim into "+
 			"<output>/managed_skills/. Useful for accumulating skills across runs and "+
 			"for exercising the failure-aware learning loop on already-warm libraries.",
+	)
+	flagOptimizedSkillsFrom = flag.String(
+		"optimized-skills-from",
+		"",
+		"Optional optimized managed_skills overlay. In compare mode this adds a third "+
+			"optimized_evolution arm, first loading -load-skills-from and then replacing "+
+			"matching skill folders from this directory.",
+	)
+	flagEvaluationSeed = flag.String(
+		"evaluation-seed",
+		"",
+		"Optional root seed for paired compare runs. A stable task-specific seed is "+
+			"derived for every task and reused across all arms.",
+	)
+	flagEvaluationTemperature = flag.String(
+		"evaluation-temperature",
+		"",
+		"Optional agent/reviewer sampling temperature for baseline, evolution, and compare runs.",
 	)
 	flagReviewerSkillBodyChars = flag.Int(
 		"reviewer-skill-body-chars",
@@ -224,11 +245,15 @@ type benchmarkConfig struct {
 	KeepWorkspaces         bool
 	Verbose                bool
 	LoadSkillsFrom         string
+	OptimizedSkillsFrom    string
 	ReviewerSkillBodyChars int
 	MaxPromptSkills        int
 	EnableApprovalGate     bool
 	ApprovalGateShadow     bool
 	EffectivenessGate      bool
+	Optimization           *skilloptimization.Config
+	EvaluationSeed         *int64
+	EvaluationTemperature  *float64
 }
 
 type rawTaskConfig struct {
@@ -239,10 +264,11 @@ type rawTaskConfig struct {
 	MaxTurns         int      `json:"max_turns"`
 	Timeout          int      `json:"timeout"`
 	Meta             struct {
-		BaseTask    string `json:"base_task"`
-		ScaleLevel  string `json:"scale_level"`
-		Difficulty  string `json:"difficulty"`
-		Description string `json:"description"`
+		BaseTask    string   `json:"base_task"`
+		ScaleLevel  string   `json:"scale_level"`
+		Difficulty  string   `json:"difficulty"`
+		Description string   `json:"description"`
+		ToolsUsed   []string `json:"tools_used"`
 	} `json:"meta"`
 }
 
@@ -262,29 +288,37 @@ type taskDefinition struct {
 	InitialWorkspace  string   `json:"initialWorkspace,omitempty"`
 	NeededMCPServers  []string `json:"neededMCPServers"`
 	NeededLocalTools  []string `json:"neededLocalTools"`
+	ToolsUsed         []string `json:"toolsUsed,omitempty"`
 	MaxTurns          int      `json:"maxTurns"`
 	TimeoutSeconds    int      `json:"timeoutSeconds"`
 	HasInitialContent bool     `json:"hasInitialContent"`
 }
 
 type benchmarkResult struct {
-	Timestamp         string         `json:"timestamp"`
-	RequestedMode     runMode        `json:"requestedMode"`
-	Model             string         `json:"model"`
-	ReviewerModel     string         `json:"reviewerModel"`
-	Variant           string         `json:"variant,omitempty"`
-	SkillCraftRoot    string         `json:"skillcraftRoot"`
-	TaskRoot          string         `json:"taskRoot"`
-	BaseTask          string         `json:"baseTask,omitempty"`
-	Scales            []string       `json:"scales,omitempty"`
-	Tasks             []*taskSummary `json:"tasks"`
-	Baseline          *modeResult    `json:"baseline,omitempty"`
-	Evolution         *modeResult    `json:"evolution,omitempty"`
-	Comparison        *compareResult `json:"comparison,omitempty"`
-	OutputDir         string         `json:"outputDir"`
-	KeepWorkspaces    bool           `json:"keepWorkspaces"`
-	MaxToolIterations int            `json:"maxToolIterations"`
-	TaskTimeoutSec    int            `json:"taskTimeoutSeconds"`
+	Timestamp             string                    `json:"timestamp"`
+	RequestedMode         runMode                   `json:"requestedMode"`
+	Model                 string                    `json:"model"`
+	ReviewerModel         string                    `json:"reviewerModel"`
+	Variant               string                    `json:"variant,omitempty"`
+	SkillCraftRoot        string                    `json:"skillcraftRoot"`
+	TaskRoot              string                    `json:"taskRoot"`
+	BaseTask              string                    `json:"baseTask,omitempty"`
+	Scales                []string                  `json:"scales,omitempty"`
+	Tasks                 []*taskSummary            `json:"tasks"`
+	Baseline              *modeResult               `json:"baseline,omitempty"`
+	Evolution             *modeResult               `json:"evolution,omitempty"`
+	OptimizedEvolution    *modeResult               `json:"optimizedEvolution,omitempty"`
+	Comparison            *compareResult            `json:"comparison,omitempty"`
+	OptimizedComparison   *compareResult            `json:"optimizedComparison,omitempty"`
+	Optimization          *skilloptimization.Result `json:"optimization,omitempty"`
+	EvaluationSeed        *int64                    `json:"evaluationSeed,omitempty"`
+	EvaluationTemperature *float64                  `json:"evaluationTemperature,omitempty"`
+	RunOrder              []runMode                 `json:"runOrder,omitempty"`
+	OutputDir             string                    `json:"outputDir"`
+	KeepWorkspaces        bool                      `json:"keepWorkspaces"`
+	MaxToolIterations     int                       `json:"maxToolIterations"`
+	MaxTokens             int                       `json:"maxTokens"`
+	TaskTimeoutSec        int                       `json:"taskTimeoutSeconds"`
 }
 
 type taskSummary struct {
@@ -376,6 +410,7 @@ type taskRunResult struct {
 	BaseTask                 string                         `json:"baseTask"`
 	Scale                    string                         `json:"scale"`
 	Mode                     runMode                        `json:"mode"`
+	EvaluationSeed           *int64                         `json:"evaluationSeed,omitempty"`
 	Status                   string                         `json:"status"`
 	DurationSeconds          float64                        `json:"durationSeconds"`
 	PromptTokens             int                            `json:"promptTokens"`
@@ -433,22 +468,23 @@ type scoreItem struct {
 // directly on taskRunResult after evaluator + reviewer have completed
 // (see runSingleTask), so they do not appear here.
 type runStats struct {
-	PromptTokens     int
-	CompletionTokens int
-	TotalTokens      int
-	ToolCalls        []string
-	SkillToolCalls   []string
-	LoadedSkillNames []string
-	ClaimDoneCalled  bool
-	SkillToolInvoked bool
-	FinalResponse    string
-	EventErrors      []string
+	PromptTokens       int
+	CompletionTokens   int
+	TotalTokens        int
+	ToolCalls          []string
+	ToolCallSignatures []string
+	SkillToolCalls     []string
+	LoadedSkillNames   []string
+	ClaimDoneCalled    bool
+	SkillToolInvoked   bool
+	FinalResponse      string
+	EventErrors        []string
 }
 
 type trackedUsage struct {
-	PromptTokens     int
-	CompletionTokens int
-	TotalTokens      int
+	PromptTokens     int `json:"promptTokens"`
+	CompletionTokens int `json:"completionTokens"`
+	TotalTokens      int `json:"totalTokens"`
 }
 
 type usageTracker struct {
@@ -532,20 +568,23 @@ func main() {
 	}
 
 	result := &benchmarkResult{
-		Timestamp:         time.Now().Format(time.RFC3339),
-		RequestedMode:     cfg.Mode,
-		Model:             cfg.ModelName,
-		ReviewerModel:     cfg.ReviewerModelName,
-		Variant:           cfg.Variant,
-		SkillCraftRoot:    cfg.SkillCraftRoot,
-		TaskRoot:          cfg.TaskRoot,
-		BaseTask:          cfg.BaseTask,
-		Scales:            reportScales(cfg),
-		Tasks:             summarizeTasks(tasks),
-		OutputDir:         cfg.OutputDir,
-		KeepWorkspaces:    cfg.KeepWorkspaces,
-		MaxToolIterations: cfg.MaxToolIterations,
-		TaskTimeoutSec:    int(cfg.TaskTimeout.Seconds()),
+		Timestamp:             time.Now().Format(time.RFC3339),
+		RequestedMode:         cfg.Mode,
+		Model:                 cfg.ModelName,
+		ReviewerModel:         cfg.ReviewerModelName,
+		Variant:               cfg.Variant,
+		SkillCraftRoot:        cfg.SkillCraftRoot,
+		TaskRoot:              cfg.TaskRoot,
+		BaseTask:              cfg.BaseTask,
+		Scales:                reportScales(cfg),
+		Tasks:                 summarizeTasks(tasks),
+		OutputDir:             cfg.OutputDir,
+		KeepWorkspaces:        cfg.KeepWorkspaces,
+		MaxToolIterations:     cfg.MaxToolIterations,
+		MaxTokens:             cfg.MaxTokens,
+		TaskTimeoutSec:        int(cfg.TaskTimeout.Seconds()),
+		EvaluationSeed:        cfg.EvaluationSeed,
+		EvaluationTemperature: cfg.EvaluationTemperature,
 	}
 
 	log.Printf("SkillCraft root: %s", cfg.SkillCraftRoot)
@@ -562,44 +601,107 @@ func main() {
 			log.Printf("warning: failed to flush partial results.json: %v", writeErr)
 		}
 	}
-
-	runBaseline := cfg.Mode == modeBaseline || cfg.Mode == modeCompare
-	runEvolution := cfg.Mode == modeEvolution || cfg.Mode == modeCompare
-
-	if runBaseline {
-		result.Baseline, err = runModeTasks(cfg, modeBaseline, tasks, func() {
-			flushPartial()
-		})
-		if err != nil {
-			flushPartial()
-			log.Fatalf("baseline run failed: %v", err)
-		}
+	if err := executeBenchmark(context.Background(), cfg, tasks, result, flushPartial); err != nil {
 		flushPartial()
+		log.Fatalf("benchmark run failed: %v", err)
 	}
-
-	if runEvolution {
-		result.Evolution, err = runModeTasks(cfg, modeEvolution, tasks, func() {
-			flushPartial()
-		})
-		if err != nil {
-			flushPartial()
-			log.Fatalf("evolution run failed: %v", err)
-		}
-		flushPartial()
-	}
-
-	if result.Baseline != nil && result.Evolution != nil {
-		result.Comparison = buildComparison(result.Baseline, result.Evolution)
-	}
-
-	if err := writeResults(cfg.OutputDir, result); err != nil {
-		log.Fatalf("write results: %v", err)
-	}
-	if err := writeReport(cfg.OutputDir, result); err != nil {
-		log.Fatalf("write report: %v", err)
+	if err := writeBenchmarkOutputs(context.Background(), cfg.OutputDir, result); err != nil {
+		log.Fatalf("write benchmark outputs: %v", err)
 	}
 
 	log.Printf("Saved benchmark outputs to %s", cfg.OutputDir)
+}
+
+func executeBenchmark(
+	ctx context.Context,
+	cfg *benchmarkConfig,
+	tasks []*taskDefinition,
+	result *benchmarkResult,
+	onProgress func(),
+) error {
+	if onProgress == nil {
+		onProgress = func() {}
+	}
+	if cfg.Mode == modeOptimize {
+		optimizationResult, err := runOptimize(ctx, cfg, tasks)
+		if err != nil {
+			return fmt.Errorf("optimize: %w", err)
+		}
+		result.Optimization = optimizationResult
+		return nil
+	}
+	if cfg.Mode != modeBaseline && cfg.Mode != modeEvolution && cfg.Mode != modeCompare {
+		return fmt.Errorf("unsupported mode %q", cfg.Mode)
+	}
+
+	result.RunOrder = benchmarkRunOrder(cfg)
+	for _, mode := range result.RunOrder {
+		modeResult, err := runModeTasks(
+			cfg,
+			mode,
+			tasks,
+			func(partial *modeResult) {
+				setModeResult(result, mode, partial)
+				onProgress()
+			},
+		)
+		setModeResult(result, mode, modeResult)
+		if err != nil {
+			return fmt.Errorf("%s: %w", mode, err)
+		}
+	}
+	if result.Baseline != nil && result.Evolution != nil {
+		result.Comparison = buildComparison(result.Baseline, result.Evolution)
+	}
+	if result.Evolution != nil && result.OptimizedEvolution != nil {
+		result.OptimizedComparison = buildComparison(
+			result.Evolution,
+			result.OptimizedEvolution,
+		)
+	}
+	return nil
+}
+
+func setModeResult(result *benchmarkResult, mode runMode, value *modeResult) {
+	if result == nil {
+		return
+	}
+	switch mode {
+	case modeBaseline:
+		result.Baseline = value
+	case modeEvolution:
+		result.Evolution = value
+	case modeOptimizedEvolution:
+		result.OptimizedEvolution = value
+	}
+}
+
+func benchmarkRunOrder(cfg *benchmarkConfig) []runMode {
+	if cfg == nil {
+		return nil
+	}
+	switch cfg.Mode {
+	case modeBaseline:
+		return []runMode{modeBaseline}
+	case modeEvolution:
+		return []runMode{modeEvolution}
+	case modeCompare:
+		modes := []runMode{modeBaseline, modeEvolution}
+		if cfg.OptimizedSkillsFrom != "" {
+			modes = append(modes, modeOptimizedEvolution)
+		}
+		// Alternate whole-arm order between root seeds. Keeping each arm's task
+		// sequence intact preserves online learning while reducing fixed order bias
+		// across a multi-seed experiment.
+		if cfg.EvaluationSeed != nil && *cfg.EvaluationSeed&1 == 1 {
+			for left, right := 0, len(modes)-1; left < right; left, right = left+1, right-1 {
+				modes[left], modes[right] = modes[right], modes[left]
+			}
+		}
+		return modes
+	default:
+		return nil
+	}
 }
 
 func buildConfig() (*benchmarkConfig, error) {
@@ -617,7 +719,7 @@ func buildConfig() (*benchmarkConfig, error) {
 
 	mode := runMode(strings.ToLower(strings.TrimSpace(*flagMode)))
 	switch mode {
-	case modeBaseline, modeEvolution, modeCompare:
+	case modeBaseline, modeEvolution, modeCompare, modeOptimize:
 	default:
 		return nil, fmt.Errorf("unsupported -mode %q", *flagMode)
 	}
@@ -665,22 +767,47 @@ func buildConfig() (*benchmarkConfig, error) {
 		ApprovalGateShadow:     *flagApprovalGateShadow,
 		EffectivenessGate:      *flagEffectivenessGate,
 	}
+	if raw := strings.TrimSpace(*flagEvaluationSeed); raw != "" {
+		seed, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("invalid -evaluation-seed %q: %w", raw, err)
+		}
+		cfg.EvaluationSeed = &seed
+	}
+	if raw := strings.TrimSpace(*flagEvaluationTemperature); raw != "" {
+		temperature, err := strconv.ParseFloat(raw, 64)
+		if err != nil || temperature < 0 {
+			return nil, fmt.Errorf("invalid -evaluation-temperature %q", raw)
+		}
+		cfg.EvaluationTemperature = &temperature
+	}
+	if mode == modeOptimize {
+		optimizationCfg, err := buildOptimizeConfig()
+		if err != nil {
+			return nil, err
+		}
+		cfg.Optimization = optimizationCfg
+	}
 	if *flagTaskTimeoutSeconds > 0 {
 		cfg.TaskTimeout = time.Duration(*flagTaskTimeoutSeconds) * time.Second
 	}
 	if seed := strings.TrimSpace(*flagLoadSkillsFrom); seed != "" {
-		abs, err := filepath.Abs(seed)
+		cfg.LoadSkillsFrom, err = resolveInputDirectory("load-skills-from", seed)
 		if err != nil {
-			return nil, fmt.Errorf("resolve load-skills-from: %w", err)
+			return nil, err
 		}
-		info, err := os.Stat(abs)
+	}
+	if seed := strings.TrimSpace(*flagOptimizedSkillsFrom); seed != "" {
+		cfg.OptimizedSkillsFrom, err = resolveInputDirectory("optimized-skills-from", seed)
 		if err != nil {
-			return nil, fmt.Errorf("invalid load-skills-from %q: %w", seed, err)
+			return nil, err
 		}
-		if !info.IsDir() {
-			return nil, fmt.Errorf("load-skills-from must be a directory: %s", abs)
+		if mode != modeCompare {
+			return nil, errors.New("-optimized-skills-from requires -mode compare")
 		}
-		cfg.LoadSkillsFrom = abs
+		if cfg.LoadSkillsFrom == "" {
+			return nil, errors.New("-optimized-skills-from requires -load-skills-from so the two evolution arms have controlled warm starts")
+		}
 	}
 	if len(cfg.ExplicitTasks) == 0 && cfg.BaseTask == "" {
 		return nil, errors.New("set either -tasks or -base-task")
@@ -692,6 +819,21 @@ func buildConfig() (*benchmarkConfig, error) {
 		return nil, errors.New("missing -scales")
 	}
 	return cfg, nil
+}
+
+func resolveInputDirectory(flagName, value string) (string, error) {
+	abs, err := filepath.Abs(value)
+	if err != nil {
+		return "", fmt.Errorf("resolve %s: %w", flagName, err)
+	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		return "", fmt.Errorf("invalid %s %q: %w", flagName, value, err)
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("%s must be a directory: %s", flagName, abs)
+	}
+	return abs, nil
 }
 
 func collectTasks(cfg *benchmarkConfig) ([]*taskDefinition, error) {
@@ -780,6 +922,7 @@ func loadTaskDefinition(skillcraftRoot, spec string) (*taskDefinition, error) {
 		InitialWorkspace:  initialWorkspace,
 		NeededMCPServers:  append([]string(nil), taskCfg.NeededMCPServers...),
 		NeededLocalTools:  append([]string(nil), taskCfg.NeededLocalTools...),
+		ToolsUsed:         append([]string(nil), taskCfg.Meta.ToolsUsed...),
 		MaxTurns:          taskCfg.MaxTurns,
 		TimeoutSeconds:    taskCfg.Timeout,
 		HasInitialContent: hasInitialContent,
@@ -816,25 +959,25 @@ func runModeTasks(
 	cfg *benchmarkConfig,
 	mode runMode,
 	tasks []*taskDefinition,
-	onProgress func(),
+	onProgress func(*modeResult),
 ) (*modeResult, error) {
 	log.Printf("=== Running %s ===", mode)
 
 	var skillsDir string
 	if modeLearnsSkills(mode) {
-		skillsDir = filepath.Join(cfg.OutputDir, "managed_skills")
+		skillsDir = filepath.Join(cfg.OutputDir, managedSkillsDirName(mode))
 		if err := os.RemoveAll(skillsDir); err != nil {
 			return nil, fmt.Errorf("reset managed skills dir: %w", err)
 		}
 		if err := os.MkdirAll(skillsDir, 0o755); err != nil {
 			return nil, fmt.Errorf("create managed skills dir: %w", err)
 		}
-		if cfg.LoadSkillsFrom != "" {
-			n, err := seedManagedSkills(cfg.LoadSkillsFrom, skillsDir)
+		for _, seedDir := range managedSkillsSeeds(cfg, mode) {
+			n, err := seedManagedSkills(seedDir, skillsDir)
 			if err != nil {
-				return nil, fmt.Errorf("seed managed skills from %s: %w", cfg.LoadSkillsFrom, err)
+				return nil, fmt.Errorf("seed managed skills from %s: %w", seedDir, err)
 			}
-			log.Printf("    seeded %d managed skill(s) from %s", n, cfg.LoadSkillsFrom)
+			log.Printf("    seeded %d managed skill(s) from %s", n, seedDir)
 		}
 	}
 
@@ -851,12 +994,36 @@ func runModeTasks(
 		modeRes.Cases = results
 		modeRes.Summary = summarizeMode(results, currentSkillNames(mode, skillsDir))
 		if onProgress != nil {
-			onProgress()
+			onProgress(modeRes)
 		}
 	}
 
 	modeRes.Summary = summarizeMode(results, currentSkillNames(mode, skillsDir))
 	return modeRes, nil
+}
+
+func managedSkillsDirName(mode runMode) string {
+	if mode == modeOptimizedEvolution {
+		return "optimized_managed_skills"
+	}
+	return "managed_skills"
+}
+
+func managedSkillRevisionsDirName(mode runMode) string {
+	return managedSkillsDirName(mode) + "_revisions"
+}
+
+func managedSkillsSeeds(cfg *benchmarkConfig, mode runMode) []string {
+	if cfg == nil {
+		return nil
+	}
+	if mode == modeOptimizedEvolution {
+		return []string{cfg.LoadSkillsFrom, cfg.OptimizedSkillsFrom}
+	}
+	if cfg.LoadSkillsFrom == "" {
+		return nil
+	}
+	return []string{cfg.LoadSkillsFrom}
 }
 
 // seedManagedSkills copies every immediate subdirectory of srcDir (each
@@ -933,6 +1100,12 @@ func runSingleTask(
 	index int,
 	skillsDir string,
 ) (*taskRunResult, error) {
+	taskConfig := *cfg
+	if cfg.EvaluationSeed != nil {
+		seed := deriveEvaluationSeed(*cfg.EvaluationSeed, task.ID)
+		taskConfig.EvaluationSeed = &seed
+	}
+	cfg = &taskConfig
 	workspace := filepath.Join(cfg.OutputDir, "workspaces", string(mode), sanitizeName(task.ID))
 	if err := prepareWorkspace(task, workspace); err != nil {
 		return nil, fmt.Errorf("prepare workspace for %s: %w", task.ID, err)
@@ -946,13 +1119,14 @@ func runSingleTask(
 	}
 
 	result := &taskRunResult{
-		TaskID:    task.ID,
-		TaskName:  task.Name,
-		BaseTask:  task.BaseTask,
-		Scale:     task.Scale,
-		Mode:      mode,
-		Status:    "ok",
-		Workspace: workspace,
+		TaskID:         task.ID,
+		TaskName:       task.Name,
+		BaseTask:       task.BaseTask,
+		Scale:          task.Scale,
+		Mode:           mode,
+		EvaluationSeed: cfg.EvaluationSeed,
+		Status:         "ok",
+		Workspace:      workspace,
 		Metadata: map[string]string{
 			"taskDir": task.Dir,
 		},
@@ -995,7 +1169,11 @@ func runSingleTask(
 		reviewerTracker *usageTracker
 	)
 	if modeLearnsSkills(mode) {
-		reviewerBaseModel := newOpenAIModel(cfg.ReviewerModelName, cfg.Variant)
+		reviewerBaseModel := newOpenAIModel(
+			cfg.ReviewerModelName,
+			cfg.Variant,
+			evaluationSeedModelOptions(cfg.EvaluationSeed)...,
+		)
 		reviewerModel, tracker := newTrackingModel(reviewerBaseModel)
 		reviewerTracker = tracker
 		evoOpts := []evolution.Option{
@@ -1013,7 +1191,7 @@ func runSingleTask(
 		if cfg.EnableApprovalGate {
 			// Keep the revision store next to the live managed skills
 			// dir so operators can inspect both trees side by side.
-			revRoot := filepath.Join(cfg.OutputDir, "managed_skills_revisions")
+			revRoot := filepath.Join(cfg.OutputDir, managedSkillRevisionsDirName(mode))
 			evoOpts = append(evoOpts,
 				evolution.WithCandidateStore(evolution.NewFileCandidateStore(revRoot)),
 				evolution.WithActivePointer(evolution.NewFileActivePointer(revRoot)),
@@ -1183,7 +1361,7 @@ func outcomeFromEval(runErr error, eval *officialEval, evalErr error) *evolution
 		out.Notes = "evaluator did not return a verdict"
 	case eval.Passed:
 		out.Status = evolution.OutcomeSuccess
-		score := eval.Score.Percent
+		score := eval.Score.Percent / 100
 		out.Score = &score
 		if status := strings.ToLower(strings.TrimSpace(eval.Status)); status == "partial" {
 			out.Status = evolution.OutcomePartial
@@ -1191,7 +1369,7 @@ func outcomeFromEval(runErr error, eval *officialEval, evalErr error) *evolution
 		}
 	default:
 		out.Status = evolution.OutcomeFail
-		score := eval.Score.Percent
+		score := eval.Score.Percent / 100
 		out.Score = &score
 		out.Notes = truncateOutcomeNote(joinScoreNotes(eval))
 	}
@@ -1254,7 +1432,27 @@ func executeTask(
 	sessionService *sessioninmemory.SessionService,
 	appName, userID, sessionID string,
 ) (*runStats, error) {
-	modelInstance := newOpenAIModel(cfg.ModelName, cfg.Variant)
+	return executeTaskWithContext(
+		context.Background(), cfg, task, mode, workspace, repo,
+		sessionService, appName, userID, sessionID,
+	)
+}
+
+func executeTaskWithContext(
+	parentCtx context.Context,
+	cfg *benchmarkConfig,
+	task *taskDefinition,
+	mode runMode,
+	workspace string,
+	repo *skill.FSRepository,
+	sessionService *sessioninmemory.SessionService,
+	appName, userID, sessionID string,
+) (*runStats, error) {
+	if parentCtx == nil {
+		parentCtx = context.Background()
+	}
+	modelOptions := evaluationSeedModelOptions(cfg.EvaluationSeed)
+	modelInstance := newOpenAIModel(cfg.ModelName, cfg.Variant, modelOptions...)
 	stats := &runStats{}
 	var availableSkills []string
 
@@ -1274,19 +1472,20 @@ func executeTask(
 	if hasSkills {
 		availableSkills = summariesToNames(repo.Summaries())
 	}
-	maxTokens := cfg.MaxTokens
-	if taskNeedsLowerCompletionBudget(task) && maxTokens > 2048 {
-		maxTokens = 2048
-	}
 	genConfig := model.GenerationConfig{
-		MaxTokens: intPtr(maxTokens),
+		MaxTokens: intPtr(cfg.MaxTokens),
 		Stream:    false,
+	}
+	if cfg.EvaluationTemperature != nil {
+		genConfig.Temperature = cfg.EvaluationTemperature
 	}
 
 	agentOpts := []llmagent.Option{
 		llmagent.WithModel(modelInstance),
 		llmagent.WithDescription("SkillCraft benchmark agent"),
-		llmagent.WithInstruction(buildInstruction(task, workspace, availableSkills)),
+		llmagent.WithInstruction(buildInstructionForMode(
+			task, workspace, availableSkills, mode,
+		)),
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithToolSets([]tool.ToolSet{localTools, filesystemTools}),
 		llmagent.WithMaxToolIterations(cfg.MaxToolIterations),
@@ -1339,7 +1538,7 @@ func executeTask(
 		taskTimeout = defaultFallbackTaskLimit
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(taskTimeout)*time.Second)
+	ctx, cancel := context.WithTimeout(parentCtx, time.Duration(taskTimeout)*time.Second)
 	defer cancel()
 
 	userPrompt := buildUserPrompt(task, workspace, availableSkills)
@@ -1350,6 +1549,16 @@ func executeTask(
 	}
 
 	stats = consumeEvents(eventCh)
+	if finalizationIssue := taskFinalizationIssue(task, workspace, stats); finalizationIssue != "" {
+		retryPrompt := model.NewUserMessage(finalizationRetryPrompt(
+			workspace, finalizationIssue,
+		))
+		retryEvents, retryErr := run.Run(ctx, userID, sessionID, retryPrompt)
+		if retryErr != nil {
+			return stats, retryErr
+		}
+		stats = mergeRunStats(stats, consumeEvents(retryEvents))
+	}
 	if err := run.Close(); err != nil {
 		return stats, err
 	}
@@ -1361,6 +1570,78 @@ func executeTask(
 		return stats, fmt.Errorf(strings.Join(stats.EventErrors, "; "))
 	}
 	return stats, nil
+}
+
+func finalizationRetryPrompt(workspace, issue string) string {
+	var b strings.Builder
+	b.WriteString("The task is not complete: ")
+	b.WriteString(issue)
+	b.WriteString(". This is a finalize-only retry. Do not call any domain or API tool, " +
+		"even if an earlier result is no longer visible in the conversation. ")
+	notesPath := filepath.Join(workspace, "working_notes.json")
+	if raw, err := os.ReadFile(notesPath); err == nil && json.Valid(raw) {
+		b.WriteString("Read working_notes.json now; it contains the collected task data. ")
+	} else if err == nil {
+		b.WriteString("Read working_notes.json now; it contains collected task data but is not one valid JSON document. " +
+			"Merge every object into one JSON object and overwrite the entire file before using it. ")
+	} else {
+		b.WriteString("Use the existing conversation and workspace files as the collected task data. ")
+	}
+	b.WriteString("Assemble the complete required artifact, write it with local-write_final_json, " +
+		"read it back to verify it, then call local-claim_done.")
+	return b.String()
+}
+
+func taskFinalizationIssue(
+	task *taskDefinition,
+	workspace string,
+	stats *runStats,
+) string {
+	if task == nil || stats == nil {
+		return "the agent run did not produce completion state"
+	}
+	var issues []string
+	if output := extractRequiredOutputFile(task.TaskDoc); output != "" {
+		path := filepath.Join(workspace, filepath.Clean(output))
+		if info, err := os.Stat(path); err != nil || info.IsDir() {
+			issues = append(issues, fmt.Sprintf("required output %s is missing", output))
+		}
+	}
+	if containsString(task.NeededLocalTools, "claim_done") && !stats.ClaimDoneCalled {
+		issues = append(issues, "local-claim_done was not called")
+	}
+	return strings.Join(issues, "; ")
+}
+
+func mergeRunStats(first, second *runStats) *runStats {
+	if first == nil {
+		return second
+	}
+	if second == nil {
+		return first
+	}
+	return &runStats{
+		PromptTokens:       first.PromptTokens + second.PromptTokens,
+		CompletionTokens:   first.CompletionTokens + second.CompletionTokens,
+		TotalTokens:        first.TotalTokens + second.TotalTokens,
+		ToolCalls:          append(append([]string(nil), first.ToolCalls...), second.ToolCalls...),
+		ToolCallSignatures: append(append([]string(nil), first.ToolCallSignatures...), second.ToolCallSignatures...),
+		SkillToolCalls:     append(append([]string(nil), first.SkillToolCalls...), second.SkillToolCalls...),
+		LoadedSkillNames:   appendUniqueStrings(first.LoadedSkillNames, second.LoadedSkillNames...),
+		ClaimDoneCalled:    first.ClaimDoneCalled || second.ClaimDoneCalled,
+		SkillToolInvoked:   first.SkillToolInvoked || second.SkillToolInvoked,
+		FinalResponse:      second.FinalResponse,
+		EventErrors:        append(append([]string(nil), first.EventErrors...), second.EventErrors...),
+	}
+}
+
+func evaluationSeedModelOptions(seed *int64) []openai.Option {
+	if seed == nil {
+		return nil
+	}
+	return []openai.Option{openai.WithExtraFields(map[string]any{
+		"seed": *seed,
+	})}
 }
 
 func newLocalBridgeToolSet(
@@ -1421,7 +1702,23 @@ func evaluateTask(
 	task *taskDefinition,
 	workspace string,
 ) (*officialEval, error) {
-	cmd := exec.Command(
+	return evaluateTaskWithContext(context.Background(), cfg, task, workspace)
+}
+
+func evaluateTaskWithContext(
+	ctx context.Context,
+	cfg *benchmarkConfig,
+	task *taskDefinition,
+	workspace string,
+) (*officialEval, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	cmd := exec.CommandContext(
+		ctx,
 		"uv",
 		"run",
 		"--project", cfg.SkillCraftRoot,
@@ -1495,6 +1792,10 @@ func consumeEvents(evtCh <-chan *event.Event) *runStats {
 					}
 					normalizedName := normalizeToolCallName(rawName)
 					stats.ToolCalls = append(stats.ToolCalls, rawName)
+					stats.ToolCallSignatures = append(
+						stats.ToolCallSignatures,
+						toolCallSignature(normalizedName, call.Function.Arguments),
+					)
 					if normalizedName == "local-claim_done" {
 						stats.ClaimDoneCalled = true
 					}
@@ -1542,6 +1843,15 @@ func extractLoadedSkillName(arguments []byte) string {
 }
 
 func buildInstruction(task *taskDefinition, workspace string, availableSkills []string) string {
+	return buildInstructionForMode(task, workspace, availableSkills, modeBaseline)
+}
+
+func buildInstructionForMode(
+	task *taskDefinition,
+	workspace string,
+	availableSkills []string,
+	mode runMode,
+) string {
 	parts := []string{
 		"You are solving one SkillCraft benchmark task in a single uninterrupted session.",
 	}
@@ -1583,6 +1893,11 @@ func buildInstruction(task *taskDefinition, workspace string, availableSkills []
 			fmt.Sprintf("Never end your turn with the final JSON only inside an assistant message. The JSON must be persisted to %s via a tool call before you call local-claim_done.", outputFile),
 		)
 	}
+	if taskNeedsSequentialDomainCalls(task) {
+		parts = append(parts,
+			"This task's domain tools may perform several upstream HTTP requests per call. Invoke exactly one domain tool at a time and wait for its result before issuing the next domain call. Do not batch or parallelize these calls.",
+		)
+	}
 	if len(availableSkills) > 0 {
 		parts = append(parts,
 			fmt.Sprintf(
@@ -1597,6 +1912,11 @@ func buildInstruction(task *taskDefinition, workspace string, availableSkills []
 			"After deciding a loaded skill is incomplete or irrelevant, stop reconsidering it and continue with the task using the task specification and tool results.",
 			"These managed skills are textual procedures, not prebuilt executable scripts.",
 		)
+		if mode == modeOptimize {
+			parts = append(parts,
+				"This run evaluates the loaded managed skill as an optimization candidate. Follow every non-conflicting checklist, validation, and output-detail instruction it adds. The task remains authoritative when the two conflict, but a minimal example schema does not cancel extra candidate fields or checks that are compatible with the stated objective.",
+			)
+		}
 	}
 	if taskDocMayContainPreviewMarkers(task.TaskDoc) {
 		parts = append(parts,
@@ -1620,8 +1940,10 @@ func buildInstruction(task *taskDefinition, workspace string, availableSkills []
 	if taskNeedsWorkingNotes(task) {
 		parts = append(parts,
 			"For larger multi-entity tasks, do not rely on raw tool outputs staying in context forever.",
-			"After finishing one entity, you may keep a single compact helper JSON file such as working_notes.json with only derived summaries and required fields for completed entities.",
-			"If you use working_notes.json, keep it compact, rewrite it with valid JSON, and read it back later instead of depending on full earlier tool outputs.",
+			"Process exactly one entity end-to-end at a time. Do not batch the same endpoint across several entities, even if a loaded skill suggests parallel calls.",
+			"After completing each entity, update one compact working_notes.json file with only its derived summaries and required fields. This is mandatory before starting the next entity.",
+			"Before each update, read working_notes.json if it exists, merge the current entity into one top-level object, and overwrite the entire file with exactly one valid JSON document. Never append another JSON object or use JSON Lines.",
+			"Read working_notes.json when assembling the final artifact instead of depending on full earlier tool outputs.",
 			"Do not store raw arrays or raw tool dumps in helper notes, and do not treat helper notes as the final deliverable.",
 		)
 	}
@@ -1664,8 +1986,10 @@ func buildUserPrompt(task *taskDefinition, workspace string, availableSkills []s
 	if taskNeedsWorkingNotes(task) {
 		b.WriteString("\n## Context Management\n")
 		b.WriteString("- This is a larger multi-entity task. Raw tool outputs may become too large to keep in context.\n")
-		b.WriteString("- After completing an entity, you may keep a single compact helper JSON file such as `working_notes.json` with only derived summaries and required fields.\n")
-		b.WriteString("- If you use `working_notes.json`, keep it valid JSON and read it back later instead of relying on full earlier tool outputs.\n")
+		b.WriteString("- Process exactly one entity end-to-end at a time. Do not batch the same endpoint across several entities, even if a loaded skill suggests parallel calls.\n")
+		b.WriteString("- After completing each entity, update one compact `working_notes.json` file with only its derived summaries and required fields. This is mandatory before starting the next entity.\n")
+		b.WriteString("- Before each update, read `working_notes.json` if it exists, merge the current entity into one top-level object, and overwrite the entire file with exactly one valid JSON document. Never append another JSON object or use JSON Lines.\n")
+		b.WriteString("- Read `working_notes.json` when assembling the final artifact instead of relying on full earlier tool outputs.\n")
 		b.WriteString("- Do not store raw arrays or raw tool dumps in helper notes.\n")
 	}
 	if taskDocMayContainPreviewMarkers(task.TaskDoc) {
@@ -1679,7 +2003,23 @@ func buildUserPrompt(task *taskDefinition, workspace string, availableSkills []s
 		b.WriteString("- If multiple skills look relevant, prefer the most generic one (for example a `Multi-City` or `Multi-Country` variant) over count-specific siblings.\n")
 		b.WriteString("- After loading, treat the skill as a reusable checklist. The task specification always overrides the skill when they disagree.\n")
 	}
+	if taskNeedsSequentialDomainCalls(task) {
+		b.WriteString("\n## Domain Tool Scheduling\n")
+		b.WriteString("- Call exactly one domain tool at a time and wait for its result before making the next domain call. Do not batch or parallelize these long-running calls.\n")
+	}
 	return b.String()
+}
+
+func taskNeedsSequentialDomainCalls(task *taskDefinition) bool {
+	if task == nil {
+		return false
+	}
+	for _, toolName := range task.ToolsUsed {
+		if strings.HasPrefix(normalizeDomainToolName(toolName), "worldbank_") {
+			return true
+		}
+	}
+	return false
 }
 
 func taskDocMayContainPreviewMarkers(doc string) bool {
@@ -1706,6 +2046,8 @@ func extractTaskEntities(doc string) *taskEntities {
 		"cities to analyze":    "cities",
 		"countries to analyze": "countries",
 		"dishes to include":    "dishes",
+		"pokemon to analyze":   "pokemon",
+		"featured breeds":      "breeds",
 	}
 	for i, line := range lines {
 		header := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "##")))
@@ -1730,6 +2072,8 @@ func extractTableColumnValues(lines []string, label string) []string {
 		"cities":    "city",
 		"countries": "country",
 		"dishes":    "dish",
+		"pokemon":   "name",
+		"breeds":    "breed",
 	}[label]
 	if targetColumn == "" {
 		return nil
@@ -1816,16 +2160,6 @@ func taskNeedsWorkingNotes(task *taskDefinition) bool {
 	lower := strings.ToLower(task.TaskDoc)
 	return strings.Contains(lower, "output only summary statistics") ||
 		strings.Contains(lower, "summarize large datasets")
-}
-
-func taskNeedsLowerCompletionBudget(task *taskDefinition) bool {
-	if task == nil {
-		return false
-	}
-	if task.MaxTurns >= 100 {
-		return true
-	}
-	return taskNeedsWorkingNotes(task)
 }
 
 func titleCaseASCII(s string) string {
@@ -2056,18 +2390,68 @@ func writeResults(outputDir string, result *benchmarkResult) error {
 	path := filepath.Join(outputDir, "results.json")
 	data, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
+		return fmt.Errorf("marshal benchmark result: %w", err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return fmt.Errorf("write benchmark result: %w", err)
+	}
+	return nil
+}
+
+func writeBenchmarkOutputs(
+	ctx context.Context,
+	outputDir string,
+	result *benchmarkResult,
+) error {
+	if result == nil {
+		return errors.New("nil benchmark result")
+	}
+	if err := os.MkdirAll(outputDir, 0o755); err != nil {
+		return fmt.Errorf("create output directory: %w", err)
+	}
+	if result.Optimization != nil {
+		optimizationResult := result.Optimization.Search
+		if optimizationResult == nil || optimizationResult.Spec == nil {
+			return errors.New("incomplete optimization result")
+		}
+		if err := evolution.NewFilePublisher(
+			filepath.Join(outputDir, "selected_skill"),
+		).UpsertSkill(ctx, optimizationResult.Spec); err != nil {
+			return fmt.Errorf("write selected skill: %w", err)
+		}
+	}
+	if err := writeResults(outputDir, result); err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o644)
+	if err := writeReport(outputDir, result); err != nil {
+		return err
+	}
+	return nil
 }
 
 func writeReport(outputDir string, result *benchmarkResult) error {
+	if result == nil {
+		return errors.New("nil benchmark result")
+	}
 	var b strings.Builder
 	b.WriteString("# SkillCraft Benchmark Report\n\n")
 	fmt.Fprintf(&b, "- Time: `%s`\n", result.Timestamp)
 	fmt.Fprintf(&b, "- Requested mode: `%s`\n", result.RequestedMode)
 	fmt.Fprintf(&b, "- Model: `%s`\n", result.Model)
 	fmt.Fprintf(&b, "- Reviewer model: `%s`\n", result.ReviewerModel)
+	if result.EvaluationSeed != nil {
+		fmt.Fprintf(&b, "- Evaluation root seed: `%d`\n", *result.EvaluationSeed)
+	}
+	if result.EvaluationTemperature != nil {
+		fmt.Fprintf(&b, "- Evaluation temperature: `%g`\n", *result.EvaluationTemperature)
+	}
+	if len(result.RunOrder) > 0 {
+		order := make([]string, 0, len(result.RunOrder))
+		for _, mode := range result.RunOrder {
+			order = append(order, string(mode))
+		}
+		fmt.Fprintf(&b, "- Arm order: `%s`\n", strings.Join(order, " -> "))
+	}
 	if result.BaseTask != "" {
 		fmt.Fprintf(&b, "- Base task: `%s`\n", result.BaseTask)
 	}
@@ -2085,11 +2469,27 @@ func writeReport(outputDir string, result *benchmarkResult) error {
 	if result.Evolution != nil {
 		appendModeSection(&b, result.Evolution)
 	}
+	if result.OptimizedEvolution != nil {
+		appendModeSection(&b, result.OptimizedEvolution)
+	}
 	if result.Comparison != nil {
 		appendComparisonSection(&b, "Comparison (evolution vs. baseline)", result.Comparison)
 	}
+	if result.OptimizedComparison != nil {
+		appendComparisonSection(
+			&b,
+			"Comparison (optimized evolution vs. evolution)",
+			result.OptimizedComparison,
+		)
+	}
+	if result.Optimization != nil {
+		skilloptimization.AppendReport(&b, result.Optimization)
+	}
 
-	return os.WriteFile(filepath.Join(outputDir, "REPORT.md"), []byte(b.String()), 0o644)
+	if err := os.WriteFile(filepath.Join(outputDir, "REPORT.md"), []byte(b.String()), 0o644); err != nil {
+		return fmt.Errorf("write benchmark report: %w", err)
+	}
+	return nil
 }
 
 func appendComparisonSection(b *strings.Builder, title string, c *compareResult) {
@@ -2327,11 +2727,16 @@ func summarizeTasks(tasks []*taskDefinition) []*taskSummary {
 	return out
 }
 
-func newOpenAIModel(name, variant string) model.Model {
+func newOpenAIModel(
+	name string,
+	variant string,
+	additionalOptions ...openai.Option,
+) model.Model {
 	opts := []openai.Option{
 		openai.WithEnableTokenTailoring(true),
 		openai.WithMaxInputTokens(120000),
 	}
+	opts = append(opts, additionalOptions...)
 	if strings.TrimSpace(variant) != "" {
 		opts = append(opts, openai.WithVariant(openai.Variant(variant)))
 	}
@@ -2411,6 +2816,14 @@ func appendUniqueString(items []string, value string) []string {
 		}
 	}
 	return append(items, value)
+}
+
+func appendUniqueStrings(items []string, values ...string) []string {
+	result := append([]string(nil), items...)
+	for _, value := range values {
+		result = appendUniqueString(result, value)
+	}
+	return result
 }
 
 func sanitizeName(value string) string {
