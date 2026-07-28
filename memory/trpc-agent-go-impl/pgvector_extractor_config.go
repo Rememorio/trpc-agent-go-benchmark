@@ -18,7 +18,6 @@ type pgvectorUpdatePolicy string
 
 const (
 	pgvectorUpdatePolicyReconcile         pgvectorUpdatePolicy = "reconcile"
-	pgvectorUpdatePolicyConservative      pgvectorUpdatePolicy = "conservative"
 	pgvectorUpdatePolicyHistoryPreserving pgvectorUpdatePolicy = "history-preserving"
 	pgvectorUpdatePolicyAddOnly           pgvectorUpdatePolicy = "add-only"
 
@@ -58,8 +57,6 @@ func currentPGVectorExtractionConfig() (
 	switch strings.ToLower(strings.TrimSpace(*flagPGVectorUpdatePolicy)) {
 	case "", string(pgvectorUpdatePolicyReconcile):
 		policy = pgvectorUpdatePolicyReconcile
-	case string(pgvectorUpdatePolicyConservative):
-		policy = pgvectorUpdatePolicyConservative
 	case string(pgvectorUpdatePolicyHistoryPreserving):
 		policy = pgvectorUpdatePolicyHistoryPreserving
 	case string(pgvectorUpdatePolicyAddOnly):
@@ -67,7 +64,7 @@ func currentPGVectorExtractionConfig() (
 	default:
 		return pgvectorExtractionConfig{}, fmt.Errorf(
 			"unsupported pgvector-update-policy %q: expected reconcile, "+
-				"conservative, history-preserving, or add-only",
+				"history-preserving, or add-only",
 			*flagPGVectorUpdatePolicy,
 		)
 	}
@@ -90,8 +87,7 @@ func assistantResultUpdatePolicy(
 	if policy == pgvectorUpdatePolicyAddOnly {
 		return string(pgvectorUpdatePolicyAddOnly)
 	}
-	if policy == pgvectorUpdatePolicyConservative ||
-		policy == pgvectorUpdatePolicyHistoryPreserving {
+	if policy == pgvectorUpdatePolicyHistoryPreserving {
 		return assistantResultPolicyPreserving
 	}
 	return string(pgvectorUpdatePolicyReconcile)
