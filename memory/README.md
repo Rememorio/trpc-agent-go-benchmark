@@ -181,9 +181,9 @@ Auto mode uses the built-in memory extractor to generate memories in the
 background. The QA stage only performs memory search.
 
 LoCoMo sessions are replayed chronologically and extracted once per session.
-Because both participants are humans, the dataset's `speaker_a` is mapped to the
-transport `user` role and `speaker_b` to `assistant` across every session;
-speaker names remain in the message text.
+Because both participants are humans, each session's opening speaker is mapped
+to the transport `user` role and the other speaker to `assistant`; speaker names
+remain in the message text. This keeps every opening turn on strict chat APIs.
 
 ```bash
 go run . -scenario auto
@@ -462,6 +462,17 @@ LME_AGENT_PROFILE=upstream \
   -lme-judge-cache ../results/lme-judge-cache.json \
   -output ../results/lme-upstream
 
+# Audit a completed result before reading scores or comparing arms. This makes
+# no provider calls. It verifies the stored build and dataset digests, explicit
+# backend isolation, every canonical replay message/date against the source
+# dataset, memory attribution, Mem0 provider usage, retrieval bounds, complete
+# snapshots, error-free answer/judge execution, and a recomputed summary.
+./run-longmemeval.sh \
+  -dataset-format longmemeval \
+  -dataset ../../summary/data/longmemeval-cleaned/longmemeval_oracle.json \
+  -lme-audit-results ../results/lme-upstream/judged_results.json \
+  -output ../results/lme-upstream
+
 # Generate an independent answer replicate from saved retrieval hits under the
 # exact frozen protocol, then judge that output. Both commands validate the
 # recorded protocol hash before initializing a model.
@@ -566,14 +577,14 @@ the input files. Paths are resolved relative to the manifest:
     {
       "name": "answer-2",
       "kind": "independent-reanswer",
-      "baseline_results": "answer-2/baseline/judged_results.json",
-      "candidate_results": "answer-2/candidate/judged_results.json"
+      "baseline_results": "answer-2/baseline/reanswered_judged_results.json",
+      "candidate_results": "answer-2/candidate/reanswered_judged_results.json"
     },
     {
       "name": "answer-3",
       "kind": "independent-reanswer",
-      "baseline_results": "answer-3/baseline/judged_results.json",
-      "candidate_results": "answer-3/candidate/judged_results.json"
+      "baseline_results": "answer-3/baseline/reanswered_judged_results.json",
+      "candidate_results": "answer-3/candidate/reanswered_judged_results.json"
     }
   ],
   "gate": {
@@ -595,6 +606,9 @@ empty, distinct answer and judge cache ledgers. The baseline and candidate
 memory source runs must also use separate, initially empty model and embedding
 response ledgers. This prevents arm order from changing provider-observed
 memory cost; cache-independent logical usage remains the promotion-gate basis.
+Judging a `reanswered_results.json` artifact writes
+`reanswered_judged_results.json`, which is the file referenced by each
+independent-reanswer manifest entry.
 The aggregator verifies that ingestion,
 persisted memories, retrieval hits, and memory-layer usage are byte-stable after
 normalizing answer and judge fields. It then reports primary accuracy, majority
@@ -773,7 +787,7 @@ build provenance.
 | `-scenario`         | long_context           | Evaluation scenario (comma-separated)  |
 | `-memory-backend`   | inmemory               | Memory backend (comma-separated)       |
 | `-pgvector-dsn`     | (env)                  | PostgreSQL DSN for pgvector            |
-| `-pgvector-update-policy` | reconcile            | `reconcile` or `add-only`               |
+| `-pgvector-update-policy` | reconcile            | `reconcile`, `history-preserving`, or `add-only` |
 | `-pgvector-assistant-result-extraction` | false | Retain concrete assistant results   |
 | `-mysql-dsn`        | (env)                  | MySQL DSN for mysql backend            |
 | `-embed-model`      | text-embedding-3-small | Embedding model for vector backends    |

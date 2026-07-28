@@ -193,10 +193,7 @@ func (seedAgent) FindSubAgent(_ string) agent.Agent {
 	return nil
 }
 
-func sessionMessages(
-	sess dataset.Session,
-	speakers []string,
-) []model.Message {
+func sessionMessages(sess dataset.Session) []model.Message {
 	msgs := make([]model.Message, 0, len(sess.Turns)+1)
 	if strings.TrimSpace(sess.SessionDate) != "" {
 		msgs = append(msgs, model.NewSystemMessage(
@@ -205,35 +202,23 @@ func sessionMessages(
 	}
 
 	// Both LoCoMo participants are humans, so user/assistant is only a
-	// transport-level mapping. Keep it stable across sessions so a person does
-	// not switch roles depending on who happened to speak first.
-	userSpeaker := ""
-	assistantSpeaker := ""
-	if len(speakers) > 0 {
-		userSpeaker = strings.TrimSpace(speakers[0])
-	}
-	if len(speakers) > 1 {
-		assistantSpeaker = strings.TrimSpace(speakers[1])
-	}
-	if userSpeaker == "" {
-		for _, turn := range sess.Turns {
-			if strings.TrimSpace(turn.Speaker) != "" &&
-				strings.TrimSpace(turn.Text) != "" {
-				userSpeaker = strings.TrimSpace(turn.Speaker)
-				break
-			}
+	// transport-level mapping. Anchor each session on its opening speaker to
+	// prevent strict chat providers from dropping a leading assistant message.
+	openingSpeaker := ""
+	for _, turn := range sess.Turns {
+		if strings.TrimSpace(turn.Speaker) != "" &&
+			strings.TrimSpace(turn.Text) != "" {
+			openingSpeaker = turn.Speaker
+			break
 		}
 	}
 
 	for _, turn := range sess.Turns {
 		role := model.RoleUser
-		speaker := strings.TrimSpace(turn.Speaker)
-		speakerLower := strings.ToLower(speaker)
-		if userSpeaker != "" && speaker == userSpeaker {
+		speakerLower := strings.ToLower(turn.Speaker)
+		if openingSpeaker != "" && turn.Speaker == openingSpeaker {
 			role = model.RoleUser
-		} else if assistantSpeaker != "" && speaker == assistantSpeaker {
-			role = model.RoleAssistant
-		} else if speaker != "" && userSpeaker != "" {
+		} else if turn.Speaker != "" {
 			role = model.RoleAssistant
 		} else if strings.Contains(speakerLower, "assistant") {
 			role = model.RoleAssistant
@@ -268,7 +253,7 @@ func buildHistoryMessages(
 	// Collect all conversation turns into messages.
 	var all []model.Message
 	for _, sess := range sample.Conversation {
-		msgs := sessionMessages(sess, sample.Speakers)
+		msgs := sessionMessages(sess)
 		all = append(all, msgs...)
 	}
 	if len(all) <= k {

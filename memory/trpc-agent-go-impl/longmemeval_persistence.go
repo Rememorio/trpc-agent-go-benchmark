@@ -40,11 +40,32 @@ func unverifiableExtractionPersistence(
 	if extraction == nil || len(extraction.Operations) == 0 {
 		return nil
 	}
+	return unverifiableOperationPersistence(extraction.Operations, reason)
+}
+
+func unverifiablePostPolicyPersistence(
+	extraction *extractionTrace,
+	reason string,
+) []extractionPersistenceTrace {
+	if extraction == nil || !extraction.PostPolicyObserved ||
+		len(extraction.PostPolicyOperations) == 0 {
+		return nil
+	}
+	return unverifiableOperationPersistence(
+		extraction.PostPolicyOperations,
+		reason,
+	)
+}
+
+func unverifiableOperationPersistence(
+	operations []extractionOperation,
+	reason string,
+) []extractionPersistenceTrace {
 	out := make(
 		[]extractionPersistenceTrace,
-		len(extraction.Operations),
+		len(operations),
 	)
-	for index, operation := range extraction.Operations {
+	for index, operation := range operations {
 		out[index] = extractionPersistenceTrace{
 			OperationIndex: index,
 			Stage:          operation.Stage,
@@ -68,13 +89,53 @@ func traceExtractionPersistence(
 	if extraction == nil || len(extraction.Operations) == 0 {
 		return nil
 	}
+	return traceOperationPersistence(
+		extraction.Operations,
+		before,
+		after,
+		changed,
+		beforeSnapshotTruncated,
+		afterSnapshotTruncated,
+	)
+}
+
+func tracePostPolicyPersistence(
+	extraction *extractionTrace,
+	before []memorySnapshot,
+	after []memorySnapshot,
+	changed []memorySnapshot,
+	beforeSnapshotTruncated bool,
+	afterSnapshotTruncated bool,
+) []extractionPersistenceTrace {
+	if extraction == nil || !extraction.PostPolicyObserved ||
+		len(extraction.PostPolicyOperations) == 0 {
+		return nil
+	}
+	return traceOperationPersistence(
+		extraction.PostPolicyOperations,
+		before,
+		after,
+		changed,
+		beforeSnapshotTruncated,
+		afterSnapshotTruncated,
+	)
+}
+
+func traceOperationPersistence(
+	operations []extractionOperation,
+	before []memorySnapshot,
+	after []memorySnapshot,
+	changed []memorySnapshot,
+	beforeSnapshotTruncated bool,
+	afterSnapshotTruncated bool,
+) []extractionPersistenceTrace {
 	out := make(
 		[]extractionPersistenceTrace,
 		0,
-		len(extraction.Operations),
+		len(operations),
 	)
 	consumedChanges := make([]bool, len(changed))
-	for index, operation := range extraction.Operations {
+	for index, operation := range operations {
 		result := extractionPersistenceTrace{
 			OperationIndex: index,
 			Stage:          operation.Stage,
@@ -145,7 +206,18 @@ func traceAddOrUpdatePersistence(
 		result.Reason = "snapshot_changed"
 		result.ObservedMemoryID = snapshot.ID
 		result.ObservedAttribution = snapshot.AttributedTo
-		if _, existed := findSnapshotByID(before, snapshot.ID); existed {
+		if operation.Type == extractor.OperationUpdate {
+			if _, targetExisted := findSnapshotByID(
+				before,
+				strings.TrimSpace(operation.MemoryID),
+			); targetExisted {
+				result.Effect = string(extractor.OperationUpdate)
+			} else if !beforeSnapshotTruncated {
+				result.Effect = string(extractor.OperationAdd)
+			}
+		} else if _, existed := findSnapshotByID(
+			before, snapshot.ID,
+		); existed {
 			result.Effect = string(extractor.OperationUpdate)
 		} else if !beforeSnapshotTruncated {
 			result.Effect = string(extractor.OperationAdd)

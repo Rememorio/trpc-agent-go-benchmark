@@ -245,7 +245,7 @@ func (e *AutoEvaluator) seedMemories(
 	seeds := make([]autoExtractionSeed, 0, len(sample.Conversation))
 	for _, sess := range sample.Conversation {
 		sessionID := fmt.Sprintf("seed-%s", sess.SessionID)
-		msgs := sessionMessages(sess, sample.Speakers)
+		msgs := sessionMessages(sess)
 		seedCtx := ctx
 		if t, ok := parseSessionDate(sess.SessionDate); ok {
 			seedCtx = extractor.WithReferenceDate(seedCtx, t)

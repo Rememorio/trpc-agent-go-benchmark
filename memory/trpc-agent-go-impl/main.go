@@ -195,7 +195,8 @@ var (
 	flagPGVectorUpdatePolicy = flag.String(
 		"pgvector-update-policy",
 		"reconcile",
-		"PGVector auto-memory update policy: reconcile or add-only",
+		"PGVector auto-memory update policy: reconcile, "+
+			"history-preserving, or add-only",
 	)
 	flagPGVectorAssistantResultExtraction = flag.Bool(
 		"pgvector-assistant-result-extraction",
@@ -232,6 +233,11 @@ var (
 		"lme-analyze-results",
 		"",
 		"Analyze an existing LongMemEval results.json and write analysis files",
+	)
+	flagLMEAuditResults = flag.String(
+		"lme-audit-results",
+		"",
+		"Audit an existing LongMemEval results.json against its source dataset",
 	)
 	flagLMEHydrateLogicalUsageResults = flag.String(
 		"lme-hydrate-logical-usage-results",
@@ -367,7 +373,7 @@ func main() {
 	validateFlags()
 
 	ctx := context.Background()
-	if isLongMemEvalDatasetFormat() {
+	if isLongMemEvalInvocation() {
 		if err := runLongMemEvalMemory(ctx); err != nil {
 			log.Fatalf("LongMemEval memory evaluation failed: %v", err)
 		}
@@ -472,6 +478,13 @@ func validateFlags() {
 
 func isLongMemEvalDatasetFormat() bool {
 	return strings.EqualFold(strings.TrimSpace(*flagDatasetFormat), datasetFormatLongMemEval)
+}
+
+func isLongMemEvalInvocation() bool {
+	if isLongMemEvalDatasetFormat() {
+		return true
+	}
+	return isLongMemEvalResultOperation()
 }
 
 func parseMemoryBackends(backendsStr string) []string {

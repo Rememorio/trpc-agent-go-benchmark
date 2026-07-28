@@ -39,8 +39,8 @@ const (
 
 	// These versions are part of the experiment contract. Bump the relevant
 	// version whenever replay, prompting, or judging semantics change.
-	lmeProtocolVersion             = "lme-memory-role-round-v3"
-	lmeAttributionProtocolVersion  = "lme-memory-attribution-v1"
+	lmeProtocolVersion             = "lme-memory-role-round-v4"
+	lmeAttributionProtocolVersion  = "lme-memory-attribution-v2"
 	lmeAnswerPromptVersion         = "lme-memory-answer-v14"
 	lmeAnswerRetryPromptVersion    = "lme-memory-answer-repair-v6"
 	lmeAnswerRetryStrategy         = "forced-answer-tool"

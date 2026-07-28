@@ -21,8 +21,18 @@ func TestAssistantResultUpdatePolicy(t *testing.T) {
 	}
 	if got := assistantResultUpdatePolicy(
 		pgvectorUpdatePolicyReconcile, true,
-	); got != assistantResultPolicyPreserving {
+	); got != string(pgvectorUpdatePolicyReconcile) {
 		t.Fatalf("reconcile result policy = %q", got)
+	}
+	if got := assistantResultUpdatePolicy(
+		pgvectorUpdatePolicyConservative, true,
+	); got != assistantResultPolicyPreserving {
+		t.Fatalf("conservative result policy = %q", got)
+	}
+	if got := assistantResultUpdatePolicy(
+		pgvectorUpdatePolicyHistoryPreserving, true,
+	); got != assistantResultPolicyPreserving {
+		t.Fatalf("history-preserving result policy = %q", got)
 	}
 	if got := assistantResultUpdatePolicy(
 		pgvectorUpdatePolicyAddOnly, true,
@@ -45,6 +55,8 @@ func TestCurrentPGVectorExtractionConfig(t *testing.T) {
 	}{
 		{input: "", want: pgvectorUpdatePolicyReconcile},
 		{input: " RECONCILE ", want: pgvectorUpdatePolicyReconcile},
+		{input: " CONSERVATIVE ", want: pgvectorUpdatePolicyConservative},
+		{input: " HISTORY-PRESERVING ", want: pgvectorUpdatePolicyHistoryPreserving},
 		{input: "ADD-ONLY", want: pgvectorUpdatePolicyAddOnly},
 	} {
 		*flagPGVectorUpdatePolicy = test.input
@@ -68,7 +80,7 @@ func TestCurrentPGVectorExtractionConfig(t *testing.T) {
 	}
 	*flagPGVectorUpdatePolicy = "preserve-history"
 	if _, err := currentPGVectorExtractionConfig(); err == nil {
-		t.Fatal("expected removed preserve-history policy error")
+		t.Fatal("expected misspelled history-preserving policy error")
 	}
 }
 

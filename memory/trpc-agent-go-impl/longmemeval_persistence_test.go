@@ -186,6 +186,58 @@ func TestUnverifiableExtractionPersistence(t *testing.T) {
 		got[0].Reason != "snapshot_read_error" {
 		t.Fatalf("unverifiable persistence = %+v", got)
 	}
+
+	extraction.PostPolicyObserved = true
+	extraction.PostPolicyOperations = []extractionOperation{{
+		Stage:  "assistant_result",
+		Type:   extractor.OperationAdd,
+		Memory: "Assistant result.",
+	}}
+	postPolicy := unverifiablePostPolicyPersistence(
+		extraction,
+		"snapshot_read_error",
+	)
+	if len(postPolicy) != 1 ||
+		postPolicy[0].Stage != "assistant_result" ||
+		postPolicy[0].Type != extractor.OperationAdd ||
+		postPolicy[0].Reason != "snapshot_read_error" {
+		t.Fatalf("post-policy unverifiable persistence = %+v", postPolicy)
+	}
+}
+
+func TestTracePostPolicyPersistenceRecognizesRotatedUpdate(t *testing.T) {
+	t.Parallel()
+
+	extraction := &extractionTrace{
+		PostPolicyObserved: true,
+		PostPolicyOperations: []extractionOperation{{
+			Stage:    "primary",
+			Type:     extractor.OperationUpdate,
+			MemoryID: "old-id",
+			Memory:   "Updated value.",
+		}},
+	}
+	before := []memorySnapshot{{
+		ID: "old-id", Memory: "Old value.",
+	}}
+	after := []memorySnapshot{{
+		ID: "new-id", Memory: "Updated value.",
+	}}
+	got := tracePostPolicyPersistence(
+		extraction,
+		before,
+		after,
+		diffSnapshots(before, after),
+		false,
+		false,
+	)
+	if len(got) != 1 ||
+		got[0].Status != lmePersistenceObserved ||
+		got[0].Effect != string(extractor.OperationUpdate) ||
+		got[0].TargetMemoryID != "old-id" ||
+		got[0].ObservedMemoryID != "new-id" {
+		t.Fatalf("rotated update persistence = %+v", got)
+	}
 }
 
 func TestTraceExtractionPersistenceConservativeReasons(t *testing.T) {
