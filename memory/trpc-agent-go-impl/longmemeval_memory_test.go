@@ -936,7 +936,7 @@ func TestLMETracingExtractorStagesFallback(t *testing.T) {
 	}
 }
 
-func TestMem0OSSIngestRetriesProviderRateLimit(t *testing.T) {
+func TestMem0OSSIngestRetriesProviderBadRequest(t *testing.T) {
 	t.Parallel()
 
 	var attempts atomic.Int32
@@ -948,7 +948,7 @@ func TestMem0OSSIngestRetriesProviderRateLimit(t *testing.T) {
 		if attempt == 1 {
 			w.WriteHeader(http.StatusBadGateway)
 			_, _ = w.Write([]byte(
-				`{"detail":"Provider rate limit hit.","code":"provider_rate_limited"}`,
+				`{"detail":"Provider rejected the request.","code":"provider_bad_request"}`,
 			))
 			return
 		}
@@ -1473,11 +1473,16 @@ func TestRetryableMem0Response(t *testing.T) {
 	if !isRetryableMem0Response(http.StatusTooManyRequests, nil) {
 		t.Fatal("status 429 should be retryable")
 	}
-	providerRateLimit := []byte(
-		`{"detail":"Provider rate limit hit.","code":"provider_rate_limited"}`,
-	)
-	if !isRetryableMem0Response(http.StatusBadGateway, providerRateLimit) {
-		t.Fatal("wrapped provider rate limit should be retryable")
+	for _, code := range []string{
+		"provider_rate_limited",
+		"provider_timeout",
+		"provider_unavailable",
+		"provider_bad_request",
+	} {
+		body := []byte(fmt.Sprintf(`{"code":%q}`, code))
+		if !isRetryableMem0Response(http.StatusBadGateway, body) {
+			t.Fatalf("wrapped provider error %q should be retryable", code)
+		}
 	}
 	for _, status := range []int{
 		http.StatusBadRequest,
@@ -1500,6 +1505,11 @@ func TestRetryableMem0Response(t *testing.T) {
 		`mem0 api request failed: status=502 body={"code":"other"}`,
 	)) {
 		t.Fatal("unrelated gateway error should not be retryable")
+	}
+	if isRetryableMem0Error(errors.New(
+		`mem0 api request failed: status=502 body={"code":"provider_auth_failed"}`,
+	)) {
+		t.Fatal("provider authentication error should not be retryable")
 	}
 }
 

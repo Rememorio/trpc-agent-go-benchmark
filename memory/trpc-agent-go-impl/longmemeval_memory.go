@@ -4847,7 +4847,7 @@ func lmeObservationDate(date string) (string, bool) {
 
 func isRetryableMem0Response(status int, body []byte) bool {
 	return status == http.StatusTooManyRequests ||
-		mem0ProviderRateLimited(body)
+		mem0ProviderErrorRetryable(body)
 }
 
 func isRetryableMem0Error(err error) bool {
@@ -4863,17 +4863,27 @@ func isRetryableMem0Error(err error) bool {
 	if bodyIndex < 0 {
 		return false
 	}
-	return mem0ProviderRateLimited(
+	return mem0ProviderErrorRetryable(
 		[]byte(message[bodyIndex+len(bodyMarker):]),
 	)
 }
 
-func mem0ProviderRateLimited(body []byte) bool {
+func mem0ProviderErrorRetryable(body []byte) bool {
 	var payload struct {
 		Code string `json:"code"`
 	}
-	return json.Unmarshal(body, &payload) == nil &&
-		payload.Code == "provider_rate_limited"
+	if json.Unmarshal(body, &payload) != nil {
+		return false
+	}
+	switch payload.Code {
+	case "provider_rate_limited",
+		"provider_timeout",
+		"provider_unavailable",
+		"provider_bad_request":
+		return true
+	default:
+		return false
+	}
 }
 
 func mem0RequestRetryDelay(attempt int) time.Duration {
