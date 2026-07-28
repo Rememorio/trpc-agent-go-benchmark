@@ -2671,6 +2671,54 @@ func TestResolveLongMemEvalJudgeDoesNotCacheIncompleteConsensus(t *testing.T) {
 	}
 }
 
+func TestResolveLongMemEvalJudgeRequireHitBlocksProviderCall(t *testing.T) {
+	t.Parallel()
+
+	cache, err := openLongMemEvalJudgeCache("")
+	if err != nil {
+		t.Fatalf("open cache: %v", err)
+	}
+	cache.requireHit = true
+	llm := &queuedJudgeModel{responses: []string{"VERDICT: yes"}}
+	cr := &caseResult{
+		QuestionType: "single-session-user",
+		Question:     "Which option?",
+		Answer:       "Option B",
+	}
+	_, _, err = resolveLongMemEvalJudge(
+		context.Background(),
+		llm,
+		"judge-model",
+		"glm",
+		cr,
+		&backendResult{Answer: "Option B"},
+		1,
+		cache,
+	)
+	if err == nil || !strings.Contains(err.Error(), "judge cache miss") {
+		t.Fatalf("require-hit error = %v", err)
+	}
+	if llm.calls != 0 || cache.Hits() != 0 || cache.Misses() != 1 {
+		t.Fatalf(
+			"provider calls=%d cache hits=%d misses=%d",
+			llm.calls,
+			cache.Hits(),
+			cache.Misses(),
+		)
+	}
+}
+
+func TestConfiguredLongMemEvalJudgeCacheRequireHitNeedsPath(t *testing.T) {
+	restoreStringFlag(t, flagLMEJudgeCache, "")
+	restoreBoolFlag(t, flagLMEJudgeCacheRequireHit, true)
+
+	_, err := openConfiguredLongMemEvalJudgeCache()
+	if err == nil ||
+		!strings.Contains(err.Error(), "requires -lme-judge-cache") {
+		t.Fatalf("require-hit configuration error = %v", err)
+	}
+}
+
 func TestJudgeLongMemEvalResultFailsAfterCheckpointingIncompleteConsensus(t *testing.T) {
 	t.Parallel()
 

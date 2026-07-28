@@ -294,10 +294,20 @@ var (
 		"",
 		"Shared content-addressed LongMemEval judge cache file",
 	)
+	flagLMEJudgeCacheRequireHit = flag.Bool(
+		"lme-judge-cache-require-hit",
+		false,
+		"Fail before a judge provider call when a LongMemEval cache entry is missing",
+	)
 	flagLMEAnswerCache = flag.String(
 		"lme-answer-cache",
 		"",
 		"Shared content-addressed LongMemEval answer cache file",
+	)
+	flagLMEAnswerCacheRequireHit = flag.Bool(
+		"lme-answer-cache-require-hit",
+		false,
+		"Fail before an answer provider call when a LongMemEval cache entry is missing",
 	)
 	flagLMEModelResponseCache = flag.String(
 		"lme-model-response-cache",

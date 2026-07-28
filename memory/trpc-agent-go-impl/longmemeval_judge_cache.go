@@ -57,9 +57,26 @@ type longMemEvalJudgeCache struct {
 	path                    string
 	file                    lmeJudgeCacheFile
 	persistent              map[string]struct{}
+	requireHit              bool
 	hits                    int
+	misses                  int
 	logicalUsageHits        int
 	logicalUsageMissingHits int
+}
+
+func openConfiguredLongMemEvalJudgeCache() (*longMemEvalJudgeCache, error) {
+	path := strings.TrimSpace(*flagLMEJudgeCache)
+	if path == "" && *flagLMEJudgeCacheRequireHit {
+		return nil, fmt.Errorf(
+			"-lme-judge-cache-require-hit requires -lme-judge-cache",
+		)
+	}
+	cache, err := openLongMemEvalJudgeCache(path)
+	if err != nil {
+		return nil, err
+	}
+	cache.requireHit = *flagLMEJudgeCacheRequireHit
+	return cache, nil
 }
 
 func openLongMemEvalJudgeCache(path string) (*longMemEvalJudgeCache, error) {
@@ -140,15 +157,28 @@ func (c *longMemEvalJudgeCache) Hits() int {
 	return c.hits
 }
 
+func (c *longMemEvalJudgeCache) Misses() int {
+	if c == nil {
+		return 0
+	}
+	return c.misses
+}
+
+func (c *longMemEvalJudgeCache) RequireHit() bool {
+	return c != nil && c.requireHit
+}
+
 func (c *longMemEvalJudgeCache) Lookup(key string) (*lmeJudgeResult, string, bool) {
 	if c == nil {
 		return nil, "", false
 	}
 	entry, ok := c.file.Entries[key]
 	if !ok {
+		c.misses++
 		return nil, "", false
 	}
 	if !completeLongMemEvalJudgeConsensus(&entry.Judge) {
+		c.misses++
 		return nil, "", false
 	}
 	source := lmeJudgeVerdictSourceCurrentRun
@@ -228,6 +258,13 @@ func resolveLongMemEvalJudge(
 	}
 	if judge, source, ok := cache.Lookup(key); ok {
 		return judge, source, nil
+	}
+	if cache.RequireHit() {
+		return nil, "", fmt.Errorf(
+			"LongMemEval judge cache miss for key %s with "+
+				"-lme-judge-cache-require-hit",
+			key,
+		)
 	}
 	if shouldReuseLongMemEvalJudge(br, modelName, runs, key) {
 		if br.Judge.VerdictSource == "" {
@@ -413,8 +450,10 @@ func clearLongMemEvalJudgeRunMetadata(metadata map[string]any) {
 		"judge_cache_shared",
 		"judge_cache_ledger_id",
 		"judge_cache_initial_entries",
+		"judge_cache_require_hit",
 		"judge_cache_final_entries",
 		"judge_cache_hits",
+		"judge_cache_misses",
 		"judge_cache_logical_usage_hits",
 		"judge_cache_logical_usage_missing_hits",
 		"judged_at",

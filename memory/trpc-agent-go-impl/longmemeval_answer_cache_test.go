@@ -82,6 +82,54 @@ func TestResolveLongMemEvalAnswerDeduplicatesIdenticalPrompts(t *testing.T) {
 	}
 }
 
+func TestResolveLongMemEvalAnswerRequireHitBlocksProviderCall(t *testing.T) {
+	t.Parallel()
+
+	cache, err := openLongMemEvalAnswerCache("")
+	if err != nil {
+		t.Fatalf("open cache: %v", err)
+	}
+	cache.requireHit = true
+	llm := &queuedJudgeModel{responses: []string{"Option B"}}
+	inst := &lmeInstance{
+		QuestionID: "q-answer-cache-required",
+		Question:   "Which option?",
+		Answer:     flexString("Option B"),
+	}
+	_, _, _, err = resolveLongMemEvalAnswer(
+		context.Background(),
+		llm,
+		"answer-model",
+		"glm",
+		inst,
+		[]memoryHit{{Memory: "Option B was selected."}},
+		cache,
+		"",
+	)
+	if err == nil || !strings.Contains(err.Error(), "answer cache miss") {
+		t.Fatalf("require-hit error = %v", err)
+	}
+	if llm.calls != 0 || cache.Hits() != 0 || cache.Misses() != 1 {
+		t.Fatalf(
+			"provider calls=%d cache hits=%d misses=%d",
+			llm.calls,
+			cache.Hits(),
+			cache.Misses(),
+		)
+	}
+}
+
+func TestConfiguredLongMemEvalAnswerCacheRequireHitNeedsPath(t *testing.T) {
+	restoreStringFlag(t, flagLMEAnswerCache, "")
+	restoreBoolFlag(t, flagLMEAnswerCacheRequireHit, true)
+
+	_, err := openConfiguredLongMemEvalAnswerCache()
+	if err == nil ||
+		!strings.Contains(err.Error(), "requires -lme-answer-cache") {
+		t.Fatalf("require-hit configuration error = %v", err)
+	}
+}
+
 func TestLongMemEvalAnswerCachePersists(t *testing.T) {
 	t.Parallel()
 

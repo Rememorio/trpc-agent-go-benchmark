@@ -2392,7 +2392,7 @@ func judgeLongMemEvalResults(ctx context.Context, path, outputDir string) error 
 	}
 	modelName := getEvalModelName()
 	modelVariant := getModelVariant()
-	judgeCache, err := openLongMemEvalJudgeCache(*flagLMEJudgeCache)
+	judgeCache, err := openConfiguredLongMemEvalJudgeCache()
 	if err != nil {
 		return err
 	}
@@ -2450,6 +2450,7 @@ func judgeLongMemEvalResult(
 		delete(result.Metadata, "judge_cache_ledger_id")
 	}
 	result.Metadata["judge_cache_initial_entries"] = judgeCache.Len()
+	result.Metadata["judge_cache_require_hit"] = judgeCache.RequireHit()
 	result.Metadata["judged_at"] = time.Now().UTC().Format(time.RFC3339)
 	result.Metadata["judge_note"] = "LLM semantic correctness judge adapted from the official LongMemEval QA evaluator; only explicit final VERDICT votes are accepted, requested runs count valid votes with bounded retries, multiple votes use strict majority, and identical judge inputs reuse one content-addressed verdict while retaining logical usage separately from provider usage."
 	result.Metadata["answer_scoring"] = "raw model output; no retrieval-assisted answer post-processing"
@@ -2556,6 +2557,7 @@ func updateLongMemEvalJudgeCacheMetadata(
 	}
 	metadata["judge_cache_final_entries"] = cache.Len()
 	metadata["judge_cache_hits"] = cache.Hits()
+	metadata["judge_cache_misses"] = cache.Misses()
 	logicalUsageHits, logicalUsageMissingHits := 0, 0
 	if cache != nil {
 		logicalUsageHits = cache.logicalUsageHits

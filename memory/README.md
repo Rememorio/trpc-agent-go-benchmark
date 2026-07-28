@@ -825,6 +825,7 @@ LongMemEval-specific options:
 | `-lme-model-call-timeout` | 5m      | Model timeout; mem0 OSS allows 1m overhead   |
 | `-lme-answer`            | true    | Generate answers from retrieved memories     |
 | `-lme-answer-cache`      |         | Shared content-addressed answer cache         |
+| `-lme-answer-cache-require-hit` | false | Fail before an uncached answer provider call |
 | `-lme-model-response-cache` |      | Persistent primary-run model response ledger  |
 | `-lme-model-response-cache-require-hit` | false | Fail before an uncached model provider call |
 | `-lme-embedding-response-cache` |  | Persistent exact-vector embedding ledger      |
@@ -841,6 +842,7 @@ LongMemEval-specific options:
 | `-lme-judge-results`     |         | Add semantic judge results to `results.json` |
 | `-lme-judge-runs`        | 1       | Odd number of independent semantic votes     |
 | `-lme-judge-cache`       |         | Shared content-addressed judge verdict cache  |
+| `-lme-judge-cache-require-hit` | false | Fail before an uncached judge provider call |
 | `-lme-analyze-results`   |         | Analyze one saved LongMemEval `results.json` |
 | `-lme-compare-results`   |         | Compare baseline,candidate `results.json`    |
 | `-lme-compare-replicates` |        | Aggregate a preregistered replicate manifest |

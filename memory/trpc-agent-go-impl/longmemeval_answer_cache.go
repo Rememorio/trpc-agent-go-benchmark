@@ -70,16 +70,30 @@ type longMemEvalAnswerCache struct {
 	path                    string
 	file                    lmeAnswerCacheFile
 	persistent              map[string]struct{}
+	requireHit              bool
 	hits                    int
+	misses                  int
 	logicalUsageHits        int
 	logicalUsageMissingHits int
 }
 
 func openConfiguredLongMemEvalAnswerCache() (*longMemEvalAnswerCache, error) {
-	if strings.TrimSpace(*flagLMEAnswerCache) == "" {
+	path := strings.TrimSpace(*flagLMEAnswerCache)
+	if path == "" {
+		if *flagLMEAnswerCacheRequireHit {
+			return nil, fmt.Errorf(
+				"-lme-answer-cache-require-hit requires " +
+					"-lme-answer-cache",
+			)
+		}
 		return nil, nil
 	}
-	return openLongMemEvalAnswerCache(*flagLMEAnswerCache)
+	cache, err := openLongMemEvalAnswerCache(path)
+	if err != nil {
+		return nil, err
+	}
+	cache.requireHit = *flagLMEAnswerCacheRequireHit
+	return cache, nil
 }
 
 func openLongMemEvalAnswerCache(path string) (*longMemEvalAnswerCache, error) {
@@ -162,6 +176,17 @@ func (c *longMemEvalAnswerCache) Hits() int {
 	return c.hits
 }
 
+func (c *longMemEvalAnswerCache) Misses() int {
+	if c == nil {
+		return 0
+	}
+	return c.misses
+}
+
+func (c *longMemEvalAnswerCache) RequireHit() bool {
+	return c != nil && c.requireHit
+}
+
 func (c *longMemEvalAnswerCache) Lookup(
 	key string,
 ) (lmeAnswerResolution, bool) {
@@ -170,6 +195,7 @@ func (c *longMemEvalAnswerCache) Lookup(
 	}
 	entry, ok := c.file.Entries[key]
 	if !ok {
+		c.misses++
 		return lmeAnswerResolution{}, false
 	}
 	source := lmeAnswerSourceCurrentRun
@@ -274,6 +300,13 @@ func resolveTrackedLongMemEvalAnswer(
 	}
 	if result, ok := cache.Lookup(key); ok {
 		return result, nil
+	}
+	if cache.RequireHit() {
+		return lmeAnswerResolution{}, fmt.Errorf(
+			"LongMemEval answer cache miss for key %s with "+
+				"-lme-answer-cache-require-hit",
+			key,
+		)
 	}
 	if existingAnswer = strings.TrimSpace(existingAnswer); existingAnswer != "" && cache != nil {
 		result := lmeAnswerResolution{
@@ -558,6 +591,7 @@ func initializeLongMemEvalAnswerCacheMetadata(
 		metadata["answer_cache_ledger_id"] = ledgerID
 	}
 	metadata["answer_cache_initial_entries"] = cache.Len()
+	metadata["answer_cache_require_hit"] = cache.RequireHit()
 	metadata["answer_cache_note"] = "Identical complete answer prompts share one content-addressed answer. Cache hits contribute zero provider usage while replaying cached model-call traces and logical token usage."
 }
 
@@ -570,6 +604,7 @@ func updateLongMemEvalAnswerCacheMetadata(
 	}
 	metadata["answer_cache_final_entries"] = cache.Len()
 	metadata["answer_cache_hits"] = cache.Hits()
+	metadata["answer_cache_misses"] = cache.Misses()
 	metadata["answer_cache_logical_usage_hits"] = cache.logicalUsageHits
 	metadata["answer_cache_logical_usage_missing_hits"] =
 		cache.logicalUsageMissingHits
@@ -581,8 +616,10 @@ func clearLongMemEvalAnswerCacheMetadata(metadata map[string]any) {
 		"answer_cache_shared",
 		"answer_cache_ledger_id",
 		"answer_cache_initial_entries",
+		"answer_cache_require_hit",
 		"answer_cache_final_entries",
 		"answer_cache_hits",
+		"answer_cache_misses",
 		"answer_cache_logical_usage_hits",
 		"answer_cache_logical_usage_missing_hits",
 		"answer_cache_note",
