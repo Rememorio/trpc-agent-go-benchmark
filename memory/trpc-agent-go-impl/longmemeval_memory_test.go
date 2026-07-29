@@ -1428,6 +1428,27 @@ func TestValidateLongMemEvalIngestionTableIsolation(t *testing.T) {
 	); err != nil {
 		t.Fatalf("isolated PGVector ingestion failed validation: %v", err)
 	}
+
+	maxSuffixLength := lmePGVectorMaxTableNameLength -
+		len(lmePGVectorTableBase)
+	*flagTableSuffix = strings.Repeat("_", maxSuffixLength)
+	if err := validateLongMemEvalIngestionTableIsolation(
+		[]string{"pgvector"},
+	); err != nil {
+		t.Fatalf("maximum-length PGVector table name failed validation: %v", err)
+	}
+
+	*flagTableSuffix += "_"
+	err := validateLongMemEvalIngestionTableIsolation([]string{"pgvector"})
+	if err == nil || !strings.Contains(err.Error(), "too long") {
+		t.Fatalf("overlong PGVector table name error = %v", err)
+	}
+
+	*flagTableSuffix = "_invalid-suffix"
+	err = validateLongMemEvalIngestionTableIsolation([]string{"pgvector"})
+	if err == nil || !strings.Contains(err.Error(), "is invalid") {
+		t.Fatalf("invalid PGVector table name error = %v", err)
+	}
 }
 
 func TestPrepareLongMemEvalMem0Failures(t *testing.T) {

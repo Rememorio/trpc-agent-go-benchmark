@@ -48,7 +48,9 @@ const (
 	lmeAppName                = "lme-memory"
 	lmeAgentName              = "lme-memory-agent"
 
-	lmePGVectorTableBase     = "lme_memory_eval"
+	lmePGVectorTableBase          = "lme_memory_eval"
+	lmePGVectorMaxTableNameLength = 63
+
 	defaultMem0Host          = "http://localhost:8888"
 	lmeMem0RequestRetries    = 8
 	lmeMem0InitialRetryDelay = time.Second
@@ -65,6 +67,8 @@ const (
 	lmeAutoMemoryLastErrorStateKey = "memory:last_extract_error"
 	lmeAnswerRepairToolName        = "submit_longmemeval_answer"
 )
+
+var lmePGVectorTableNameRE = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 
 type lmeTurn struct {
 	Role      string `json:"role"`
@@ -865,12 +869,29 @@ func validateLongMemEvalIngestionTableIsolation(backends []string) error {
 	if !containsString(backends, "pgvector") {
 		return nil
 	}
-	if strings.TrimSpace(*flagTableSuffix) != "" {
-		return nil
+	if strings.TrimSpace(*flagTableSuffix) == "" {
+		return errors.New(
+			"LongMemEval PGVector ingestion requires an explicit -table-suffix",
+		)
 	}
-	return errors.New(
-		"LongMemEval PGVector ingestion requires an explicit -table-suffix",
-	)
+	tableName := tableNameWithSuffix(lmePGVectorTableBase)
+	if len(tableName) > lmePGVectorMaxTableNameLength {
+		return fmt.Errorf(
+			"LongMemEval PGVector table name %q is too long: %d characters "+
+				"(max %d); shorten -table-suffix",
+			tableName,
+			len(tableName),
+			lmePGVectorMaxTableNameLength,
+		)
+	}
+	if !lmePGVectorTableNameRE.MatchString(tableName) {
+		return fmt.Errorf(
+			"LongMemEval PGVector table name %q is invalid: "+
+				"use only letters, numbers, and underscores",
+			tableName,
+		)
+	}
+	return nil
 }
 
 func prepareLongMemEvalMem0(
