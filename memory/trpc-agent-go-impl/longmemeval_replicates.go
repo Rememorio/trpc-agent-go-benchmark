@@ -32,6 +32,8 @@ const (
 	lmeReplicateKindIndependentReanswer = "independent-reanswer"
 	lmeReplicateMemoryCachesIndependent = "independent"
 	lmeReplicateMemoryCachesShared      = "shared"
+	lmeReplicateScopeThreeArmPromotion  = "three-arm-promotion"
+	lmeReplicateScopePairwise           = "pairwise-nonregression"
 
 	lmeReplicateArmPGVectorMain      = "pgvector_main"
 	lmeReplicateArmMem0OSS           = "mem0_oss"
@@ -41,6 +43,7 @@ const (
 type lmeReplicateComparisonManifest struct {
 	SchemaVersion           int                          `json:"schema_version"`
 	MemoryResponseCacheMode string                       `json:"memory_response_cache_mode,omitempty"`
+	ComparisonScope         string                       `json:"comparison_scope,omitempty"`
 	Replicates              []lmeReplicateComparisonPair `json:"replicates"`
 	Gate                    lmeReplicatePromotionGate    `json:"gate"`
 }
@@ -82,6 +85,7 @@ type lmeReplicateComparison struct {
 	CreatedAt               string                      `json:"created_at"`
 	ManifestSHA256          string                      `json:"manifest_sha256"`
 	MemoryResponseCacheMode string                      `json:"memory_response_cache_mode"`
+	ComparisonScope         string                      `json:"comparison_scope"`
 	ReplicateCount          int                         `json:"replicate_count"`
 	Inputs                  []lmeReplicateInputAudit    `json:"inputs"`
 	Arms                    map[string]*lmeReplicateArm `json:"arms"`
@@ -533,6 +537,16 @@ func validateLongMemEvalReplicateManifest(manifest lmeReplicateComparisonManifes
 			lmeReplicateMemoryCachesShared,
 		)
 	}
+	if manifest.ComparisonScope != "" &&
+		manifest.ComparisonScope != lmeReplicateScopeThreeArmPromotion &&
+		manifest.ComparisonScope != lmeReplicateScopePairwise {
+		return fmt.Errorf(
+			"LongMemEval replicate comparison scope is %q, want %q or %q",
+			manifest.ComparisonScope,
+			lmeReplicateScopeThreeArmPromotion,
+			lmeReplicateScopePairwise,
+		)
+	}
 	seen := make(map[string]bool, len(manifest.Replicates))
 	for index, replicate := range manifest.Replicates {
 		if strings.TrimSpace(replicate.Name) == "" || seen[replicate.Name] {
@@ -791,6 +805,7 @@ func aggregateLongMemEvalReplicates(
 		CreatedAt:               time.Now().UTC().Format(time.RFC3339),
 		ManifestSHA256:          manifestDigest,
 		MemoryResponseCacheMode: manifest.MemoryResponseCacheMode,
+		ComparisonScope:         manifest.ComparisonScope,
 		ReplicateCount:          len(pairs),
 		Inputs:                  make([]lmeReplicateInputAudit, 0, len(pairs)),
 		Arms:                    make(map[string]*lmeReplicateArm, 3),
@@ -798,6 +813,9 @@ func aggregateLongMemEvalReplicates(
 	if comparison.MemoryResponseCacheMode == "" {
 		comparison.MemoryResponseCacheMode =
 			lmeReplicateMemoryCachesIndependent
+	}
+	if comparison.ComparisonScope == "" {
+		comparison.ComparisonScope = lmeReplicateScopeThreeArmPromotion
 	}
 	for _, pair := range pairs {
 		comparison.Inputs = append(comparison.Inputs, lmeReplicateInputAudit{
@@ -812,11 +830,18 @@ func aggregateLongMemEvalReplicates(
 		backend   string
 		candidate bool
 	}
-	bindings := []armBinding{
-		{name: lmeReplicateArmPGVectorMain, backend: "pgvector"},
-		{name: lmeReplicateArmMem0OSS, backend: "mem0"},
-		{name: lmeReplicateArmPGVectorCandidate, backend: "pgvector", candidate: true},
+	bindings := []armBinding{{
+		name: lmeReplicateArmPGVectorMain, backend: "pgvector",
+	}}
+	if comparison.ComparisonScope == lmeReplicateScopeThreeArmPromotion {
+		bindings = append(bindings, armBinding{
+			name: lmeReplicateArmMem0OSS, backend: "mem0",
+		})
 	}
+	bindings = append(bindings, armBinding{
+		name:    lmeReplicateArmPGVectorCandidate,
+		backend: "pgvector", candidate: true,
+	})
 	caseMap := make(map[string]*lmeReplicateCase)
 	caseOrder := make([]string, 0)
 	for _, binding := range bindings {
@@ -845,10 +870,11 @@ func aggregateLongMemEvalReplicates(
 	for _, id := range caseOrder {
 		comparison.Cases = append(comparison.Cases, *caseMap[id])
 	}
-	for _, baselineArm := range []string{
-		lmeReplicateArmPGVectorMain,
-		lmeReplicateArmMem0OSS,
-	} {
+	baselineArms := []string{lmeReplicateArmPGVectorMain}
+	if comparison.ComparisonScope == lmeReplicateScopeThreeArmPromotion {
+		baselineArms = append(baselineArms, lmeReplicateArmMem0OSS)
+	}
+	for _, baselineArm := range baselineArms {
 		pairwise, err := analyzeLongMemEvalPairwise(
 			comparison.Cases,
 			lmeReplicateArmPGVectorCandidate,
@@ -1556,7 +1582,11 @@ func evaluateLongMemEvalReplicateGate(
 	main := comparison.Arms[lmeReplicateArmPGVectorMain]
 	mem0 := comparison.Arms[lmeReplicateArmMem0OSS]
 	candidate := comparison.Arms[lmeReplicateArmPGVectorCandidate]
-	for _, arm := range []*lmeReplicateArm{main, mem0, candidate} {
+	arms := []*lmeReplicateArm{main, candidate}
+	if comparison.ComparisonScope == lmeReplicateScopeThreeArmPromotion {
+		arms = []*lmeReplicateArm{main, mem0, candidate}
+	}
+	for _, arm := range arms {
 		result.add(
 			lmeReplicateGateDimensionIntegrity,
 			arm.Name+"_cases", arm.Cases == gate.ExpectedCases,
@@ -1581,9 +1611,15 @@ func evaluateLongMemEvalReplicateGate(
 				arm.MemoryEmbeddingUsage.ProviderErrors),
 			"reported for every case with zero missing calls and provider errors")
 	}
-	addLongMemEvalReplicateIngestionChecks(
-		&result, comparison, main, mem0, candidate,
-	)
+	if comparison.ComparisonScope == lmeReplicateScopePairwise {
+		addLongMemEvalReplicateIngestionChecks(
+			&result, comparison, main, candidate,
+		)
+	} else {
+		addLongMemEvalReplicateIngestionChecks(
+			&result, comparison, main, mem0, candidate,
+		)
+	}
 	if longMemEvalReplicateLatencyGateEnabled(gate) {
 		addLongMemEvalReplicateLatencyIntegrityCheck(
 			&result,
@@ -1591,33 +1627,78 @@ func evaluateLongMemEvalReplicateGate(
 			gate,
 		)
 	}
-	result.add(
-		lmeReplicateGateDimensionOutcome,
-		"candidate_majority_vs_main",
-		candidate.MajorityCorrect > main.MajorityCorrect,
-		fmt.Sprintf("%d > %d", candidate.MajorityCorrect, main.MajorityCorrect), "strictly greater")
-	result.add(
-		lmeReplicateGateDimensionOutcome,
-		"candidate_majority_vs_mem0",
-		candidate.MajorityCorrect > mem0.MajorityCorrect,
-		fmt.Sprintf("%d > %d", candidate.MajorityCorrect, mem0.MajorityCorrect), "strictly greater")
-	result.add(
-		lmeReplicateGateDimensionOutcome,
-		"candidate_replicates_vs_main",
-		candidate.CorrectReplicates > main.CorrectReplicates,
-		fmt.Sprintf("%d > %d", candidate.CorrectReplicates, main.CorrectReplicates), "strictly greater")
-	result.add(
-		lmeReplicateGateDimensionOutcome,
-		"candidate_replicates_vs_mem0",
-		candidate.CorrectReplicates > mem0.CorrectReplicates,
-		fmt.Sprintf("%d > %d", candidate.CorrectReplicates, mem0.CorrectReplicates), "strictly greater")
+	if comparison.ComparisonScope == lmeReplicateScopePairwise {
+		result.add(
+			lmeReplicateGateDimensionOutcome,
+			"candidate_majority_vs_baseline",
+			candidate.MajorityCorrect >= main.MajorityCorrect,
+			fmt.Sprintf(
+				"%d >= %d",
+				candidate.MajorityCorrect, main.MajorityCorrect,
+			),
+			"non-regression",
+		)
+		result.add(
+			lmeReplicateGateDimensionOutcome,
+			"candidate_replicates_vs_baseline",
+			candidate.CorrectReplicates >= main.CorrectReplicates,
+			fmt.Sprintf(
+				"%d >= %d",
+				candidate.CorrectReplicates, main.CorrectReplicates,
+			),
+			"non-regression",
+		)
+	} else {
+		result.add(
+			lmeReplicateGateDimensionOutcome,
+			"candidate_majority_vs_main",
+			candidate.MajorityCorrect > main.MajorityCorrect,
+			fmt.Sprintf(
+				"%d > %d",
+				candidate.MajorityCorrect, main.MajorityCorrect,
+			),
+			"strictly greater",
+		)
+		result.add(
+			lmeReplicateGateDimensionOutcome,
+			"candidate_majority_vs_mem0",
+			candidate.MajorityCorrect > mem0.MajorityCorrect,
+			fmt.Sprintf(
+				"%d > %d",
+				candidate.MajorityCorrect, mem0.MajorityCorrect,
+			),
+			"strictly greater",
+		)
+		result.add(
+			lmeReplicateGateDimensionOutcome,
+			"candidate_replicates_vs_main",
+			candidate.CorrectReplicates > main.CorrectReplicates,
+			fmt.Sprintf(
+				"%d > %d",
+				candidate.CorrectReplicates, main.CorrectReplicates,
+			),
+			"strictly greater",
+		)
+		result.add(
+			lmeReplicateGateDimensionOutcome,
+			"candidate_replicates_vs_mem0",
+			candidate.CorrectReplicates > mem0.CorrectReplicates,
+			fmt.Sprintf(
+				"%d > %d",
+				candidate.CorrectReplicates, mem0.CorrectReplicates,
+			),
+			"strictly greater",
+		)
+	}
 
 	types := make(map[string]bool)
 	for typ := range main.ByType {
 		types[typ] = true
 	}
-	for typ := range mem0.ByType {
-		types[typ] = true
+	if comparison.ComparisonScope == lmeReplicateScopeThreeArmPromotion {
+		for typ := range mem0.ByType {
+			types[typ] = true
+		}
 	}
 	for typ := range candidate.ByType {
 		types[typ] = true
@@ -1629,8 +1710,22 @@ func evaluateLongMemEvalReplicateGate(
 	sort.Strings(typeNames)
 	for _, typ := range typeNames {
 		mainCorrect := lmeReplicateTypeMajority(main.ByType[typ])
-		mem0Correct := lmeReplicateTypeMajority(mem0.ByType[typ])
 		candidateCorrect := lmeReplicateTypeMajority(candidate.ByType[typ])
+		if comparison.ComparisonScope == lmeReplicateScopePairwise {
+			deficit := mainCorrect - candidateCorrect
+			result.add(
+				lmeReplicateGateDimensionOutcome,
+				"category_"+typ,
+				deficit <= gate.PerTypeMaxDeficit,
+				fmt.Sprintf(
+					"candidate=%d baseline=%d deficit=%d",
+					candidateCorrect, mainCorrect, deficit,
+				),
+				fmt.Sprintf("deficit <= %d", gate.PerTypeMaxDeficit),
+			)
+			continue
+		}
+		mem0Correct := lmeReplicateTypeMajority(mem0.ByType[typ])
 		stronger := max(mainCorrect, mem0Correct)
 		deficit := stronger - candidateCorrect
 		result.add(
@@ -1982,16 +2077,29 @@ func addLongMemEvalReplicateSearchP95Check(
 
 func formatLongMemEvalReplicateComparisonTSV(comparison *lmeReplicateComparison) string {
 	var b strings.Builder
-	b.WriteString("question_id\tquestion_type\tmain_primary\tmain_correct_replicates\tmain_majority\tmem0_primary\tmem0_correct_replicates\tmem0_majority\tcandidate_primary\tcandidate_correct_replicates\tcandidate_majority\n")
+	b.WriteString("question_id\tquestion_type")
+	armOrder := longMemEvalReplicateArmOrder(comparison)
+	for _, armName := range armOrder {
+		prefix := longMemEvalReplicateArmColumnPrefix(armName)
+		fmt.Fprintf(
+			&b,
+			"\t%s_primary\t%s_correct_replicates\t%s_majority",
+			prefix, prefix, prefix,
+		)
+	}
+	b.WriteByte('\n')
 	for _, item := range comparison.Cases {
-		main := item.Arms[lmeReplicateArmPGVectorMain]
-		mem0 := item.Arms[lmeReplicateArmMem0OSS]
-		candidate := item.Arms[lmeReplicateArmPGVectorCandidate]
-		fmt.Fprintf(&b, "%s\t%s\t%t\t%d\t%t\t%t\t%d\t%t\t%t\t%d\t%t\n",
-			item.QuestionID, item.QuestionType,
-			main.PrimaryCorrect, main.CorrectReplicates, main.MajorityCorrect,
-			mem0.PrimaryCorrect, mem0.CorrectReplicates, mem0.MajorityCorrect,
-			candidate.PrimaryCorrect, candidate.CorrectReplicates, candidate.MajorityCorrect)
+		fmt.Fprintf(&b, "%s\t%s", item.QuestionID, item.QuestionType)
+		for _, armName := range armOrder {
+			arm := item.Arms[armName]
+			fmt.Fprintf(
+				&b, "\t%t\t%d\t%t",
+				arm.PrimaryCorrect,
+				arm.CorrectReplicates,
+				arm.MajorityCorrect,
+			)
+		}
+		b.WriteByte('\n')
 	}
 	return b.String()
 }
@@ -2006,7 +2114,7 @@ func formatLongMemEvalReplicateBadCasesTSV(
 			"stability\tearliest_failure_stage\tstage_counts\n",
 	)
 	for _, item := range comparison.Cases {
-		for _, armName := range longMemEvalReplicateArmOrder() {
+		for _, armName := range longMemEvalReplicateArmOrder(comparison) {
 			arm := item.Arms[armName]
 			stability := longMemEvalReplicateStability(
 				arm.CorrectReplicates,
@@ -2035,11 +2143,33 @@ func formatLongMemEvalReplicateBadCasesTSV(
 	return b.String()
 }
 
-func longMemEvalReplicateArmOrder() []string {
-	return []string{
+func longMemEvalReplicateArmOrder(
+	comparison *lmeReplicateComparison,
+) []string {
+	order := []string{
 		lmeReplicateArmPGVectorMain,
 		lmeReplicateArmMem0OSS,
 		lmeReplicateArmPGVectorCandidate,
+	}
+	result := make([]string, 0, len(order))
+	for _, name := range order {
+		if comparison.Arms[name] != nil {
+			result = append(result, name)
+		}
+	}
+	return result
+}
+
+func longMemEvalReplicateArmColumnPrefix(name string) string {
+	switch name {
+	case lmeReplicateArmPGVectorMain:
+		return "main"
+	case lmeReplicateArmMem0OSS:
+		return "mem0"
+	case lmeReplicateArmPGVectorCandidate:
+		return "candidate"
+	default:
+		return name
 	}
 }
 
@@ -2122,7 +2252,7 @@ func formatLongMemEvalReplicateComparisonMarkdown(comparison *lmeReplicateCompar
 	fmt.Fprintf(&b, "- Promotion gate: **%s**\n\n", gateStatus)
 	b.WriteString("| Arm | Primary | Majority | Correct replicates | Unstable | Pairs | Provider-observed memory LLM tokens | Logical memory LLM tokens | Logical answer tokens | Logical judge tokens | Memory model cache hits | Logical memory cost complete | Embedding requests | Embedding provider calls | Embedding provider tokens | Memories | Ingest ms | Search ms |\n")
 	b.WriteString("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | :---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
-	for _, name := range []string{lmeReplicateArmPGVectorMain, lmeReplicateArmMem0OSS, lmeReplicateArmPGVectorCandidate} {
+	for _, name := range longMemEvalReplicateArmOrder(comparison) {
 		arm := comparison.Arms[name]
 		fmt.Fprintf(&b, "| %s | %d/%d | %d/%d | %d/%d | %d | %d | %d | %d | %d | %d | %d | %t | %d | %d | %d | %d | %d | %d |\n",
 			name, arm.PrimaryCorrect, arm.Cases, arm.MajorityCorrect, arm.Cases,
@@ -2140,11 +2270,7 @@ func formatLongMemEvalReplicateComparisonMarkdown(comparison *lmeReplicateCompar
 	b.WriteString("\n## Resource Accounting by Type\n\n")
 	b.WriteString("| Arm | Type | Cases | Logical memory tokens | Missing memory usages | Embedding requests | Embedding tokens | Logical answer tokens | Logical judge tokens | Memories | Ingest ms | Search ms |\n")
 	b.WriteString("| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
-	for _, name := range []string{
-		lmeReplicateArmPGVectorMain,
-		lmeReplicateArmMem0OSS,
-		lmeReplicateArmPGVectorCandidate,
-	} {
+	for _, name := range longMemEvalReplicateArmOrder(comparison) {
 		arm := comparison.Arms[name]
 		typeNames := make([]string, 0, len(arm.ByType))
 		for typeName := range arm.ByType {
@@ -2194,11 +2320,7 @@ func formatLongMemEvalReplicateComparisonMarkdown(comparison *lmeReplicateCompar
 	b.WriteString("\n## Extraction Diagnostics\n\n")
 	b.WriteString("| Arm | Traced pairs | Operation pairs | Zero-op pairs | Operations | Primary ops | Assistant-result ops | Add ops | Update ops | Multi-call pairs | Additional model requests | New user | New assistant | Final user | Final assistant | Unknown final |\n")
 	b.WriteString("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
-	for _, name := range []string{
-		lmeReplicateArmPGVectorMain,
-		lmeReplicateArmMem0OSS,
-		lmeReplicateArmPGVectorCandidate,
-	} {
+	for _, name := range longMemEvalReplicateArmOrder(comparison) {
 		arm := comparison.Arms[name]
 		diagnostics := arm.ExtractionDiagnostics
 		fmt.Fprintf(
@@ -2225,11 +2347,7 @@ func formatLongMemEvalReplicateComparisonMarkdown(comparison *lmeReplicateCompar
 	b.WriteString("\n## Post-Policy Diagnostics\n\n")
 	b.WriteString("| Arm | Covered pairs | Operation pairs | Zero-op pairs | Operations | Primary ops | Assistant-result ops | Add ops | Update ops | Delete ops | Clear ops | Raw-to-post delta |\n")
 	b.WriteString("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
-	for _, name := range []string{
-		lmeReplicateArmPGVectorMain,
-		lmeReplicateArmMem0OSS,
-		lmeReplicateArmPGVectorCandidate,
-	} {
+	for _, name := range longMemEvalReplicateArmOrder(comparison) {
 		diagnostics := comparison.Arms[name].ExtractionDiagnostics
 		fmt.Fprintf(
 			&b,
@@ -2251,11 +2369,7 @@ func formatLongMemEvalReplicateComparisonMarkdown(comparison *lmeReplicateCompar
 	b.WriteString("\n## Raw Persistence Diagnostics\n\n")
 	b.WriteString("| Arm | Covered operations | Observed | Already satisfied | Not observed | Unverifiable | Add effects | Update effects | Delete effects | Clear effects |\n")
 	b.WriteString("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
-	for _, name := range []string{
-		lmeReplicateArmPGVectorMain,
-		lmeReplicateArmMem0OSS,
-		lmeReplicateArmPGVectorCandidate,
-	} {
+	for _, name := range longMemEvalReplicateArmOrder(comparison) {
 		diagnostics := comparison.Arms[name].ExtractionDiagnostics
 		fmt.Fprintf(
 			&b,
@@ -2276,11 +2390,7 @@ func formatLongMemEvalReplicateComparisonMarkdown(comparison *lmeReplicateCompar
 	b.WriteString("\n## Post-Policy Persistence Diagnostics\n\n")
 	b.WriteString("| Arm | Covered operations | Observed | Already satisfied | Not observed | Unverifiable | Add effects | Update effects | Delete effects | Clear effects |\n")
 	b.WriteString("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
-	for _, name := range []string{
-		lmeReplicateArmPGVectorMain,
-		lmeReplicateArmMem0OSS,
-		lmeReplicateArmPGVectorCandidate,
-	} {
+	for _, name := range longMemEvalReplicateArmOrder(comparison) {
 		diagnostics := comparison.Arms[name].ExtractionDiagnostics
 		fmt.Fprintf(
 			&b,
@@ -2319,7 +2429,7 @@ func formatLongMemEvalReplicateComparisonMarkdown(comparison *lmeReplicateCompar
 	b.WriteString("| Question | Type | Arm | Correct | Stability | Earliest stage | Stages |\n")
 	b.WriteString("| --- | --- | --- | ---: | --- | --- | --- |\n")
 	for _, item := range comparison.Cases {
-		for _, armName := range longMemEvalReplicateArmOrder() {
+		for _, armName := range longMemEvalReplicateArmOrder(comparison) {
 			arm := item.Arms[armName]
 			stability := longMemEvalReplicateStability(
 				arm.CorrectReplicates,
@@ -2344,14 +2454,26 @@ func formatLongMemEvalReplicateComparisonMarkdown(comparison *lmeReplicateCompar
 		}
 	}
 	b.WriteString("\n## Cases\n\n")
-	b.WriteString("| Question | Type | Main | Mem0 | Candidate |\n")
-	b.WriteString("| --- | --- | ---: | ---: | ---: |\n")
+	armOrder := longMemEvalReplicateArmOrder(comparison)
+	b.WriteString("| Question | Type")
+	for _, armName := range armOrder {
+		fmt.Fprintf(&b, " | %s", armName)
+	}
+	b.WriteString(" |\n| --- | ---")
+	for range armOrder {
+		b.WriteString(" | ---:")
+	}
+	b.WriteString(" |\n")
 	for _, item := range comparison.Cases {
-		fmt.Fprintf(&b, "| `%s` | %s | %d/%d | %d/%d | %d/%d |\n",
-			item.QuestionID, item.QuestionType,
-			item.Arms[lmeReplicateArmPGVectorMain].CorrectReplicates, comparison.ReplicateCount,
-			item.Arms[lmeReplicateArmMem0OSS].CorrectReplicates, comparison.ReplicateCount,
-			item.Arms[lmeReplicateArmPGVectorCandidate].CorrectReplicates, comparison.ReplicateCount)
+		fmt.Fprintf(&b, "| `%s` | %s", item.QuestionID, item.QuestionType)
+		for _, armName := range armOrder {
+			fmt.Fprintf(
+				&b, " | %d/%d",
+				item.Arms[armName].CorrectReplicates,
+				comparison.ReplicateCount,
+			)
+		}
+		b.WriteString(" |\n")
 	}
 	return b.String()
 }

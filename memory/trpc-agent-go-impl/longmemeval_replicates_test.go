@@ -40,6 +40,8 @@ func TestCompareLongMemEvalReplicates(t *testing.T) {
 	if comparison.SchemaVersion != lmeReplicateComparisonSchemaVersion ||
 		comparison.MemoryResponseCacheMode !=
 			lmeReplicateMemoryCachesIndependent ||
+		comparison.ComparisonScope !=
+			lmeReplicateScopeThreeArmPromotion ||
 		!comparison.Gate.Passed ||
 		!comparison.Gate.IntegrityPassed ||
 		!comparison.Gate.OutcomePassed ||
@@ -1132,6 +1134,9 @@ func TestValidateLongMemEvalReplicateManifest(t *testing.T) {
 		{name: "cache mode", mutate: func(m *lmeReplicateComparisonManifest) {
 			m.MemoryResponseCacheMode = "unsupported"
 		}, wantError: "memory response cache mode"},
+		{name: "comparison scope", mutate: func(m *lmeReplicateComparisonManifest) {
+			m.ComparisonScope = "unsupported"
+		}, wantError: "comparison scope"},
 		{name: "gate", mutate: func(m *lmeReplicateComparisonManifest) { m.Gate.JudgeRuns = 2 }, wantError: "invalid promotion gate"},
 		{name: "negative uncached gate", mutate: func(m *lmeReplicateComparisonManifest) {
 			m.Gate.MemoryLLMUncachedTokenRatioMaximum = -1
@@ -1163,8 +1168,9 @@ func TestValidateLongMemEvalReplicateManifest(t *testing.T) {
 		t.Fatalf("valid manifest: %v", err)
 	}
 	valid.MemoryResponseCacheMode = lmeReplicateMemoryCachesShared
+	valid.ComparisonScope = lmeReplicateScopePairwise
 	if err := validateLongMemEvalReplicateManifest(valid); err != nil {
-		t.Fatalf("valid shared-cache manifest: %v", err)
+		t.Fatalf("valid pairwise shared-cache manifest: %v", err)
 	}
 	allIndependent := valid
 	allIndependent.Replicates = append(
@@ -1194,6 +1200,7 @@ func TestLoadLongMemEvalReplicateComparisonSupportsSharedMemoryCaches(
 		t.Fatalf("decode manifest: %v", err)
 	}
 	manifest.MemoryResponseCacheMode = lmeReplicateMemoryCachesShared
+	manifest.ComparisonScope = lmeReplicateScopePairwise
 	for _, spec := range manifest.Replicates {
 		baselinePath := filepath.Join(dir, spec.BaselineResults)
 		candidatePath := filepath.Join(dir, spec.CandidateResults)
@@ -1210,6 +1217,12 @@ func TestLoadLongMemEvalReplicateComparisonSupportsSharedMemoryCaches(
 			"embedding_response_cache_ledger_id",
 		} {
 			candidate.Metadata[key] = baseline.Metadata[key]
+		}
+		for _, item := range baseline.Cases {
+			delete(item.BackendResults, "mem0")
+		}
+		if err := writeLongMemEvalResults(baselinePath, baseline); err != nil {
+			t.Fatalf("write baseline: %v", err)
 		}
 		if err := writeLongMemEvalResults(candidatePath, candidate); err != nil {
 			t.Fatalf("write candidate: %v", err)
@@ -1245,6 +1258,12 @@ func TestLoadLongMemEvalReplicateComparisonSupportsSharedMemoryCaches(
 	if comparison.MemoryResponseCacheMode != lmeReplicateMemoryCachesShared {
 		t.Fatalf("comparison cache mode = %q",
 			comparison.MemoryResponseCacheMode)
+	}
+	if comparison.ComparisonScope != lmeReplicateScopePairwise ||
+		!comparison.Gate.Passed ||
+		len(comparison.Arms) != 2 ||
+		comparison.Arms[lmeReplicateArmMem0OSS] != nil {
+		t.Fatalf("unexpected pairwise comparison: %+v", comparison)
 	}
 }
 
