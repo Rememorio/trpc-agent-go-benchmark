@@ -58,6 +58,10 @@ type lmeReplicatePromotionGate struct {
 	MemoryEmbeddingRequestRatioMaximum float64 `json:"memory_embedding_request_ratio_maximum"`
 	MemoryEmbeddingTokenRatioMaximum   float64 `json:"memory_embedding_token_ratio_maximum,omitempty"`
 	FinalMemoryCountRatioMaximum       float64 `json:"final_memory_count_ratio_maximum"`
+	MemoryIngestDurationRatioMaximum   float64 `json:"memory_ingest_duration_ratio_maximum,omitempty"`
+	MemorySearchDurationRatioMaximum   float64 `json:"memory_search_duration_ratio_maximum,omitempty"`
+	MemorySearchMinimumAllowanceMs     int64   `json:"memory_search_minimum_allowance_ms,omitempty"`
+	MemorySearchP95MaximumMs           int64   `json:"memory_search_p95_maximum_ms,omitempty"`
 }
 
 type lmeLoadedReplicateComparisonPair struct {
@@ -526,7 +530,13 @@ func validateLongMemEvalReplicateManifest(manifest lmeReplicateComparisonManifes
 		gate.MemoryLLMUncachedTokenRatioMaximum < 0 ||
 		gate.MemoryEmbeddingRequestRatioMaximum <= 0 ||
 		gate.MemoryEmbeddingTokenRatioMaximum < 0 ||
-		gate.FinalMemoryCountRatioMaximum <= 0 {
+		gate.FinalMemoryCountRatioMaximum <= 0 ||
+		gate.MemoryIngestDurationRatioMaximum < 0 ||
+		gate.MemorySearchDurationRatioMaximum < 0 ||
+		gate.MemorySearchMinimumAllowanceMs < 0 ||
+		gate.MemorySearchP95MaximumMs < 0 ||
+		(gate.MemorySearchMinimumAllowanceMs > 0 &&
+			gate.MemorySearchDurationRatioMaximum <= 0) {
 		return fmt.Errorf("LongMemEval replicate manifest has invalid promotion gate: %+v", gate)
 	}
 	return nil
@@ -1474,6 +1484,13 @@ func evaluateLongMemEvalReplicateGate(
 	addLongMemEvalReplicateIngestionChecks(
 		&result, comparison, main, mem0, candidate,
 	)
+	if longMemEvalReplicateLatencyGateEnabled(gate) {
+		addLongMemEvalReplicateLatencyIntegrityCheck(
+			&result,
+			comparison.Cases,
+			gate,
+		)
+	}
 	result.add(
 		lmeReplicateGateDimensionOutcome,
 		"candidate_majority_vs_main",
@@ -1578,7 +1595,84 @@ func evaluateLongMemEvalReplicateGate(
 	}
 	addLongMemEvalReplicateRatioCheck(&result, "candidate_final_memories_vs_main",
 		candidate.FinalMemories, main.FinalMemories, gate.FinalMemoryCountRatioMaximum)
+	if gate.MemoryIngestDurationRatioMaximum > 0 {
+		addLongMemEvalReplicateDurationRatioCheck(
+			&result,
+			"candidate_memory_ingest_duration_vs_main",
+			candidate.IngestDurationMs,
+			main.IngestDurationMs,
+			gate.MemoryIngestDurationRatioMaximum,
+		)
+	}
+	if gate.MemorySearchDurationRatioMaximum > 0 {
+		addLongMemEvalReplicateDurationAllowanceCheck(
+			&result,
+			"candidate_memory_search_duration_vs_main",
+			candidate.SearchDurationMs,
+			main.SearchDurationMs,
+			gate.MemorySearchDurationRatioMaximum,
+			gate.MemorySearchMinimumAllowanceMs,
+		)
+	}
+	if gate.MemorySearchP95MaximumMs > 0 {
+		addLongMemEvalReplicateSearchP95Check(
+			&result,
+			comparison.Cases,
+			gate.MemorySearchP95MaximumMs,
+		)
+	}
 	return result
+}
+
+func longMemEvalReplicateLatencyGateEnabled(
+	gate lmeReplicatePromotionGate,
+) bool {
+	return gate.MemoryIngestDurationRatioMaximum > 0 ||
+		gate.MemorySearchDurationRatioMaximum > 0 ||
+		gate.MemorySearchP95MaximumMs > 0
+}
+
+func addLongMemEvalReplicateLatencyIntegrityCheck(
+	result *lmeReplicateGateResult,
+	cases []lmeReplicateCase,
+	gate lmeReplicatePromotionGate,
+) {
+	complete := len(cases) == gate.ExpectedCases
+	checked := 0
+	for _, item := range cases {
+		main, mainOK := item.Arms[lmeReplicateArmPGVectorMain]
+		candidate, candidateOK :=
+			item.Arms[lmeReplicateArmPGVectorCandidate]
+		if !mainOK || !candidateOK {
+			complete = false
+			continue
+		}
+		checked++
+		if gate.MemoryIngestDurationRatioMaximum > 0 &&
+			(main.IngestDurationMs <= 0 ||
+				candidate.IngestDurationMs <= 0) {
+			complete = false
+		}
+		if (gate.MemorySearchDurationRatioMaximum > 0 ||
+			gate.MemorySearchP95MaximumMs > 0) &&
+			(main.SearchDurationMs < 0 ||
+				candidate.SearchDurationMs < 0) {
+			complete = false
+		}
+	}
+	result.add(
+		lmeReplicateGateDimensionIntegrity,
+		"latency_duration_completeness",
+		complete,
+		fmt.Sprintf(
+			"complete=%t checked=%d/%d",
+			complete,
+			checked,
+			gate.ExpectedCases,
+		),
+		"main and candidate arms exist for every case with positive ingest "+
+			"and non-negative search durations",
+	)
 }
 
 func newLongMemEvalReplicateGateResult() lmeReplicateGateResult {
@@ -1687,6 +1781,102 @@ func addLongMemEvalReplicateRatioCheck(
 	result.add(
 		lmeReplicateGateDimensionCost,
 		name, passed, actual, fmt.Sprintf("<= %.6f", maximum),
+	)
+}
+
+func addLongMemEvalReplicateDurationRatioCheck(
+	result *lmeReplicateGateResult,
+	name string,
+	numerator, denominator int64,
+	maximum float64,
+) {
+	passed := denominator > 0 &&
+		float64(numerator)/float64(denominator) <= maximum
+	actual := "undefined"
+	if denominator > 0 {
+		actual = fmt.Sprintf(
+			"%.6f (%dms/%dms)",
+			float64(numerator)/float64(denominator),
+			numerator,
+			denominator,
+		)
+	}
+	result.add(
+		lmeReplicateGateDimensionCost,
+		name, passed, actual, fmt.Sprintf("<= %.6f", maximum),
+	)
+}
+
+func addLongMemEvalReplicateDurationAllowanceCheck(
+	result *lmeReplicateGateResult,
+	name string,
+	actualMs, baselineMs int64,
+	maximumRatio float64,
+	minimumAllowanceMs int64,
+) {
+	allowedMs := minimumAllowanceMs
+	if baselineMs > 0 {
+		ratioAllowance := int64(math.Ceil(
+			float64(baselineMs) * maximumRatio,
+		))
+		allowedMs = max(allowedMs, ratioAllowance)
+	}
+	passed := baselineMs >= 0 && actualMs >= 0 && allowedMs > 0 &&
+		actualMs <= allowedMs
+	result.add(
+		lmeReplicateGateDimensionCost,
+		name,
+		passed,
+		fmt.Sprintf(
+			"candidate=%dms main=%dms allowed=%dms",
+			actualMs,
+			baselineMs,
+			allowedMs,
+		),
+		fmt.Sprintf(
+			"candidate <= max(main * %.6f, %dms)",
+			maximumRatio,
+			minimumAllowanceMs,
+		),
+	)
+}
+
+func addLongMemEvalReplicateSearchP95Check(
+	result *lmeReplicateGateResult,
+	cases []lmeReplicateCase,
+	maximumMs int64,
+) {
+	durations := make([]int64, 0, len(cases))
+	complete := true
+	for _, item := range cases {
+		arm, ok := item.Arms[lmeReplicateArmPGVectorCandidate]
+		if !ok || arm.SearchDurationMs < 0 {
+			complete = false
+			continue
+		}
+		durations = append(durations, arm.SearchDurationMs)
+	}
+	sort.Slice(durations, func(i, j int) bool {
+		return durations[i] < durations[j]
+	})
+	p95 := int64(0)
+	if len(durations) > 0 {
+		index := int(math.Ceil(float64(len(durations))*0.95)) - 1
+		p95 = durations[index]
+	}
+	passed := complete && len(durations) == len(cases) &&
+		len(durations) > 0 && p95 <= maximumMs
+	result.add(
+		lmeReplicateGateDimensionCost,
+		"candidate_memory_search_duration_p95",
+		passed,
+		fmt.Sprintf(
+			"p95=%dms complete=%t cases=%d",
+			p95,
+			complete,
+			len(durations),
+		),
+		fmt.Sprintf("p95 <= %dms with every case present", maximumMs),
 	)
 }
 

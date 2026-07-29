@@ -491,6 +491,188 @@ func TestReplicateGateOptionallyUsesUncachedLogicalTokens(t *testing.T) {
 	t.Fatal("uncached token check is missing")
 }
 
+func TestReplicateGateOptionallyUsesOperationalLatency(t *testing.T) {
+	t.Parallel()
+
+	arm := func(
+		name string,
+		majority int,
+		correct int,
+		ingestMs int64,
+		searchMs int64,
+	) *lmeReplicateArm {
+		return &lmeReplicateArm{
+			Name: name, Cases: 2, MajorityCorrect: majority,
+			CorrectReplicates: correct, ProviderUsageReportedCases: 2,
+			MemoryLogicalTokenUsage:    lmeTokenUsage{TotalTokens: 100},
+			MemoryLogicalUsageComplete: true,
+			MemoryEmbeddingUsage:       lmeEmbeddingUsage{Requests: 10},
+			IngestedPairs:              2,
+			FinalMemories:              10,
+			IngestDurationMs:           ingestMs,
+			SearchDurationMs:           searchMs,
+			ByType: map[string]*lmeReplicateTypeSummary{
+				"single-session-user": {MajorityCorrect: majority},
+			},
+		}
+	}
+	caseArms := func(
+		candidateIngestMs int64,
+		candidateSearchMs int64,
+	) map[string]lmeReplicateCaseArmSummary {
+		return map[string]lmeReplicateCaseArmSummary{
+			lmeReplicateArmPGVectorMain: {
+				IngestedPairs: 1, IngestDurationMs: 500,
+				SearchDurationMs: 500,
+			},
+			lmeReplicateArmMem0OSS: {
+				IngestedPairs: 1, IngestDurationMs: 500,
+				SearchDurationMs: 500,
+			},
+			lmeReplicateArmPGVectorCandidate: {
+				IngestedPairs: 1, IngestDurationMs: candidateIngestMs,
+				SearchDurationMs: candidateSearchMs,
+			},
+		}
+	}
+	comparison := &lmeReplicateComparison{
+		Arms: map[string]*lmeReplicateArm{
+			lmeReplicateArmPGVectorMain: arm(
+				lmeReplicateArmPGVectorMain, 0, 0, 1000, 1000,
+			),
+			lmeReplicateArmMem0OSS: arm(
+				lmeReplicateArmMem0OSS, 0, 0, 1000, 1000,
+			),
+			lmeReplicateArmPGVectorCandidate: arm(
+				lmeReplicateArmPGVectorCandidate, 2, 6, 1900, 5000,
+			),
+		},
+		Cases: []lmeReplicateCase{
+			{Arms: caseArms(900, 1000)},
+			{Arms: caseArms(1000, 4000)},
+		},
+	}
+	gate := lmeReplicatePromotionGate{
+		ExpectedCases: 2, JudgeRuns: 3, PerTypeMaxDeficit: 0,
+		MemoryLLMTokenRatioMaximum:         1.55,
+		MemoryEmbeddingRequestRatioMaximum: 2,
+		FinalMemoryCountRatioMaximum:       3,
+	}
+
+	withoutLatencyGate := evaluateLongMemEvalReplicateGate(
+		comparison,
+		gate,
+	)
+	for _, check := range withoutLatencyGate.Checks {
+		if strings.Contains(check.Name, "_duration") {
+			t.Fatalf("optional latency check unexpectedly present: %+v", check)
+		}
+	}
+
+	gate.MemoryIngestDurationRatioMaximum = 2
+	gate.MemorySearchDurationRatioMaximum = 2
+	gate.MemorySearchMinimumAllowanceMs = 36_000
+	gate.MemorySearchP95MaximumMs = 5_000
+	withLatencyGate := evaluateLongMemEvalReplicateGate(comparison, gate)
+	if !withLatencyGate.Passed {
+		t.Fatalf("latency gate unexpectedly failed: %+v", withLatencyGate)
+	}
+
+	comparison.Cases[1].Arms = caseArms(1_000, 5_001)
+	p95Failure := evaluateLongMemEvalReplicateGate(comparison, gate)
+	assertLongMemEvalReplicateCheck(
+		t,
+		p95Failure,
+		"candidate_memory_search_duration_p95",
+		false,
+		"p95=5001ms complete=true cases=2",
+	)
+
+	comparison.Cases[1].Arms = caseArms(1_000, 4_000)
+	comparison.Arms[lmeReplicateArmPGVectorCandidate].IngestDurationMs = 2_001
+	ingestFailure := evaluateLongMemEvalReplicateGate(comparison, gate)
+	assertLongMemEvalReplicateCheck(
+		t,
+		ingestFailure,
+		"candidate_memory_ingest_duration_vs_main",
+		false,
+		"2.001000 (2001ms/1000ms)",
+	)
+
+	comparison.Arms[lmeReplicateArmPGVectorCandidate].IngestDurationMs = 1_900
+	comparison.Arms[lmeReplicateArmPGVectorCandidate].SearchDurationMs = 36_001
+	searchFailure := evaluateLongMemEvalReplicateGate(comparison, gate)
+	assertLongMemEvalReplicateCheck(
+		t,
+		searchFailure,
+		"candidate_memory_search_duration_vs_main",
+		false,
+		"candidate=36001ms main=1000ms allowed=36000ms",
+	)
+
+	comparison.Arms[lmeReplicateArmPGVectorCandidate].SearchDurationMs = 5_000
+	comparison.Cases[1].Arms = caseArms(0, 4_000)
+	integrityFailure := evaluateLongMemEvalReplicateGate(comparison, gate)
+	assertLongMemEvalReplicateLatencyIntegrityFailure(t, integrityFailure)
+
+	comparison.Cases[1].Arms = caseArms(1_000, 4_000)
+	delete(
+		comparison.Cases[1].Arms,
+		lmeReplicateArmPGVectorCandidate,
+	)
+	missingArmFailure := evaluateLongMemEvalReplicateGate(comparison, gate)
+	assertLongMemEvalReplicateLatencyIntegrityFailure(t, missingArmFailure)
+
+	comparison.Cases[1].Arms = caseArms(1_000, -1)
+	negativeSearchFailure := evaluateLongMemEvalReplicateGate(
+		comparison,
+		gate,
+	)
+	assertLongMemEvalReplicateLatencyIntegrityFailure(
+		t,
+		negativeSearchFailure,
+	)
+}
+
+func assertLongMemEvalReplicateLatencyIntegrityFailure(
+	t *testing.T,
+	result lmeReplicateGateResult,
+) {
+	t.Helper()
+	for _, check := range result.Checks {
+		if check.Name != "latency_duration_completeness" {
+			continue
+		}
+		if check.Passed ||
+			check.Dimension != lmeReplicateGateDimensionIntegrity {
+			t.Fatalf("latency integrity check = %+v", check)
+		}
+		return
+	}
+	t.Fatal("latency integrity check is missing")
+}
+
+func assertLongMemEvalReplicateCheck(
+	t *testing.T,
+	result lmeReplicateGateResult,
+	name string,
+	passed bool,
+	actual string,
+) {
+	t.Helper()
+	for _, check := range result.Checks {
+		if check.Name != name {
+			continue
+		}
+		if check.Passed != passed || check.Actual != actual ||
+			check.Dimension != lmeReplicateGateDimensionCost {
+			t.Fatalf("%s check = %+v", name, check)
+		}
+		return
+	}
+	t.Fatalf("%s check is missing", name)
+}
+
 func TestReplicateGateSeparatesOutcomeFromIntegrityAndCost(t *testing.T) {
 	t.Parallel()
 
@@ -950,6 +1132,15 @@ func TestValidateLongMemEvalReplicateManifest(t *testing.T) {
 		}, wantError: "invalid promotion gate"},
 		{name: "negative embedding token gate", mutate: func(m *lmeReplicateComparisonManifest) {
 			m.Gate.MemoryEmbeddingTokenRatioMaximum = -1
+		}, wantError: "invalid promotion gate"},
+		{name: "negative ingest latency gate", mutate: func(m *lmeReplicateComparisonManifest) {
+			m.Gate.MemoryIngestDurationRatioMaximum = -1
+		}, wantError: "invalid promotion gate"},
+		{name: "search allowance without ratio", mutate: func(m *lmeReplicateComparisonManifest) {
+			m.Gate.MemorySearchMinimumAllowanceMs = 1
+		}, wantError: "invalid promotion gate"},
+		{name: "negative search p95 gate", mutate: func(m *lmeReplicateComparisonManifest) {
+			m.Gate.MemorySearchP95MaximumMs = -1
 		}, wantError: "invalid promotion gate"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
