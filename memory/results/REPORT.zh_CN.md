@@ -24,6 +24,14 @@ LongMemEval protocol v2 评估使用一个固定、已经观察过的 16 题开�
 每个实验臂生成三次独立答案。它用于回归与机制分析，不是未见证据，
 也不代表完整 500 题数据集。
 
+LoCoMo 表格保留的是历史产物。trpc-agent-go 的“原版”“优化版”和
+Agentic 使用 auto-replay-v3：每个历史 session 写入后还会执行一个
+占位 agent turn，因此可能附加 synthetic assistant response；当源
+session 以 transport `assistant` 结尾时，还可能重复写入最近的 user
+turn。Exact-replay-v4 现在只写入一次映射后的数据集 turn，不再运行
+占位 agent。Long-Context、Session Recall 和手工写入的外部框架不受
+影响；旧 trpc-agent-go Auto/Agentic 数值在 v4 重跑前只作历史描述。
+
 ## 2. 实验设置
 
 ### 2.1 基准数据集
@@ -47,6 +55,12 @@ LongMemEval-M 评测。早期 protocol v1 子集仍可用于诊断，但不同�
 | **Session Recall** | 在查询时搜索已持久化的原始历史 session event |
 | **原版** | Auto 提取 + pgvector 基线；后台提取器自动生成记忆并在查询时检索 |
 | **优化版** | 面向抽取式持久化 memory 的优化记忆提取策略与多轮检索流程 |
+
+新的 Auto run 使用 `chronological-session-sequential-auto-v4`：每条
+映射后的数据集 user/assistant turn 只写入一次，再对完整 session
+执行一次提取。报告中的原版/优化版历史产物使用 v3，不能作为当前
+候选的 gate。Session Recall 原本就直接写入历史 event，不受此次修正
+影响。
 
 ### 2.3 Memory 优化
 
@@ -171,7 +185,11 @@ runtime digest。运行前冻结的晋级 gate 同时覆盖多数正确率、正
 
 ## 3. 结果
 
-### 3.1 内部场景对比
+3.1-3.3 节保留 legacy LoCoMo 产物及原始数值，以便追溯 provenance；
+涉及 trpc-agent-go Auto、Agentic、SQLite 或 SQLiteVec 的比较必须在
+exact-replay-v4 下重跑。3.4 节是独立的 LongMemEval 实验，不受影响。
+
+### 3.1 内部场景对比（Legacy LoCoMo Replay）
 
 **表 1：总体指标**
 
@@ -453,6 +471,10 @@ observed evidence 集成，不具备 promotion 资格。要主张泛化，仍需
 我们在四个 Python Agent 框架——**AutoGen**、**Agno**、**ADK**、
 **CrewAI**——上运行了相同的 LoCoMo 基准，均使用 GPT-4o-mini、
 相同的 10 个样本（1,986 QA）及 LLM-as-Judge 评估。
+
+外部框架采用手工写入，不受 trpc-agent-go replay bug 影响。
+trpc-agent-go 优化版一行来自 legacy v3，因此涉及该行的跨框架结论
+需要 v4 重跑确认。Session Recall 直接重放历史 event，协议仍然有效。
 
 ### 4.1 框架配置
 
@@ -889,11 +911,12 @@ Agno                |====================                      | 0.267
    也以 **0.531** 排名第一，并超过 AutoGen。相比 Long-Context
    和优化版，它在更低 token 成本下给出了更高的总体 F1。
 
-2. **不同检索策略的权衡已经非常清晰。** Session Recall 在
-   **open-domain** 和 **multi-hop** 上最强，因此适合作为
-   跨 session QA 的默认方案；优化版在 **temporal**
-   和 adversarial 上仍更强；Long-Context 则仍可作为短单 session
-   场景下的上界参考。
+2. **历史 LoCoMo 产物显示出检索策略差异，但仍需 v4 确认。**
+   Session Recall 在保存的产物中于 **open-domain** 和
+   **multi-hop** 上最强，且其协议不受影响。优化版 Auto 在
+   **temporal** 和 adversarial 上的表观优势来自 legacy replay-v3，
+   不能作为当前证据；Long-Context 仍是未受影响的短单 session
+   参考。
 
 3. **Opt-in pgvector candidate 在固定 LongMemEval 开发回归中领先
    upstream main 和 self-hosted Mem0。** Protocol v2 下，candidate

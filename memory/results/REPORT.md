@@ -31,6 +31,16 @@ one fixed, already-observed 16-question development set with three
 independent answers per arm. It is a regression and mechanism study,
 not unseen evidence or a claim about the complete 500-question dataset.
 
+The LoCoMo tables retain historical artifacts. The trpc-agent-go `Original`,
+`Optimized`, and Agentic runs used auto-replay-v3, which executed a placeholder
+agent turn after each historical session. That path could append a synthetic
+assistant response and duplicate the latest user turn when the source session
+ended with the transport `assistant` role. Exact-replay-v4 now writes each
+mapped dataset turn once and does not execute an agent. Long-Context, Session
+Recall, and manually seeded external-framework runs were unaffected; the
+legacy trpc-agent-go Auto/Agentic values are descriptive only until rerun under
+v4.
+
 ## 2. Experimental Setup
 
 ### 2.1 Benchmarks
@@ -56,6 +66,12 @@ between backends and they no longer support the formal cross-backend claim.
 | **Session Recall** | Query-time search over persisted raw historical session events |
 | **Original** | Auto extraction + pgvector baseline; background extractor writes memories and retrieves them at query time |
 | **Optimized** | Optimized memory extraction strategy and multi-pass retrieval over extracted memories |
+
+New Auto runs use `chronological-session-sequential-auto-v4`: each mapped
+dataset user/assistant turn is written exactly once, then one extraction job is
+run for the complete session. The historical Original/Optimized artifacts in
+this report used v3 and cannot gate the current candidate. Session Recall
+already used direct event replay and is not affected by this correction.
 
 ### 2.3 Memory Optimizations
 
@@ -208,7 +224,12 @@ No new blind holdout was selected or run in this evaluation.
 
 ## 3. Results
 
-### 3.1 Internal Scenario Comparison
+Sections 3.1-3.3 report legacy LoCoMo artifacts. Their recorded values are left
+unchanged for provenance, but comparisons involving trpc-agent-go Auto,
+Agentic, SQLite, or SQLiteVec require an exact-replay-v4 rerun. Section 3.4 is a
+separate LongMemEval experiment and is unaffected.
+
+### 3.1 Internal Scenario Comparison (Legacy LoCoMo Replay)
 
 **Table 1: Overall Metrics**
 
@@ -516,6 +537,12 @@ making a generalization claim.
 We ran the same LoCoMo benchmark on four Python agent frameworks —
 **AutoGen**, **Agno**, **ADK**, **CrewAI** — all using GPT-4o-mini,
 the same 10 samples (1,986 QA), and LLM-as-Judge evaluation.
+
+The external frameworks were manually seeded and are unaffected by the
+trpc-agent-go replay bug. The trpc-agent-go optimized row is a legacy v3
+artifact, so cross-framework conclusions involving that row require a v4
+rerun. Session Recall used direct historical-event replay and remains
+protocol-valid.
 
 ### 4.1 Framework Configurations
 
@@ -1003,12 +1030,12 @@ Agno                |====================                      | 0.267
    the optimized version, it improves overall F1 while using far
    fewer tokens.
 
-2. **Different retrieval strategies now show clear trade-offs.**
-   Session Recall is best on **open-domain** and **multi-hop**,
-   making it the best default choice for cross-session QA. The
-   optimized version remains stronger on **temporal** and adversarial
-   robustness, while Long-Context still serves as a useful upper
-   bound for short single-session histories.
+2. **The historical LoCoMo run suggests retrieval trade-offs that require
+   v4 confirmation.** Session Recall is best on **open-domain** and
+   **multi-hop** in the saved artifacts and remains protocol-valid. The
+   optimized Auto version's apparent **temporal** and adversarial strengths
+   came from legacy replay-v3 and are not current evidence. Long-Context
+   remains an unaffected reference for short single-session histories.
 
 3. **The opt-in pgvector candidate leads both upstream main and self-hosted
    Mem0 on the fixed LongMemEval development regression.** Under protocol v2,

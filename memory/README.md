@@ -20,6 +20,17 @@ Based on:
 
 ## Key Results
 
+### Legacy LoCoMo Results
+
+The LoCoMo tables in this section are retained historical results. The
+trpc-agent-go `auto` and `agentic` runs used replay protocol v3, which executed
+a placeholder agent turn after seeding each historical session. That could add
+a synthetic assistant response and, when a session ended with the transport
+`assistant` role, duplicate its latest user turn. Long-context, Session Recall,
+and manually seeded external-framework results were not affected. Current
+trpc-agent-go Auto runs use exact-replay-v4; the legacy Auto/Agentic numbers
+below must be rerun before they can gate the current memory candidate.
+
 **Configuration**: Model=gpt-4o-mini, 10 samples, 1,986 QA pairs.
 
 **Overall Results (No History Injection)**:
@@ -180,13 +191,15 @@ go run . -scenario agentic
 Auto mode uses the built-in memory extractor to generate memories in the
 background. The QA stage only performs memory search.
 
-LoCoMo sessions are replayed chronologically and extracted once per session.
+New LoCoMo Auto runs use exact-replay-v4: sessions are replayed chronologically
+and extracted once per session.
 Because both participants are humans, each session's opening speaker is mapped
 to the transport `user` role and the other speaker to `assistant`; speaker names
 remain in the message text. Historical replay writes only these mapped dataset
 turns into the session: it does not execute a placeholder agent or append a
 synthetic response/current-turn duplicate. This keeps every opening turn on
 strict chat APIs while preserving the source transcript exactly once.
+The legacy result tables above predate this protocol correction.
 
 ```bash
 go run . -scenario auto
