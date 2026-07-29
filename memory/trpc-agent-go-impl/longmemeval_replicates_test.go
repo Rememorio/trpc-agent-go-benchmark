@@ -73,6 +73,8 @@ func TestCompareLongMemEvalReplicates(t *testing.T) {
 	if candidate.MemoryTokenUsage.TotalTokens != 240 ||
 		candidate.MemoryLogicalTokenUsage.TotalTokens != 240 ||
 		!candidate.MemoryLogicalUsageComplete ||
+		candidate.AnswerLogicalTokenUsage.TotalTokens != 60 ||
+		candidate.JudgeLogicalTokenUsage.TotalTokens != 216 ||
 		candidate.MemoryEmbeddingUsage.TotalTokens != 30 ||
 		candidate.IngestedPairs != 2 ||
 		candidate.FinalMemories != 12 ||
@@ -90,6 +92,40 @@ func TestCompareLongMemEvalReplicates(t *testing.T) {
 		candidate.FinalMemoriesByAttribution.Unknown != 12 {
 		t.Fatalf("unexpected candidate source cost: %+v", candidate)
 	}
+	knowledgeType := candidate.ByType["knowledge-update"]
+	if knowledgeType == nil ||
+		knowledgeType.MemoryLogicalTokenUsage.TotalTokens != 120 ||
+		knowledgeType.MemoryEmbeddingUsage.TotalTokens != 15 ||
+		knowledgeType.AnswerLogicalTokenUsage.TotalTokens != 30 ||
+		knowledgeType.JudgeLogicalTokenUsage.TotalTokens != 108 ||
+		knowledgeType.FinalMemories != 6 ||
+		knowledgeType.IngestDurationMs != 100 ||
+		knowledgeType.SearchDurationMs != 10 {
+		t.Fatalf("unexpected candidate type resources: %+v", knowledgeType)
+	}
+	var knowledgeCase *lmeReplicateCase
+	for i := range comparison.Cases {
+		if comparison.Cases[i].QuestionID == "q-knowledge" {
+			knowledgeCase = &comparison.Cases[i]
+			break
+		}
+	}
+	if knowledgeCase == nil {
+		t.Fatal("candidate knowledge case is missing")
+	}
+	knowledgeResources := knowledgeCase.Arms[lmeReplicateArmPGVectorCandidate]
+	if knowledgeResources.MemoryLogicalTokenUsage.TotalTokens != 120 ||
+		knowledgeResources.MemoryEmbeddingUsage.TotalTokens != 15 ||
+		knowledgeResources.AnswerLogicalTokenUsage.TotalTokens != 30 ||
+		knowledgeResources.JudgeLogicalTokenUsage.TotalTokens != 108 ||
+		knowledgeResources.FinalMemories != 6 ||
+		knowledgeResources.IngestDurationMs != 100 ||
+		knowledgeResources.SearchDurationMs != 10 {
+		t.Fatalf(
+			"unexpected candidate case resources: %+v",
+			knowledgeResources,
+		)
+	}
 	for _, name := range []string{"replicate_comparison.md", "replicate_comparison.tsv"} {
 		contents, err := os.ReadFile(filepath.Join(outputDir, name))
 		if err != nil {
@@ -105,6 +141,7 @@ func TestCompareLongMemEvalReplicates(t *testing.T) {
 		}
 		if strings.HasSuffix(name, ".md") {
 			for _, section := range []string{
+				"## Resource Accounting by Type",
 				"## Pairwise Majority Outcomes",
 				"## Extraction Diagnostics",
 				"## Post-Policy Diagnostics",

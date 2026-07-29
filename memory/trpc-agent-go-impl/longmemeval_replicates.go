@@ -27,7 +27,7 @@ import (
 
 const (
 	lmeReplicateManifestSchemaVersion   = 2
-	lmeReplicateComparisonSchemaVersion = 3
+	lmeReplicateComparisonSchemaVersion = 4
 	lmeReplicateKindPrimary             = "primary"
 	lmeReplicateKindIndependentReanswer = "independent-reanswer"
 
@@ -110,6 +110,8 @@ type lmeReplicateArm struct {
 	MemoryLogicalTokenUsage    lmeTokenUsage                       `json:"memory_logical_token_usage"`
 	MemoryLogicalUsageComplete bool                                `json:"memory_logical_usage_complete"`
 	MemoryLogicalUsageMissing  int                                 `json:"memory_logical_usage_missing_calls"`
+	AnswerLogicalTokenUsage    lmeTokenUsage                       `json:"answer_logical_token_usage"`
+	JudgeLogicalTokenUsage     lmeTokenUsage                       `json:"judge_logical_token_usage"`
 	ModelCacheInitialEntries   int                                 `json:"model_response_cache_initial_entries"`
 	ModelCacheInitialKnown     bool                                `json:"model_response_cache_initial_entries_known"`
 	MemoryModelRequests        int                                 `json:"memory_model_requests"`
@@ -155,11 +157,19 @@ type lmeReplicateAttributionCounts struct {
 }
 
 type lmeReplicateTypeSummary struct {
-	Cases                 int `json:"cases"`
-	PrimaryCorrect        int `json:"primary_correct"`
-	MajorityCorrect       int `json:"majority_correct"`
-	CorrectReplicates     int `json:"correct_replicates"`
-	TotalAnswerReplicates int `json:"total_answer_replicates"`
+	Cases                          int               `json:"cases"`
+	PrimaryCorrect                 int               `json:"primary_correct"`
+	MajorityCorrect                int               `json:"majority_correct"`
+	CorrectReplicates              int               `json:"correct_replicates"`
+	TotalAnswerReplicates          int               `json:"total_answer_replicates"`
+	MemoryLogicalTokenUsage        lmeTokenUsage     `json:"memory_logical_token_usage"`
+	MemoryLogicalUsageMissingCalls int               `json:"memory_logical_usage_missing_calls"`
+	MemoryEmbeddingUsage           lmeEmbeddingUsage `json:"memory_embedding_usage"`
+	AnswerLogicalTokenUsage        lmeTokenUsage     `json:"answer_logical_token_usage"`
+	JudgeLogicalTokenUsage         lmeTokenUsage     `json:"judge_logical_token_usage"`
+	FinalMemories                  int               `json:"final_memories"`
+	IngestDurationMs               int64             `json:"ingest_duration_ms"`
+	SearchDurationMs               int64             `json:"search_duration_ms"`
 }
 
 type lmeReplicateCase struct {
@@ -169,11 +179,19 @@ type lmeReplicateCase struct {
 }
 
 type lmeReplicateCaseArmSummary struct {
-	PrimaryCorrect    bool     `json:"primary_correct"`
-	MajorityCorrect   bool     `json:"majority_correct"`
-	CorrectReplicates int      `json:"correct_replicates"`
-	IngestedPairs     int      `json:"ingested_pairs"`
-	Stages            []string `json:"stages"`
+	PrimaryCorrect                 bool              `json:"primary_correct"`
+	MajorityCorrect                bool              `json:"majority_correct"`
+	CorrectReplicates              int               `json:"correct_replicates"`
+	IngestedPairs                  int               `json:"ingested_pairs"`
+	Stages                         []string          `json:"stages"`
+	MemoryLogicalTokenUsage        lmeTokenUsage     `json:"memory_logical_token_usage"`
+	MemoryLogicalUsageMissingCalls int               `json:"memory_logical_usage_missing_calls"`
+	MemoryEmbeddingUsage           lmeEmbeddingUsage `json:"memory_embedding_usage"`
+	AnswerLogicalTokenUsage        lmeTokenUsage     `json:"answer_logical_token_usage"`
+	JudgeLogicalTokenUsage         lmeTokenUsage     `json:"judge_logical_token_usage"`
+	FinalMemories                  int               `json:"final_memories"`
+	IngestDurationMs               int64             `json:"ingest_duration_ms"`
+	SearchDurationMs               int64             `json:"search_duration_ms"`
 }
 
 type lmeReplicatePairwise struct {
@@ -825,6 +843,14 @@ func aggregateLongMemEvalReplicateArm(
 	caseTypes := make(map[string]string)
 	casePrimary := make(map[string]bool)
 	caseIngestedPairs := make(map[string]int)
+	caseMemoryUsage := make(map[string]lmeTokenUsage)
+	caseMemoryUsageMissing := make(map[string]int)
+	caseEmbeddingUsage := make(map[string]lmeEmbeddingUsage)
+	caseAnswerUsage := make(map[string]lmeTokenUsage)
+	caseJudgeUsage := make(map[string]lmeTokenUsage)
+	caseFinalMemories := make(map[string]int)
+	caseIngestDuration := make(map[string]int64)
+	caseSearchDuration := make(map[string]int64)
 	var sourceDigest string
 	for replicateIndex, pair := range pairs {
 		result := pair.Baseline
@@ -860,9 +886,61 @@ func aggregateLongMemEvalReplicateArm(
 			if correct {
 				caseCorrect[cr.QuestionID]++
 			}
+			if br.AnswerLogicalUsage == nil {
+				return nil, nil, fmt.Errorf(
+					"replicate %q case %q backend %q is missing "+
+						"answer logical usage",
+					pair.Spec.Name, cr.QuestionID, backend,
+				)
+			}
+			answerUsage := caseAnswerUsage[cr.QuestionID]
+			answerUsage.Add(*br.AnswerLogicalUsage)
+			caseAnswerUsage[cr.QuestionID] = answerUsage
+			arm.AnswerLogicalTokenUsage.Add(*br.AnswerLogicalUsage)
+			if br.Judge == nil || br.Judge.LogicalTokenUsage == nil {
+				return nil, nil, fmt.Errorf(
+					"replicate %q case %q backend %q is missing "+
+						"judge logical usage",
+					pair.Spec.Name, cr.QuestionID, backend,
+				)
+			}
+			judgeUsage := caseJudgeUsage[cr.QuestionID]
+			judgeUsage.Add(*br.Judge.LogicalTokenUsage)
+			caseJudgeUsage[cr.QuestionID] = judgeUsage
+			arm.JudgeLogicalTokenUsage.Add(*br.Judge.LogicalTokenUsage)
 			if replicateIndex == 0 {
 				casePrimary[cr.QuestionID] = correct
 				caseIngestedPairs[cr.QuestionID] = br.IngestedPairs
+				memoryUsage, missing, err :=
+					longMemEvalReplicateCaseMemoryLogicalUsage(
+						br, backend,
+					)
+				if err != nil {
+					return nil, nil, fmt.Errorf(
+						"replicate %q case %q backend %q "+
+							"memory logical usage: %w",
+						pair.Spec.Name, cr.QuestionID, backend, err,
+					)
+				}
+				if br.EmbeddingUsage == nil {
+					return nil, nil, fmt.Errorf(
+						"replicate %q case %q backend %q is missing "+
+							"embedding usage",
+						pair.Spec.Name, cr.QuestionID, backend,
+					)
+				}
+				embeddingUsage := *br.EmbeddingUsage
+				if backend == "mem0" &&
+					embeddingUsage.Requests == 0 &&
+					embeddingUsage.Calls > 0 {
+					embeddingUsage.Requests = embeddingUsage.Calls
+				}
+				caseMemoryUsage[cr.QuestionID] = memoryUsage
+				caseMemoryUsageMissing[cr.QuestionID] = missing
+				caseEmbeddingUsage[cr.QuestionID] = embeddingUsage
+				caseFinalMemories[cr.QuestionID] = len(br.FinalMemories)
+				caseIngestDuration[cr.QuestionID] = br.IngestDuration
+				caseSearchDuration[cr.QuestionID] = br.SearchDuration
 			}
 			caseTypes[cr.QuestionID] = cr.QuestionType
 			caseStages[cr.QuestionID] = append(caseStages[cr.QuestionID],
@@ -909,6 +987,15 @@ func aggregateLongMemEvalReplicateArm(
 		typeSummary.Cases++
 		typeSummary.TotalAnswerReplicates += len(pairs)
 		typeSummary.CorrectReplicates += correct
+		typeSummary.MemoryLogicalTokenUsage.Add(caseMemoryUsage[id])
+		typeSummary.MemoryLogicalUsageMissingCalls +=
+			caseMemoryUsageMissing[id]
+		typeSummary.MemoryEmbeddingUsage.Add(caseEmbeddingUsage[id])
+		typeSummary.AnswerLogicalTokenUsage.Add(caseAnswerUsage[id])
+		typeSummary.JudgeLogicalTokenUsage.Add(caseJudgeUsage[id])
+		typeSummary.FinalMemories += caseFinalMemories[id]
+		typeSummary.IngestDurationMs += caseIngestDuration[id]
+		typeSummary.SearchDurationMs += caseSearchDuration[id]
 		if casePrimary[id] {
 			typeSummary.PrimaryCorrect++
 		}
@@ -920,14 +1007,68 @@ func aggregateLongMemEvalReplicateArm(
 			Arms: map[string]lmeReplicateCaseArmSummary{
 				armName: {
 					PrimaryCorrect: casePrimary[id], MajorityCorrect: majority,
-					CorrectReplicates: correct,
-					IngestedPairs:     caseIngestedPairs[id],
-					Stages:            caseStages[id],
+					CorrectReplicates:              correct,
+					IngestedPairs:                  caseIngestedPairs[id],
+					Stages:                         caseStages[id],
+					MemoryLogicalTokenUsage:        caseMemoryUsage[id],
+					MemoryLogicalUsageMissingCalls: caseMemoryUsageMissing[id],
+					MemoryEmbeddingUsage:           caseEmbeddingUsage[id],
+					AnswerLogicalTokenUsage:        caseAnswerUsage[id],
+					JudgeLogicalTokenUsage:         caseJudgeUsage[id],
+					FinalMemories:                  caseFinalMemories[id],
+					IngestDurationMs:               caseIngestDuration[id],
+					SearchDurationMs:               caseSearchDuration[id],
 				},
 			},
 		})
 	}
+	if err := validateLongMemEvalReplicateResourceRollup(arm); err != nil {
+		return nil, nil, err
+	}
 	return arm, cases, nil
+}
+
+func validateLongMemEvalReplicateResourceRollup(
+	arm *lmeReplicateArm,
+) error {
+	var total lmeReplicateTypeSummary
+	for _, summary := range arm.ByType {
+		if summary == nil {
+			continue
+		}
+		total.Cases += summary.Cases
+		total.MemoryLogicalTokenUsage.Add(
+			summary.MemoryLogicalTokenUsage,
+		)
+		total.MemoryLogicalUsageMissingCalls +=
+			summary.MemoryLogicalUsageMissingCalls
+		total.MemoryEmbeddingUsage.Add(summary.MemoryEmbeddingUsage)
+		total.AnswerLogicalTokenUsage.Add(
+			summary.AnswerLogicalTokenUsage,
+		)
+		total.JudgeLogicalTokenUsage.Add(
+			summary.JudgeLogicalTokenUsage,
+		)
+		total.FinalMemories += summary.FinalMemories
+		total.IngestDurationMs += summary.IngestDurationMs
+		total.SearchDurationMs += summary.SearchDurationMs
+	}
+	if total.Cases != arm.Cases ||
+		total.MemoryLogicalTokenUsage != arm.MemoryLogicalTokenUsage ||
+		total.MemoryLogicalUsageMissingCalls !=
+			arm.MemoryLogicalUsageMissing ||
+		total.MemoryEmbeddingUsage != arm.MemoryEmbeddingUsage ||
+		total.AnswerLogicalTokenUsage != arm.AnswerLogicalTokenUsage ||
+		total.JudgeLogicalTokenUsage != arm.JudgeLogicalTokenUsage ||
+		total.FinalMemories != arm.FinalMemories ||
+		total.IngestDurationMs != arm.IngestDurationMs ||
+		total.SearchDurationMs != arm.SearchDurationMs {
+		return fmt.Errorf(
+			"replicate arm %q resource rollup does not match type totals",
+			arm.Name,
+		)
+	}
+	return nil
 }
 
 func longMemEvalReplicateSourceDigest(result *runResult, backend string) (string, error) {
@@ -1037,6 +1178,34 @@ func longMemEvalReplicateMemoryLayerUsage(br *backendResult) (lmeTokenUsage, err
 	return usage, nil
 }
 
+func longMemEvalReplicateCaseMemoryLogicalUsage(
+	br *backendResult,
+	backend string,
+) (lmeTokenUsage, int, error) {
+	if backend == "mem0" {
+		usage, err := longMemEvalReplicateMemoryLayerUsage(br)
+		return usage, 0, err
+	}
+	if br == nil {
+		return lmeTokenUsage{}, 0, errors.New("backend result is nil")
+	}
+	var usage lmeTokenUsage
+	missing := 0
+	for _, trace := range br.IngestTraces {
+		if trace.Extraction == nil {
+			continue
+		}
+		for _, call := range trace.Extraction.ModelCalls {
+			if call.LogicalTokenUsage == nil {
+				missing++
+				continue
+			}
+			usage.Add(*call.LogicalTokenUsage)
+		}
+	}
+	return usage, missing, nil
+}
+
 func addLongMemEvalReplicateSourceCost(arm *lmeReplicateArm, result *runResult, backend string) error {
 	arm.MemoryTokenUsageBasis = "provider-observed"
 	arm.ModelCacheInitialEntries, arm.ModelCacheInitialKnown =
@@ -1094,7 +1263,13 @@ func addLongMemEvalReplicateSourceCost(arm *lmeReplicateArm, result *runResult, 
 				}
 			}
 		}
-		arm.MemoryEmbeddingUsage.Add(*br.EmbeddingUsage)
+		embeddingUsage := *br.EmbeddingUsage
+		if backend == "mem0" &&
+			embeddingUsage.Requests == 0 &&
+			embeddingUsage.Calls > 0 {
+			embeddingUsage.Requests = embeddingUsage.Calls
+		}
+		arm.MemoryEmbeddingUsage.Add(embeddingUsage)
 		arm.IngestedPairs += br.IngestedPairs
 		arm.FinalMemories += len(br.FinalMemories)
 		for _, snapshot := range br.FinalMemories {
@@ -1111,11 +1286,6 @@ func addLongMemEvalReplicateSourceCost(arm *lmeReplicateArm, result *runResult, 
 	// reconstructed per request from either the provider response or the
 	// original usage retained in a response-cache entry.
 	if backend == "mem0" {
-		if arm.MemoryEmbeddingUsage.Requests == 0 &&
-			arm.MemoryEmbeddingUsage.Calls > 0 {
-			arm.MemoryEmbeddingUsage.Requests =
-				arm.MemoryEmbeddingUsage.Calls
-		}
 		arm.MemoryLogicalTokenUsage = arm.MemoryTokenUsage
 		arm.MemoryLogicalUsageComplete = true
 	} else {
@@ -1539,20 +1709,56 @@ func formatLongMemEvalReplicateComparisonMarkdown(comparison *lmeReplicateCompar
 		gateStatus = "PASS"
 	}
 	fmt.Fprintf(&b, "- Promotion gate: **%s**\n\n", gateStatus)
-	b.WriteString("| Arm | Primary | Majority | Correct replicates | Unstable | Pairs | Provider-observed memory LLM tokens | Logical memory LLM tokens | Memory model cache hits | Logical cost complete | Embedding requests | Embedding provider calls | Embedding provider tokens | Memories |\n")
-	b.WriteString("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | :---: | ---: | ---: | ---: | ---: |\n")
+	b.WriteString("| Arm | Primary | Majority | Correct replicates | Unstable | Pairs | Provider-observed memory LLM tokens | Logical memory LLM tokens | Logical answer tokens | Logical judge tokens | Memory model cache hits | Logical memory cost complete | Embedding requests | Embedding provider calls | Embedding provider tokens | Memories | Ingest ms | Search ms |\n")
+	b.WriteString("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | :---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
 	for _, name := range []string{lmeReplicateArmPGVectorMain, lmeReplicateArmMem0OSS, lmeReplicateArmPGVectorCandidate} {
 		arm := comparison.Arms[name]
-		fmt.Fprintf(&b, "| %s | %d/%d | %d/%d | %d/%d | %d | %d | %d | %d | %d | %t | %d | %d | %d | %d |\n",
+		fmt.Fprintf(&b, "| %s | %d/%d | %d/%d | %d/%d | %d | %d | %d | %d | %d | %d | %d | %t | %d | %d | %d | %d | %d | %d |\n",
 			name, arm.PrimaryCorrect, arm.Cases, arm.MajorityCorrect, arm.Cases,
 			arm.CorrectReplicates, arm.TotalAnswerReplicates, arm.UnstableCases,
 			arm.IngestedPairs,
 			arm.MemoryTokenUsage.TotalTokens,
 			arm.MemoryLogicalTokenUsage.TotalTokens,
+			arm.AnswerLogicalTokenUsage.TotalTokens,
+			arm.JudgeLogicalTokenUsage.TotalTokens,
 			arm.MemoryModelCacheHits, arm.MemoryLogicalUsageComplete,
 			arm.MemoryEmbeddingUsage.Requests,
 			arm.MemoryEmbeddingUsage.Calls, arm.MemoryEmbeddingUsage.TotalTokens,
-			arm.FinalMemories)
+			arm.FinalMemories, arm.IngestDurationMs, arm.SearchDurationMs)
+	}
+	b.WriteString("\n## Resource Accounting by Type\n\n")
+	b.WriteString("| Arm | Type | Cases | Logical memory tokens | Missing memory usages | Embedding requests | Embedding tokens | Logical answer tokens | Logical judge tokens | Memories | Ingest ms | Search ms |\n")
+	b.WriteString("| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
+	for _, name := range []string{
+		lmeReplicateArmPGVectorMain,
+		lmeReplicateArmMem0OSS,
+		lmeReplicateArmPGVectorCandidate,
+	} {
+		arm := comparison.Arms[name]
+		typeNames := make([]string, 0, len(arm.ByType))
+		for typeName := range arm.ByType {
+			typeNames = append(typeNames, typeName)
+		}
+		sort.Strings(typeNames)
+		for _, typeName := range typeNames {
+			summary := arm.ByType[typeName]
+			fmt.Fprintf(
+				&b,
+				"| %s | %s | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d |\n",
+				name,
+				typeName,
+				summary.Cases,
+				summary.MemoryLogicalTokenUsage.TotalTokens,
+				summary.MemoryLogicalUsageMissingCalls,
+				summary.MemoryEmbeddingUsage.Requests,
+				summary.MemoryEmbeddingUsage.TotalTokens,
+				summary.AnswerLogicalTokenUsage.TotalTokens,
+				summary.JudgeLogicalTokenUsage.TotalTokens,
+				summary.FinalMemories,
+				summary.IngestDurationMs,
+				summary.SearchDurationMs,
+			)
+		}
 	}
 	b.WriteString("\n## Pairwise Majority Outcomes\n\n")
 	b.WriteString("| Comparison | Candidate | Baseline | Wins | Losses | Ties | Accuracy delta | Discordant cases | Exact McNemar p |\n")
