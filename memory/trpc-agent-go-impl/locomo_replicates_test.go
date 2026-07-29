@@ -135,6 +135,15 @@ func TestCompareLoCoMoReplicatesRejectsInvalidInputs(t *testing.T) {
 			wantError: "protocol metadata",
 		},
 		{
+			name: "dataset provenance changes",
+			mutate: func(t *testing.T, fixture locomoReplicateTestFixture) {
+				result := readLoCoMoTestResult(t, fixture.mainFreshResult)
+				result.Metadata.DatasetSHA256 = strings.Repeat("e", 64)
+				writeLoCoMoTestJSON(t, fixture.mainFreshResult, result)
+			},
+			wantError: "protocol metadata",
+		},
+		{
 			name: "module replacement changes",
 			mutate: func(t *testing.T, fixture locomoReplicateTestFixture) {
 				result := readLoCoMoTestResult(t, fixture.mainFreshResult)
@@ -184,6 +193,32 @@ func TestCompareLoCoMoReplicatesRejectsInvalidInputs(t *testing.T) {
 				)
 			},
 			wantError: "extraction call error",
+		},
+		{
+			name: "extraction session coverage changes",
+			mutate: func(t *testing.T, fixture locomoReplicateTestFixture) {
+				result := readLoCoMoTestResult(t, fixture.candidateFreshResult)
+				result.SampleResults[0].ExtractionCalls = append(
+					result.SampleResults[0].ExtractionCalls,
+					result.SampleResults[0].ExtractionCalls[0],
+				)
+				writeLoCoMoTestJSON(
+					t, fixture.candidateFreshResult, result,
+				)
+			},
+			wantError: "fresh extraction replay coverage",
+		},
+		{
+			name: "extraction turn coverage changes",
+			mutate: func(t *testing.T, fixture locomoReplicateTestFixture) {
+				result := readLoCoMoTestResult(t, fixture.candidateFreshResult)
+				result.SampleResults[0].ExtractionCalls[0].
+					SourceMessages = nil
+				writeLoCoMoTestJSON(
+					t, fixture.candidateFreshResult, result,
+				)
+			},
+			wantError: "fresh extraction replay coverage",
 		},
 		{
 			name: "extraction operation is unregistered",
@@ -253,9 +288,12 @@ func TestCompareLoCoMoReplicatesRejectsInvalidInputs(t *testing.T) {
 			wantError: "sample QA token usage rollup mismatch",
 		},
 		{
-			name: "snapshot marker is false",
+			name: "snapshot marker digest changes",
 			mutate: func(t *testing.T, fixture locomoReplicateTestFixture) {
-				writeLoCoMoTestJSON(t, fixture.mainFixedMarker, false)
+				var marker locomoSnapshotUnchangedMarker
+				readLoCoMoTestJSON(t, fixture.mainFixedMarker, &marker)
+				marker.SnapshotAfterSHA256 = strings.Repeat("f", 64)
+				writeLoCoMoTestJSON(t, fixture.mainFixedMarker, marker)
 			},
 			wantError: "snapshot changed",
 		},
@@ -282,7 +320,7 @@ func TestCompareLoCoMoReplicatesRejectsInvalidInputs(t *testing.T) {
 			wantError: "invalid LoCoMo table stats",
 		},
 		{
-			name: "selection duplicates a question",
+			name: "selection content changes",
 			mutate: func(t *testing.T, fixture locomoReplicateTestFixture) {
 				writeLoCoMoTestJSON(
 					t,
@@ -295,7 +333,40 @@ func TestCompareLoCoMoReplicatesRejectsInvalidInputs(t *testing.T) {
 					},
 				)
 			},
-			wantError: "duplicate question",
+			wantError: "selection SHA-256 mismatch",
+		},
+		{
+			name: "selection coverage changes",
+			mutate: func(t *testing.T, fixture locomoReplicateTestFixture) {
+				writeLoCoMoTestJSON(
+					t,
+					fixture.selectionPath,
+					locomoReplicateSelection{
+						Questions: []locomoReplicateSelectedQuestion{{
+							QuestionID: "q-1",
+						}},
+					},
+				)
+				selectionSHA256, err := sha256File(fixture.selectionPath)
+				if err != nil {
+					t.Fatalf("hash changed selection: %v", err)
+				}
+				var manifest locomoReplicateManifest
+				readLoCoMoTestJSON(t, fixture.manifestPath, &manifest)
+				manifest.SelectionSHA256 = selectionSHA256
+				writeLoCoMoTestJSON(t, fixture.manifestPath, manifest)
+			},
+			wantError: "selection questions = 1, want 2",
+		},
+		{
+			name: "question ID digest changes",
+			mutate: func(t *testing.T, fixture locomoReplicateTestFixture) {
+				var manifest locomoReplicateManifest
+				readLoCoMoTestJSON(t, fixture.manifestPath, &manifest)
+				manifest.Protocol.QuestionIDsSHA256 = strings.Repeat("f", 64)
+				writeLoCoMoTestJSON(t, fixture.manifestPath, manifest)
+			},
+			wantError: "question ID SHA-256 mismatch",
 		},
 		{
 			name: "snapshot changes",
@@ -408,6 +479,13 @@ func TestValidateLoCoMoReplicateManifest(t *testing.T) {
 				value.Selection = ""
 			},
 			wantError: "selection is empty",
+		},
+		{
+			name: "invalid selection SHA-256",
+			mutate: func(value *locomoReplicateManifest) {
+				value.SelectionSHA256 = ""
+			},
+			wantError: "selection SHA-256 is invalid",
 		},
 		{
 			name: "incomplete protocol",
@@ -649,12 +727,26 @@ func newLoCoMoReplicateTestFixture(
 			{QuestionID: "q-2"},
 		},
 	})
+	selectionSHA256, err := sha256File(selectionPath)
+	if err != nil {
+		t.Fatalf("hash selection: %v", err)
+	}
+	questionIDsSHA256, err := canonicalJSONSHA256(
+		[]string{"q-1", "q-2"},
+	)
+	if err != nil {
+		t.Fatalf("hash question IDs: %v", err)
+	}
 	protocol := locomoReplicateProtocol{
 		ExpectedSamples:    1,
 		ExpectedQuestions:  2,
 		ExpectedReplicates: 3,
 		ExpectedSampleIDs:  []string{"sample-1"},
 		ExpectedCategories: []string{"category-a", "category-b"},
+		DatasetSHA256:      strings.Repeat("d", 64),
+		QuestionIDsSHA256:  questionIDsSHA256,
+		ExpectedSessions:   1,
+		ExpectedTurns:      1,
 		BenchmarkRevision:  "benchmark-revision",
 		ReplayProtocol:     locomoAutoReplayProtocol,
 		RoleMapping:        locomoRoleMapping,
@@ -676,11 +768,12 @@ func newLoCoMoReplicateTestFixture(
 		"history-preserving", true, "assistant-result-preserving", 0.85,
 	)
 	manifest := locomoReplicateManifest{
-		SchemaVersion: locomoReplicateManifestSchemaVersion,
-		Experiment:    "locomo-test",
-		Selection:     filepath.Base(selectionPath),
-		Protocol:      protocol,
-		Arms:          []locomoReplicateArmSpec{main, candidate},
+		SchemaVersion:   locomoReplicateManifestSchemaVersion,
+		Experiment:      "locomo-test",
+		Selection:       filepath.Base(selectionPath),
+		SelectionSHA256: selectionSHA256,
+		Protocol:        protocol,
+		Arms:            []locomoReplicateArmSpec{main, candidate},
 		Gate: locomoReplicateGateConfig{
 			OverallNoninferiorityMargin:     0.03,
 			PerCategoryNoninferiorityMargin: 0.15,
@@ -786,7 +879,15 @@ func writeLoCoMoTestArm(
 				armDir,
 				"replicate-"+strconv.Itoa(index)+"-snapshot-unchanged.json",
 			)
-			writeLoCoMoTestJSON(t, markerPath, true)
+			writeLoCoMoTestJSON(
+				t,
+				markerPath,
+				locomoSnapshotUnchangedMarker{
+					SchemaVersion:        1,
+					SnapshotBeforeSHA256: snapshotSHA,
+					SnapshotAfterSHA256:  snapshotSHA,
+				},
+			)
 			input.SnapshotUnchanged = relativeLoCoMoTestPath(
 				t, root, markerPath,
 			)
@@ -869,20 +970,24 @@ func newLoCoMoTestResult(
 	}
 	return EvaluationResult{
 		Metadata: &EvalMetadata{
-			Framework:        "trpc-agent-go",
-			Model:            protocol.Model,
-			ModelVariant:     protocol.ModelVariant,
-			EvalModel:        protocol.EvalModel,
-			Scenario:         string(scenarios.ScenarioAuto),
-			MemoryBackend:    "pgvector",
-			QASearchPasses:   protocol.QASearchPasses,
-			QAPromptVersion:  protocol.QAPromptVersion,
-			QASearchStrategy: protocol.QASearchStrategy,
-			VectorTopK:       protocol.VectorTopK,
-			ReplayProtocol:   protocol.ReplayProtocol,
-			RoleMapping:      protocol.RoleMapping,
-			ReuseMemories:    reuse,
-			TableSuffix:      arm.TableSuffix,
+			Framework:         "trpc-agent-go",
+			Model:             protocol.Model,
+			ModelVariant:      protocol.ModelVariant,
+			EvalModel:         protocol.EvalModel,
+			Scenario:          string(scenarios.ScenarioAuto),
+			MemoryBackend:     "pgvector",
+			QASearchPasses:    protocol.QASearchPasses,
+			QAPromptVersion:   protocol.QAPromptVersion,
+			QASearchStrategy:  protocol.QASearchStrategy,
+			VectorTopK:        protocol.VectorTopK,
+			ReplayProtocol:    protocol.ReplayProtocol,
+			RoleMapping:       protocol.RoleMapping,
+			DatasetSHA256:     protocol.DatasetSHA256,
+			QuestionIDsSHA256: protocol.QuestionIDsSHA256,
+			SelectedSessions:  protocol.ExpectedSessions,
+			SelectedTurns:     protocol.ExpectedTurns,
+			ReuseMemories:     reuse,
+			TableSuffix:       arm.TableSuffix,
 			PGVectorExtraction: &pgvectorExtractionConfig{
 				UpdatePolicy:                pgvectorUpdatePolicy(arm.UpdatePolicy),
 				AssistantResultExtraction:   arm.AssistantResultExtraction,

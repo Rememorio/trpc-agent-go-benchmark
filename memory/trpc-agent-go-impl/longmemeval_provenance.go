@@ -580,6 +580,10 @@ func longMemEvalFileSHA256(path string) (string, error) {
 }
 
 func longMemEvalJSONSHA256(value any) (string, error) {
+	return canonicalJSONSHA256(value)
+}
+
+func canonicalJSONSHA256(value any) (string, error) {
 	data, err := json.Marshal(value)
 	if err != nil {
 		return "", err

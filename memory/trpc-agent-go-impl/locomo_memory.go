@@ -65,6 +65,13 @@ type memoryConfig struct {
 	mode    memoryMode
 }
 
+type locomoInputProvenance struct {
+	DatasetSHA256     string
+	QuestionIDsSHA256 string
+	SelectedSessions  int
+	SelectedTurns     int
+}
+
 // EvaluationResult holds the complete evaluation result.
 type EvaluationResult struct {
 	Metadata      *EvalMetadata                      `json:"metadata"`
@@ -109,6 +116,10 @@ type EvalMetadata struct {
 	VectorTopK            int                       `json:"vector_topk,omitempty"`
 	ReplayProtocol        string                    `json:"replay_protocol,omitempty"`
 	RoleMapping           string                    `json:"role_mapping,omitempty"`
+	DatasetSHA256         string                    `json:"dataset_sha256,omitempty"`
+	QuestionIDsSHA256     string                    `json:"question_ids_sha256,omitempty"`
+	SelectedSessions      int                       `json:"selected_sessions,omitempty"`
+	SelectedTurns         int                       `json:"selected_turns,omitempty"`
 	TokenUsageScope       string                    `json:"token_usage_scope,omitempty"`
 	EmbeddingUsageScope   string                    `json:"embedding_usage_scope,omitempty"`
 	ReuseMemories         bool                      `json:"reuse_memories"`
@@ -204,6 +215,12 @@ func runLoCoMoMemory(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("load dataset: %w", err)
 	}
+	datasetSHA256, err := sha256File(
+		filepath.Join(*flagDataset, *flagDataFile),
+	)
+	if err != nil {
+		return fmt.Errorf("hash dataset: %w", err)
+	}
 	log.Printf("Loaded %d samples", len(samples))
 
 	// Filter samples if specified.
@@ -219,6 +236,12 @@ func runLoCoMoMemory(ctx context.Context) error {
 	if *flagMaxTasks > 0 && *flagMaxTasks < len(samples) {
 		samples = samples[:*flagMaxTasks]
 		log.Printf("Limited to %d samples", len(samples))
+	}
+	inputProvenance, err := buildLoCoMoInputProvenance(
+		datasetSHA256, samples,
+	)
+	if err != nil {
+		return err
 	}
 
 	// Create models.
@@ -256,7 +279,8 @@ func runLoCoMoMemory(ctx context.Context) error {
 		// Long-context doesn't need memory backends.
 		if scenarioType == scenarios.ScenarioLongContext {
 			if err := runScenario(
-				ctx, samples, llm, evalLLM, scenarioType, "", baseConfig, outputDir,
+				ctx, samples, inputProvenance, llm, evalLLM,
+				scenarioType, "", baseConfig, outputDir,
 			); err != nil {
 				return err
 			}
@@ -266,6 +290,7 @@ func runLoCoMoMemory(ctx context.Context) error {
 			if err := runScenario(
 				ctx,
 				samples,
+				inputProvenance,
 				llm,
 				evalLLM,
 				scenarioType,
@@ -281,7 +306,8 @@ func runLoCoMoMemory(ctx context.Context) error {
 		// Run each backend for memory-based scenarios.
 		for _, backend := range backends {
 			if err := runScenario(
-				ctx, samples, llm, evalLLM, scenarioType, backend, baseConfig, outputDir,
+				ctx, samples, inputProvenance, llm, evalLLM,
+				scenarioType, backend, baseConfig, outputDir,
 			); err != nil {
 				return err
 			}
@@ -422,6 +448,55 @@ func filterSamples(
 	return samples, nil
 }
 
+func buildLoCoMoInputProvenance(
+	datasetSHA256 string,
+	samples []*dataset.LoCoMoSample,
+) (locomoInputProvenance, error) {
+	questionIDs := make([]string, 0)
+	seenQuestionIDs := make(map[string]bool)
+	var selectedSessions int
+	var selectedTurns int
+	for _, sample := range samples {
+		if sample == nil {
+			return locomoInputProvenance{}, fmt.Errorf(
+				"selected LoCoMo sample is nil",
+			)
+		}
+		selectedSessions += len(sample.Conversation)
+		for _, session := range sample.Conversation {
+			selectedTurns += len(session.Turns)
+		}
+		for _, question := range sample.QA {
+			id := strings.TrimSpace(question.QuestionID)
+			if id == "" || seenQuestionIDs[id] {
+				return locomoInputProvenance{}, fmt.Errorf(
+					"selected LoCoMo question ID is empty or duplicated",
+				)
+			}
+			seenQuestionIDs[id] = true
+			questionIDs = append(questionIDs, id)
+		}
+	}
+	if len(questionIDs) == 0 {
+		return locomoInputProvenance{}, fmt.Errorf(
+			"selected LoCoMo question set is empty",
+		)
+	}
+	slices.Sort(questionIDs)
+	questionIDsSHA256, err := canonicalJSONSHA256(questionIDs)
+	if err != nil {
+		return locomoInputProvenance{}, fmt.Errorf(
+			"hash selected LoCoMo question IDs: %w", err,
+		)
+	}
+	return locomoInputProvenance{
+		DatasetSHA256:     datasetSHA256,
+		QuestionIDsSHA256: questionIDsSHA256,
+		SelectedSessions:  selectedSessions,
+		SelectedTurns:     selectedTurns,
+	}, nil
+}
+
 func filterLoCoMoQuestions(
 	samples []*dataset.LoCoMoSample,
 	questionIDs []string,
@@ -472,6 +547,7 @@ func filterLoCoMoQuestions(
 func runScenario(
 	ctx context.Context,
 	samples []*dataset.LoCoMoSample,
+	inputProvenance locomoInputProvenance,
 	llm, evalLLM model.Model,
 	scenarioType scenarios.ScenarioType,
 	backend string,
@@ -554,7 +630,7 @@ func runScenario(
 	log.Printf("=== Running: %s (backend=%s) ===", evaluator.Name(), backend)
 
 	result, evaluationErr := runEvaluation(
-		ctx, samples, evaluator, config, backend, scenarioDir,
+		ctx, samples, inputProvenance, evaluator, config, backend, scenarioDir,
 	)
 	saveResults(scenarioDir, result)
 	printSummary(result)
@@ -834,6 +910,7 @@ var standardCategories = []string{
 func runEvaluation(
 	ctx context.Context,
 	samples []*dataset.LoCoMoSample,
+	inputProvenance locomoInputProvenance,
 	evaluator scenarios.Evaluator,
 	config scenarios.Config,
 	backend string,
@@ -862,7 +939,7 @@ func runEvaluation(
 				totalUsage.Add(*failure.TokenUsage)
 			}
 			partial := buildEvaluationResult(
-				config, backend, startTime,
+				config, backend, inputProvenance, startTime,
 				sampleResults, catAgg, totalQuestions, totalUsage,
 			)
 			attachEvaluationFailures(partial, failures)
@@ -915,7 +992,7 @@ func runEvaluation(
 		// Incremental checkpoint: save partial results after
 		// each sample so progress is not lost.
 		partial := buildEvaluationResult(
-			config, backend, startTime,
+			config, backend, inputProvenance, startTime,
 			sampleResults, catAgg, totalQuestions, totalUsage,
 		)
 		attachEvaluationFailures(partial, failures)
@@ -923,7 +1000,7 @@ func runEvaluation(
 	}
 
 	result := buildEvaluationResult(
-		config, backend, startTime,
+		config, backend, inputProvenance, startTime,
 		sampleResults, catAgg, totalQuestions, totalUsage,
 	)
 	attachEvaluationFailures(result, failures)
@@ -1050,6 +1127,7 @@ func logSampleCategoryBreakdown(result *scenarios.SampleResult) {
 func buildEvaluationResult(
 	config scenarios.Config,
 	backend string,
+	inputProvenance locomoInputProvenance,
 	startTime time.Time,
 	sampleResults []*scenarios.SampleResult,
 	catAgg *metrics.CategoryAggregator,
@@ -1071,21 +1149,25 @@ func buildEvaluationResult(
 			float64(totalUsage.PromptTokens)
 	}
 	metadata := &EvalMetadata{
-		Framework:      "trpc-agent-go",
-		Version:        "1.0.0",
-		Timestamp:      time.Now(),
-		Model:          getModelName(),
-		ModelVariant:   getModelVariant(),
-		EvalModel:      getEvalModelName(),
-		Scenario:       string(config.Scenario),
-		MemoryBackend:  backend,
-		MaxContext:     config.MaxContext,
-		QAHistoryTurns: config.QAHistoryTurns,
-		QASearchPasses: config.QASearchPasses,
-		ReuseMemories:  config.ReuseMemories,
-		TableSuffix:    *flagTableSuffix,
-		Build:          currentLongMemEvalBuildProvenance(),
-		LLMJudge:       config.EnableLLMJudge,
+		Framework:         "trpc-agent-go",
+		Version:           "1.0.0",
+		Timestamp:         time.Now(),
+		Model:             getModelName(),
+		ModelVariant:      getModelVariant(),
+		EvalModel:         getEvalModelName(),
+		Scenario:          string(config.Scenario),
+		MemoryBackend:     backend,
+		MaxContext:        config.MaxContext,
+		QAHistoryTurns:    config.QAHistoryTurns,
+		QASearchPasses:    config.QASearchPasses,
+		ReuseMemories:     config.ReuseMemories,
+		TableSuffix:       *flagTableSuffix,
+		Build:             currentLongMemEvalBuildProvenance(),
+		LLMJudge:          config.EnableLLMJudge,
+		DatasetSHA256:     inputProvenance.DatasetSHA256,
+		QuestionIDsSHA256: inputProvenance.QuestionIDsSHA256,
+		SelectedSessions:  inputProvenance.SelectedSessions,
+		SelectedTurns:     inputProvenance.SelectedTurns,
 	}
 	if config.Scenario == scenarios.ScenarioAuto ||
 		config.Scenario == scenarios.ScenarioAgentic {

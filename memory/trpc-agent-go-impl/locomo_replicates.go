@@ -26,7 +26,7 @@ import (
 )
 
 const (
-	locomoReplicateManifestSchemaVersion   = 1
+	locomoReplicateManifestSchemaVersion   = 2
 	locomoReplicateComparisonSchemaVersion = 1
 	locomoReplicateKindFresh               = "fresh"
 	locomoReplicateKindFixedMemory         = "fixed-memory"
@@ -37,12 +37,13 @@ const (
 )
 
 type locomoReplicateManifest struct {
-	SchemaVersion int                       `json:"schema_version"`
-	Experiment    string                    `json:"experiment"`
-	Selection     string                    `json:"selection"`
-	Protocol      locomoReplicateProtocol   `json:"protocol"`
-	Arms          []locomoReplicateArmSpec  `json:"arms"`
-	Gate          locomoReplicateGateConfig `json:"gate"`
+	SchemaVersion   int                       `json:"schema_version"`
+	Experiment      string                    `json:"experiment"`
+	Selection       string                    `json:"selection"`
+	SelectionSHA256 string                    `json:"selection_sha256"`
+	Protocol        locomoReplicateProtocol   `json:"protocol"`
+	Arms            []locomoReplicateArmSpec  `json:"arms"`
+	Gate            locomoReplicateGateConfig `json:"gate"`
 }
 
 type locomoReplicateProtocol struct {
@@ -51,6 +52,10 @@ type locomoReplicateProtocol struct {
 	ExpectedReplicates int      `json:"expected_replicates"`
 	ExpectedSampleIDs  []string `json:"expected_sample_ids"`
 	ExpectedCategories []string `json:"expected_categories"`
+	DatasetSHA256      string   `json:"dataset_sha256"`
+	QuestionIDsSHA256  string   `json:"question_ids_sha256"`
+	ExpectedSessions   int      `json:"expected_sessions"`
+	ExpectedTurns      int      `json:"expected_turns"`
 	BenchmarkRevision  string   `json:"benchmark_revision"`
 	ReplayProtocol     string   `json:"replay_protocol"`
 	RoleMapping        string   `json:"role_mapping"`
@@ -84,6 +89,12 @@ type locomoReplicateInputSpec struct {
 	Kind              string `json:"kind"`
 	Results           string `json:"results"`
 	SnapshotUnchanged string `json:"snapshot_unchanged,omitempty"`
+}
+
+type locomoSnapshotUnchangedMarker struct {
+	SchemaVersion        int    `json:"schema_version"`
+	SnapshotBeforeSHA256 string `json:"snapshot_before_sha256"`
+	SnapshotAfterSHA256  string `json:"snapshot_after_sha256"`
 }
 
 type locomoReplicateGateConfig struct {
@@ -305,11 +316,32 @@ func loadLoCoMoReplicates(
 	if err != nil {
 		return locomoReplicateManifest{}, "", "", nil, err
 	}
+	if selectionSHA != manifest.SelectionSHA256 {
+		return locomoReplicateManifest{}, "", "", nil, fmt.Errorf(
+			"LoCoMo replicate selection SHA-256 mismatch",
+		)
+	}
 	expectedIDs, err := validateLoCoMoReplicateSelection(
 		selection, manifest.Protocol.ExpectedQuestions,
 	)
 	if err != nil {
 		return locomoReplicateManifest{}, "", "", nil, err
+	}
+	questionIDs := make([]string, 0, len(expectedIDs))
+	for questionID := range expectedIDs {
+		questionIDs = append(questionIDs, questionID)
+	}
+	sort.Strings(questionIDs)
+	questionIDsSHA256, err := canonicalJSONSHA256(questionIDs)
+	if err != nil {
+		return locomoReplicateManifest{}, "", "", nil, fmt.Errorf(
+			"hash LoCoMo replicate question IDs: %w", err,
+		)
+	}
+	if questionIDsSHA256 != manifest.Protocol.QuestionIDsSHA256 {
+		return locomoReplicateManifest{}, "", "", nil, fmt.Errorf(
+			"LoCoMo replicate question ID SHA-256 mismatch",
+		)
 	}
 	arms := make([]locomoLoadedReplicateArm, 0, len(manifest.Arms))
 	for _, armSpec := range manifest.Arms {
@@ -366,12 +398,19 @@ func validateLoCoMoReplicateManifest(
 	if strings.TrimSpace(manifest.Selection) == "" {
 		return fmt.Errorf("LoCoMo replicate selection is empty")
 	}
+	if !validSHA256(manifest.SelectionSHA256) {
+		return fmt.Errorf("LoCoMo replicate selection SHA-256 is invalid")
+	}
 	protocol := manifest.Protocol
 	if protocol.ExpectedSamples <= 0 ||
 		protocol.ExpectedQuestions <= 0 ||
 		protocol.ExpectedReplicates != 3 ||
 		len(protocol.ExpectedSampleIDs) != protocol.ExpectedSamples ||
 		len(protocol.ExpectedCategories) == 0 ||
+		!validSHA256(protocol.DatasetSHA256) ||
+		!validSHA256(protocol.QuestionIDsSHA256) ||
+		protocol.ExpectedSessions <= 0 ||
+		protocol.ExpectedTurns <= 0 ||
 		strings.TrimSpace(protocol.BenchmarkRevision) == "" ||
 		strings.TrimSpace(protocol.ReplayProtocol) == "" ||
 		strings.TrimSpace(protocol.RoleMapping) == "" ||
@@ -632,14 +671,16 @@ func loadLoCoMoReplicateArm(
 		markerPath := resolveLoCoMoReplicatePath(
 			baseDir, replicate.SnapshotUnchanged,
 		)
-		var unchanged bool
-		if err := readLoCoMoReplicateJSON(markerPath, &unchanged); err != nil {
+		var marker locomoSnapshotUnchangedMarker
+		if err := readLoCoMoReplicateJSON(markerPath, &marker); err != nil {
 			return locomoLoadedReplicateArm{}, fmt.Errorf(
 				"load LoCoMo snapshot marker for %s/%s: %w",
 				spec.Name, replicate.Name, err,
 			)
 		}
-		if !unchanged {
+		if marker.SchemaVersion != 1 ||
+			marker.SnapshotBeforeSHA256 != arm.SnapshotSHA ||
+			marker.SnapshotAfterSHA256 != arm.SnapshotSHA {
 			return locomoLoadedReplicateArm{}, fmt.Errorf(
 				"LoCoMo snapshot changed for %s/%s",
 				spec.Name, replicate.Name,
@@ -678,6 +719,10 @@ func validateLoCoMoReplicateResult(
 		metadata.VectorTopK != protocol.VectorTopK ||
 		metadata.ReplayProtocol != protocol.ReplayProtocol ||
 		metadata.RoleMapping != protocol.RoleMapping ||
+		metadata.DatasetSHA256 != protocol.DatasetSHA256 ||
+		metadata.QuestionIDsSHA256 != protocol.QuestionIDsSHA256 ||
+		metadata.SelectedSessions != protocol.ExpectedSessions ||
+		metadata.SelectedTurns != protocol.ExpectedTurns ||
 		metadata.TableSuffix != arm.TableSuffix ||
 		metadata.LLMJudge {
 		return fmt.Errorf("result protocol metadata does not match the manifest")
@@ -791,6 +836,8 @@ func validateLoCoMoReplicateCases(
 	seenSamples := map[string]bool{}
 	seenQuestions := map[string]bool{}
 	categoryCounts := map[string]int{}
+	var extractionCalls int
+	var extractionSourceMessages int
 	allowedOperations := make(
 		map[string]bool, len(arm.AllowedExtractionOperations),
 	)
@@ -823,6 +870,7 @@ func validateLoCoMoReplicateCases(
 					sample.SampleID,
 				)
 			}
+			extractionCalls += len(sample.ExtractionCalls)
 			for _, call := range sample.ExtractionCalls {
 				if strings.TrimSpace(call.Error) != "" {
 					return fmt.Errorf(
@@ -830,6 +878,7 @@ func validateLoCoMoReplicateCases(
 						sample.SampleID,
 					)
 				}
+				extractionSourceMessages += len(call.SourceMessages)
 				for _, toolCall := range call.ToolCalls {
 					if !allowedOperations[toolCall.Name] {
 						return fmt.Errorf(
@@ -878,6 +927,15 @@ func validateLoCoMoReplicateCases(
 	if len(seenSamples) != len(expectedSamples) ||
 		len(seenQuestions) != len(expectedIDs) {
 		return fmt.Errorf("sample or question coverage is incomplete")
+	}
+	if !reuse &&
+		(extractionCalls != protocol.ExpectedSessions ||
+			extractionSourceMessages != protocol.ExpectedTurns) {
+		return fmt.Errorf(
+			"fresh extraction replay coverage = %d calls/%d messages, want %d/%d",
+			extractionCalls, extractionSourceMessages,
+			protocol.ExpectedSessions, protocol.ExpectedTurns,
+		)
 	}
 	expectedPerCategory := protocol.ExpectedQuestions /
 		len(protocol.ExpectedCategories)

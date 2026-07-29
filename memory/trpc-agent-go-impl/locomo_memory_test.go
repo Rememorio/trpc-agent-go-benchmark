@@ -88,6 +88,70 @@ func TestFilterLoCoMoQuestionsRejectsMissingIDs(t *testing.T) {
 	}
 }
 
+func TestBuildLoCoMoInputProvenance(t *testing.T) {
+	samples := []*dataset.LoCoMoSample{{
+		SampleID: "sample-1",
+		Conversation: []dataset.Session{
+			{Turns: []dataset.Turn{{}, {}}},
+			{Turns: []dataset.Turn{{}}},
+		},
+		QA: []dataset.QAItem{
+			{QuestionID: "q-2"},
+			{QuestionID: "q-1"},
+		},
+	}}
+	got, err := buildLoCoMoInputProvenance(
+		strings.Repeat("d", 64), samples,
+	)
+	if err != nil {
+		t.Fatalf("build provenance: %v", err)
+	}
+	wantQuestionIDsSHA256, err := canonicalJSONSHA256(
+		[]string{"q-1", "q-2"},
+	)
+	if err != nil {
+		t.Fatalf("hash question IDs: %v", err)
+	}
+	if got.DatasetSHA256 != strings.Repeat("d", 64) ||
+		got.QuestionIDsSHA256 != wantQuestionIDsSHA256 ||
+		got.SelectedSessions != 2 ||
+		got.SelectedTurns != 3 {
+		t.Fatalf("provenance = %+v", got)
+	}
+
+	samples[0].QA[1].QuestionID = "q-2"
+	if _, err := buildLoCoMoInputProvenance(
+		strings.Repeat("d", 64), samples,
+	); err == nil || !strings.Contains(err.Error(), "duplicated") {
+		t.Fatalf("duplicate error = %v", err)
+	}
+}
+
+func TestBuildEvaluationResultRecordsInputProvenance(t *testing.T) {
+	input := locomoInputProvenance{
+		DatasetSHA256:     strings.Repeat("d", 64),
+		QuestionIDsSHA256: strings.Repeat("q", 64),
+		SelectedSessions:  86,
+		SelectedTurns:     1852,
+	}
+	result := buildEvaluationResult(
+		scenarios.Config{Scenario: scenarios.ScenarioAuto},
+		"pgvector",
+		input,
+		time.Now(),
+		nil,
+		metrics.NewCategoryAggregator(),
+		0,
+		scenarios.TokenUsage{},
+	)
+	if result.Metadata.DatasetSHA256 != input.DatasetSHA256 ||
+		result.Metadata.QuestionIDsSHA256 != input.QuestionIDsSHA256 ||
+		result.Metadata.SelectedSessions != input.SelectedSessions ||
+		result.Metadata.SelectedTurns != input.SelectedTurns {
+		t.Fatalf("metadata = %+v", result.Metadata)
+	}
+}
+
 func TestBuildEvaluationResultRecordsMemoryQAPromptVersion(t *testing.T) {
 	for _, scenario := range []scenarios.ScenarioType{
 		scenarios.ScenarioAuto,
@@ -96,6 +160,7 @@ func TestBuildEvaluationResultRecordsMemoryQAPromptVersion(t *testing.T) {
 		result := buildEvaluationResult(
 			scenarios.Config{Scenario: scenario},
 			"pgvector",
+			locomoInputProvenance{},
 			time.Now(),
 			nil,
 			metrics.NewCategoryAggregator(),
@@ -128,6 +193,7 @@ func TestBuildEvaluationResultRecordsModelVariant(t *testing.T) {
 	result := buildEvaluationResult(
 		scenarios.Config{Scenario: scenarios.ScenarioAuto},
 		"pgvector",
+		locomoInputProvenance{},
 		time.Now(),
 		nil,
 		metrics.NewCategoryAggregator(),
@@ -151,6 +217,7 @@ func TestBuildEvaluationResultRecordsAutoExtractionTimeout(t *testing.T) {
 			AutoExtractionTimeout: 20 * time.Minute,
 		},
 		"pgvector",
+		locomoInputProvenance{},
 		time.Now(),
 		nil,
 		metrics.NewCategoryAggregator(),
@@ -167,6 +234,7 @@ func TestBuildEvaluationResultRecordsAutoExtractionTimeout(t *testing.T) {
 	derived := buildEvaluationResult(
 		scenarios.Config{Scenario: scenarios.ScenarioAuto},
 		"pgvector",
+		locomoInputProvenance{},
 		time.Now(),
 		nil,
 		metrics.NewCategoryAggregator(),
@@ -182,6 +250,7 @@ func TestEvalMetadataRecordsDisabledMemoryReuse(t *testing.T) {
 	result := buildEvaluationResult(
 		scenarios.Config{Scenario: scenarios.ScenarioAuto},
 		"pgvector",
+		locomoInputProvenance{},
 		time.Now(),
 		nil,
 		metrics.NewCategoryAggregator(),
@@ -225,6 +294,7 @@ func TestRunEvaluationRecordsFailedSampleAndCost(t *testing.T) {
 	result, err := runEvaluation(
 		context.Background(),
 		[]*dataset.LoCoMoSample{{SampleID: "sample-1"}},
+		locomoInputProvenance{},
 		failingLoCoMoEvaluator{
 			result: failureResult,
 			err:    errors.New("extraction timed out"),
@@ -268,6 +338,7 @@ func TestBuildEvaluationResultOmitsMemoryQAPromptVersion(t *testing.T) {
 	result := buildEvaluationResult(
 		scenarios.Config{Scenario: scenarios.ScenarioLongContext},
 		"",
+		locomoInputProvenance{},
 		time.Now(),
 		nil,
 		metrics.NewCategoryAggregator(),
@@ -322,6 +393,7 @@ func TestBuildEvaluationResultAggregatesAutoPhaseUsage(t *testing.T) {
 	result := buildEvaluationResult(
 		scenarios.Config{Scenario: scenarios.ScenarioAuto},
 		"pgvector",
+		locomoInputProvenance{},
 		time.Now(),
 		[]*scenarios.SampleResult{{
 			ExtractionTokenUsage:     &extractionTokens,
@@ -402,6 +474,7 @@ func TestBuildEvaluationResultCountsProtocolViolations(t *testing.T) {
 	result := buildEvaluationResult(
 		scenarios.Config{Scenario: scenarios.ScenarioAuto},
 		"pgvector",
+		locomoInputProvenance{},
 		time.Now(),
 		[]*scenarios.SampleResult{
 			nil,
