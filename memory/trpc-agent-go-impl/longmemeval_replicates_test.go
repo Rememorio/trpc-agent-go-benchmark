@@ -1137,6 +1137,15 @@ func TestValidateLongMemEvalReplicateManifest(t *testing.T) {
 		{name: "comparison scope", mutate: func(m *lmeReplicateComparisonManifest) {
 			m.ComparisonScope = "unsupported"
 		}, wantError: "comparison scope"},
+		{name: "incomplete cache timeline", mutate: func(m *lmeReplicateComparisonManifest) {
+			m.Replicates[0].AnswerCacheTimelineResults = []string{"b1", "c1"}
+		}, wantError: "must register both answer and judge cache timelines"},
+		{name: "duplicate cache timeline path", mutate: func(m *lmeReplicateComparisonManifest) {
+			m.Replicates[0].AnswerCacheTimelineResults =
+				[]string{"b1", "b1"}
+			m.Replicates[0].JudgeCacheTimelineResults =
+				[]string{"c1", "c1"}
+		}, wantError: "empty or duplicated"},
 		{name: "gate", mutate: func(m *lmeReplicateComparisonManifest) { m.Gate.JudgeRuns = 2 }, wantError: "invalid promotion gate"},
 		{name: "negative uncached gate", mutate: func(m *lmeReplicateComparisonManifest) {
 			m.Gate.MemoryLLMUncachedTokenRatioMaximum = -1
@@ -1362,6 +1371,70 @@ func TestValidateLongMemEvalReplicateFreshCaches(t *testing.T) {
 				t.Fatalf("fresh cache error = %v, want %q", err, test.wantError)
 			}
 		})
+	}
+}
+
+func TestValidateLongMemEvalReplicateRegisteredCacheTimelines(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	paths := []string{"a.json", "b.json", "c.json"}
+	for index, path := range paths {
+		result := longMemEvalReplicateFixtureResult(
+			"variant-"+path,
+			"answer-ledger",
+			"judge-ledger",
+			lmeReplicateKindIndependentReanswer,
+			map[string][2]bool{"pgvector": {true, true}},
+		)
+		result.Metadata["answer_cache_initial_entries"] = index
+		result.Metadata["answer_cache_final_entries"] = index + 1
+		result.Metadata["judge_cache_initial_entries"] = len(paths) - index - 1
+		result.Metadata["judge_cache_final_entries"] = len(paths) - index
+		if err := writeLongMemEvalResults(
+			filepath.Join(dir, path), result,
+		); err != nil {
+			t.Fatalf("write timeline result: %v", err)
+		}
+	}
+	spec := lmeReplicateComparisonPair{
+		Name:                       "replicate",
+		BaselineResults:            paths[0],
+		CandidateResults:           paths[2],
+		AnswerCacheTimelineResults: paths,
+		JudgeCacheTimelineResults:  []string{paths[2], paths[1], paths[0]},
+	}
+	if err := validateLongMemEvalReplicateRegisteredCacheTimelines(
+		dir, spec,
+	); err != nil {
+		t.Fatalf("registered cache timelines: %v", err)
+	}
+
+	middle, err := loadLongMemEvalResults(filepath.Join(dir, paths[1]))
+	if err != nil {
+		t.Fatalf("load middle result: %v", err)
+	}
+	middle.Metadata["answer_cache_initial_entries"] = 0
+	if err := writeLongMemEvalResults(
+		filepath.Join(dir, paths[1]), middle,
+	); err != nil {
+		t.Fatalf("rewrite middle result: %v", err)
+	}
+	err = validateLongMemEvalReplicateRegisteredCacheTimelines(dir, spec)
+	if err == nil || !strings.Contains(err.Error(), "not fresh and contiguous") {
+		t.Fatalf("timeline gap error = %v", err)
+	}
+
+	middle.Metadata["answer_cache_initial_entries"] = 1
+	if err := writeLongMemEvalResults(
+		filepath.Join(dir, paths[1]), middle,
+	); err != nil {
+		t.Fatalf("restore middle result: %v", err)
+	}
+	spec.AnswerCacheTimelineResults = paths[:2]
+	err = validateLongMemEvalReplicateRegisteredCacheTimelines(dir, spec)
+	if err == nil || !strings.Contains(err.Error(), "does not contain") {
+		t.Fatalf("missing endpoint error = %v", err)
 	}
 }
 

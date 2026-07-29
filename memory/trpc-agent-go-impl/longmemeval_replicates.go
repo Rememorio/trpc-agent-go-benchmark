@@ -49,10 +49,12 @@ type lmeReplicateComparisonManifest struct {
 }
 
 type lmeReplicateComparisonPair struct {
-	Name             string `json:"name"`
-	Kind             string `json:"kind"`
-	BaselineResults  string `json:"baseline_results"`
-	CandidateResults string `json:"candidate_results"`
+	Name                       string   `json:"name"`
+	Kind                       string   `json:"kind"`
+	BaselineResults            string   `json:"baseline_results"`
+	CandidateResults           string   `json:"candidate_results"`
+	AnswerCacheTimelineResults []string `json:"answer_cache_timeline_results,omitempty"`
+	JudgeCacheTimelineResults  []string `json:"judge_cache_timeline_results,omitempty"`
 }
 
 type lmeReplicatePromotionGate struct {
@@ -368,10 +370,18 @@ func loadLongMemEvalReplicateComparison(
 		if err := validateLongMemEvalReplicateKind(spec, baseline, candidate); err != nil {
 			return manifest, manifestDigest, nil, err
 		}
-		if err := validateLongMemEvalReplicateFreshCaches(
-			spec.Name, baseline, candidate,
-		); err != nil {
-			return manifest, manifestDigest, nil, err
+		if len(spec.AnswerCacheTimelineResults) > 0 {
+			if err := validateLongMemEvalReplicateRegisteredCacheTimelines(
+				baseDir, spec,
+			); err != nil {
+				return manifest, manifestDigest, nil, err
+			}
+		} else {
+			if err := validateLongMemEvalReplicateFreshCaches(
+				spec.Name, baseline, candidate,
+			); err != nil {
+				return manifest, manifestDigest, nil, err
+			}
 		}
 		if err := validateLongMemEvalReplicateJudges(spec.Name, manifest.Gate.JudgeRuns, baseline, candidate); err != nil {
 			return manifest, manifestDigest, nil, err
@@ -556,6 +566,41 @@ func validateLongMemEvalReplicateManifest(manifest lmeReplicateComparisonManifes
 		if strings.TrimSpace(replicate.BaselineResults) == "" || strings.TrimSpace(replicate.CandidateResults) == "" {
 			return fmt.Errorf("LongMemEval replicate %q has an empty results path", replicate.Name)
 		}
+		answerTimeline := len(replicate.AnswerCacheTimelineResults)
+		judgeTimeline := len(replicate.JudgeCacheTimelineResults)
+		if (answerTimeline == 0) != (judgeTimeline == 0) {
+			return fmt.Errorf(
+				"LongMemEval replicate %q must register both answer and "+
+					"judge cache timelines",
+				replicate.Name,
+			)
+		}
+		if answerTimeline > 0 {
+			if answerTimeline < 2 || judgeTimeline < 2 {
+				return fmt.Errorf(
+					"LongMemEval replicate %q cache timelines must "+
+						"contain at least two results",
+					replicate.Name,
+				)
+			}
+			for label, paths := range map[string][]string{
+				"answer": replicate.AnswerCacheTimelineResults,
+				"judge":  replicate.JudgeCacheTimelineResults,
+			} {
+				seenPaths := make(map[string]bool, len(paths))
+				for _, path := range paths {
+					path = filepath.Clean(strings.TrimSpace(path))
+					if path == "." || seenPaths[path] {
+						return fmt.Errorf(
+							"LongMemEval replicate %q %s cache "+
+								"timeline path %q is empty or duplicated",
+							replicate.Name, label, path,
+						)
+					}
+					seenPaths[path] = true
+				}
+			}
+		}
 		if index == 0 {
 			if replicate.Kind != lmeReplicateKindPrimary &&
 				replicate.Kind != lmeReplicateKindIndependentReanswer {
@@ -696,6 +741,121 @@ func validateLongMemEvalReplicateFreshCaches(
 				replicate, prefix,
 				first.name, first.initial, first.final,
 				second.name, second.initial, second.final,
+			)
+		}
+	}
+	return nil
+}
+
+func validateLongMemEvalReplicateRegisteredCacheTimelines(
+	baseDir string,
+	spec lmeReplicateComparisonPair,
+) error {
+	for _, timeline := range []struct {
+		prefix string
+		paths  []string
+	}{
+		{
+			prefix: "answer_cache",
+			paths:  spec.AnswerCacheTimelineResults,
+		},
+		{
+			prefix: "judge_cache",
+			paths:  spec.JudgeCacheTimelineResults,
+		},
+	} {
+		if err := validateLongMemEvalReplicateCacheTimeline(
+			baseDir,
+			spec.Name,
+			timeline.prefix,
+			timeline.paths,
+			[]string{spec.BaselineResults, spec.CandidateResults},
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateLongMemEvalReplicateCacheTimeline(
+	baseDir, replicate, prefix string,
+	paths, requiredPaths []string,
+) error {
+	required := make(map[string]bool, len(requiredPaths))
+	for _, path := range requiredPaths {
+		required[resolveLongMemEvalReplicatePath(baseDir, path)] = false
+	}
+	ledgerKey := prefix + "_ledger_id"
+	initialKey := prefix + "_initial_entries"
+	finalKey := prefix + "_final_entries"
+	ledgerID := ""
+	previousFinal := 0
+	for index, path := range paths {
+		resolved := resolveLongMemEvalReplicatePath(baseDir, path)
+		result, err := loadLongMemEvalResults(resolved)
+		if err != nil {
+			return fmt.Errorf(
+				"load replicate %q %s timeline item %d: %w",
+				replicate, prefix, index, err,
+			)
+		}
+		if _, ok := required[resolved]; ok {
+			required[resolved] = true
+		}
+		currentLedger, ok := lmeMetadataString(
+			result.Metadata, ledgerKey,
+		)
+		if !ok || strings.TrimSpace(currentLedger) == "" {
+			return fmt.Errorf(
+				"replicate %q %s timeline item %d is missing %q",
+				replicate, prefix, index, ledgerKey,
+			)
+		}
+		if ledgerID == "" {
+			ledgerID = currentLedger
+		} else if currentLedger != ledgerID {
+			return fmt.Errorf(
+				"replicate %q %s timeline changes ledger from %q to %q",
+				replicate, prefix, ledgerID, currentLedger,
+			)
+		}
+		initial, initialOK := longMemEvalMetadataInt(
+			result.Metadata[initialKey],
+		)
+		final, finalOK := longMemEvalMetadataInt(
+			result.Metadata[finalKey],
+		)
+		if !initialOK || !finalOK {
+			return fmt.Errorf(
+				"replicate %q %s timeline item %d has invalid entry "+
+					"metadata: initial=%v final=%v",
+				replicate, prefix, index,
+				result.Metadata[initialKey], result.Metadata[finalKey],
+			)
+		}
+		if initial < 0 || final < initial {
+			return fmt.Errorf(
+				"replicate %q %s timeline item %d is not monotonic: "+
+					"initial=%d final=%d",
+				replicate, prefix, index, initial, final,
+			)
+		}
+		if (index == 0 && initial != 0) ||
+			(index > 0 && initial != previousFinal) {
+			return fmt.Errorf(
+				"replicate %q %s timeline is not fresh and contiguous "+
+					"at item %d: initial=%d previous_final=%d",
+				replicate, prefix, index, initial, previousFinal,
+			)
+		}
+		previousFinal = final
+	}
+	for path, present := range required {
+		if !present {
+			return fmt.Errorf(
+				"replicate %q %s timeline does not contain comparison "+
+					"result %q",
+				replicate, prefix, path,
 			)
 		}
 	}
