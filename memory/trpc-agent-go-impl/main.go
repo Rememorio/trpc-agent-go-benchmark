@@ -15,6 +15,7 @@ import (
 	"flag"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -334,6 +335,11 @@ var (
 		false,
 		"Reuse memories already stored in the selected backend table and run only LoCoMo QA",
 	)
+	flagLoCoMoCompareReplicates = flag.String(
+		"locomo-compare-replicates",
+		"",
+		"Aggregate and gate LoCoMo fixed-memory answer replicates from a manifest",
+	)
 	flagLMECompareResults = flag.String(
 		"lme-compare-results",
 		"",
@@ -388,6 +394,14 @@ func main() {
 	validateFlags()
 
 	ctx := context.Background()
+	if path := strings.TrimSpace(*flagLoCoMoCompareReplicates); path != "" {
+		if err := compareLoCoMoReplicates(
+			path, filepath.Dir(path),
+		); err != nil {
+			log.Fatalf("LoCoMo replicate comparison failed: %v", err)
+		}
+		return
+	}
 	if isLongMemEvalInvocation() {
 		if err := runLongMemEvalMemory(ctx); err != nil {
 			log.Fatalf("LongMemEval memory evaluation failed: %v", err)

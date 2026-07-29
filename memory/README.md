@@ -201,6 +201,12 @@ synthetic response/current-turn duplicate. This keeps every opening turn on
 strict chat APIs while preserving the source transcript exactly once.
 Results report memory ingest and QA durations separately; fixed-memory answer
 replays therefore record zero ingest duration.
+Formal repeated-answer runs can be aggregated with
+`go run . -locomo-compare-replicates <manifest.json>`. The manifest binds the
+selection, build and module provenance, extraction configuration, fresh memory
+snapshot, table statistics, and three results per arm. Aggregation fails closed
+on protocol, trace, usage, duration, or snapshot drift, then writes a paired
+question-level comparison and provider-free bad-case table next to the manifest.
 The legacy result tables above predate this protocol correction.
 
 ```bash
