@@ -646,7 +646,13 @@ TSV, and Markdown outputs retain input hashes and gate details for audit. Each
 JSON gate check is classified as `integrity`, `outcome`, or `cost`, with
 separate `integrity_passed`, `outcome_passed`, and `cost_passed` summaries. A
 valid negative quality result therefore remains distinguishable from a broken
-or incomparable experiment.
+or incomparable experiment. The aggregator also writes
+`replicate_bad_cases.tsv` and a matching Markdown table. They report answer
+stability, the earliest saved pipeline failure stage, and all stage counts for
+each affected arm, so extraction, retrieval, answer/provider failures, and
+cross-replicate semantic-evaluation instability remain distinguishable without
+another model call. These diagnostics are descriptive and do not change the
+gate or its question-level inference unit.
 
 The comparison JSON and Markdown also report paired majority outcomes for the
 candidate against each baseline: candidate wins, baseline wins, ties, accuracy

@@ -281,6 +281,13 @@ func compareLongMemEvalReplicates(manifestPath, outputDir string) error {
 		return fmt.Errorf("write replicate_comparison.tsv: %w", err)
 	}
 	if err := os.WriteFile(
+		filepath.Join(outputDir, "replicate_bad_cases.tsv"),
+		[]byte(formatLongMemEvalReplicateBadCasesTSV(comparison)),
+		0644,
+	); err != nil {
+		return fmt.Errorf("write replicate_bad_cases.tsv: %w", err)
+	}
+	if err := os.WriteFile(
 		filepath.Join(outputDir, "replicate_comparison.md"),
 		[]byte(formatLongMemEvalReplicateComparisonMarkdown(comparison)),
 		0644,
@@ -1699,6 +1706,120 @@ func formatLongMemEvalReplicateComparisonTSV(comparison *lmeReplicateComparison)
 	return b.String()
 }
 
+func formatLongMemEvalReplicateBadCasesTSV(
+	comparison *lmeReplicateComparison,
+) string {
+	var b strings.Builder
+	b.WriteString(
+		"question_id\tquestion_type\tarm\tprimary_correct\t" +
+			"correct_replicates\ttotal_replicates\tmajority_correct\t" +
+			"stability\tearliest_failure_stage\tstage_counts\n",
+	)
+	for _, item := range comparison.Cases {
+		for _, armName := range longMemEvalReplicateArmOrder() {
+			arm := item.Arms[armName]
+			stability := longMemEvalReplicateStability(
+				arm.CorrectReplicates,
+				comparison.ReplicateCount,
+			)
+			stage, counts := longMemEvalReplicateStageSummary(arm.Stages)
+			if stability == "stable_correct" && stage == "ok" {
+				continue
+			}
+			fmt.Fprintf(
+				&b,
+				"%s\t%s\t%s\t%t\t%d\t%d\t%t\t%s\t%s\t%s\n",
+				item.QuestionID,
+				item.QuestionType,
+				armName,
+				arm.PrimaryCorrect,
+				arm.CorrectReplicates,
+				comparison.ReplicateCount,
+				arm.MajorityCorrect,
+				stability,
+				stage,
+				counts,
+			)
+		}
+	}
+	return b.String()
+}
+
+func longMemEvalReplicateArmOrder() []string {
+	return []string{
+		lmeReplicateArmPGVectorMain,
+		lmeReplicateArmMem0OSS,
+		lmeReplicateArmPGVectorCandidate,
+	}
+}
+
+func longMemEvalReplicateStability(correct, total int) string {
+	switch {
+	case total <= 0:
+		return "invalid"
+	case correct == total:
+		return "stable_correct"
+	case correct == 0:
+		return "stable_incorrect"
+	default:
+		return "unstable"
+	}
+}
+
+func longMemEvalReplicateStageSummary(stages []string) (string, string) {
+	counts := make(map[string]int)
+	for _, stage := range stages {
+		stage = strings.TrimSpace(stage)
+		if stage == "" {
+			stage = "unknown"
+		}
+		counts[stage]++
+	}
+	names := make([]string, 0, len(counts))
+	for name := range counts {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	formatted := make([]string, 0, len(names))
+	for _, name := range names {
+		formatted = append(formatted, fmt.Sprintf("%s=%d", name, counts[name]))
+	}
+	return earliestLongMemEvalReplicateFailureStage(counts),
+		strings.Join(formatted, ";")
+}
+
+func earliestLongMemEvalReplicateFailureStage(
+	counts map[string]int,
+) string {
+	for _, stage := range []string{
+		"backend_error",
+		"missing",
+		"extraction_turn_miss",
+		"extraction_session_miss",
+		"retrieval_turn_miss",
+		"retrieval_session_miss",
+		"answer_error",
+		"abstention_answered",
+		"evidence_or_answer_miss",
+		"unknown",
+	} {
+		if counts[stage] > 0 {
+			return stage
+		}
+	}
+	remaining := make([]string, 0, len(counts))
+	for stage := range counts {
+		if stage != "ok" && stage != "ok_abstention" {
+			remaining = append(remaining, stage)
+		}
+	}
+	if len(remaining) > 0 {
+		sort.Strings(remaining)
+		return remaining[0]
+	}
+	return "ok"
+}
+
 func formatLongMemEvalReplicateComparisonMarkdown(comparison *lmeReplicateComparison) string {
 	var b strings.Builder
 	b.WriteString("# LongMemEval Replicate Comparison\n\n")
@@ -1898,6 +2019,39 @@ func formatLongMemEvalReplicateComparisonMarkdown(comparison *lmeReplicateCompar
 		}
 		fmt.Fprintf(&b, "- [%s] `%s/%s`: %s; required %s\n",
 			mark, check.Dimension, check.Name, check.Actual, check.Requirement)
+	}
+	b.WriteString("\n## Case Failure Attribution\n\n")
+	b.WriteString(
+		"The earliest stage is deterministic pipeline attribution from the " +
+			"saved per-replicate stages; stage counts retain answer and judge " +
+			"instability without making new model calls.\n\n",
+	)
+	b.WriteString("| Question | Type | Arm | Correct | Stability | Earliest stage | Stages |\n")
+	b.WriteString("| --- | --- | --- | ---: | --- | --- | --- |\n")
+	for _, item := range comparison.Cases {
+		for _, armName := range longMemEvalReplicateArmOrder() {
+			arm := item.Arms[armName]
+			stability := longMemEvalReplicateStability(
+				arm.CorrectReplicates,
+				comparison.ReplicateCount,
+			)
+			stage, counts := longMemEvalReplicateStageSummary(arm.Stages)
+			if stability == "stable_correct" && stage == "ok" {
+				continue
+			}
+			fmt.Fprintf(
+				&b,
+				"| `%s` | %s | %s | %d/%d | %s | %s | %s |\n",
+				item.QuestionID,
+				item.QuestionType,
+				armName,
+				arm.CorrectReplicates,
+				comparison.ReplicateCount,
+				stability,
+				stage,
+				counts,
+			)
+		}
 	}
 	b.WriteString("\n## Cases\n\n")
 	b.WriteString("| Question | Type | Main | Mem0 | Candidate |\n")

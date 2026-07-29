@@ -126,14 +126,20 @@ func TestCompareLongMemEvalReplicates(t *testing.T) {
 			knowledgeResources,
 		)
 	}
-	for _, name := range []string{"replicate_comparison.md", "replicate_comparison.tsv"} {
+	for _, name := range []string{
+		"replicate_comparison.md",
+		"replicate_comparison.tsv",
+		"replicate_bad_cases.tsv",
+	} {
 		contents, err := os.ReadFile(filepath.Join(outputDir, name))
 		if err != nil {
 			t.Fatalf("read %s: %v", name, err)
 		}
 		candidateLabel := "pgvector_candidate"
-		if strings.HasSuffix(name, ".tsv") {
+		if name == "replicate_comparison.tsv" {
 			candidateLabel = "candidate_majority"
+		} else if name == "replicate_bad_cases.tsv" {
+			candidateLabel = "earliest_failure_stage"
 		}
 		if !strings.Contains(string(contents), "q-knowledge") ||
 			!strings.Contains(string(contents), candidateLabel) {
@@ -147,6 +153,7 @@ func TestCompareLongMemEvalReplicates(t *testing.T) {
 				"## Post-Policy Diagnostics",
 				"## Raw Persistence Diagnostics",
 				"## Post-Policy Persistence Diagnostics",
+				"## Case Failure Attribution",
 			} {
 				if !strings.Contains(string(contents), section) {
 					t.Fatalf("%s missing %s: %s",
@@ -154,6 +161,51 @@ func TestCompareLongMemEvalReplicates(t *testing.T) {
 				}
 			}
 		}
+	}
+	badCases, err := os.ReadFile(
+		filepath.Join(outputDir, "replicate_bad_cases.tsv"),
+	)
+	if err != nil {
+		t.Fatalf("read replicate bad cases: %v", err)
+	}
+	for _, want := range []string{
+		"q-knowledge\tknowledge-update\tpgvector_main",
+		"q-temporal\ttemporal-reasoning\tpgvector_main",
+		"unstable\tevidence_or_answer_miss",
+		"stable_incorrect\tevidence_or_answer_miss",
+	} {
+		if !strings.Contains(string(badCases), want) {
+			t.Fatalf("replicate bad cases missing %q: %s", want, badCases)
+		}
+	}
+	if strings.Contains(
+		string(badCases),
+		"q-knowledge\tknowledge-update\tpgvector_candidate",
+	) {
+		t.Fatalf("stable healthy candidate should not be a bad case: %s",
+			badCases)
+	}
+}
+
+func TestLongMemEvalReplicateStageSummaryUsesPipelineOrder(t *testing.T) {
+	t.Parallel()
+
+	stage, counts := longMemEvalReplicateStageSummary([]string{
+		"ok",
+		"retrieval_session_miss",
+		"extraction_turn_miss",
+	})
+	if stage != "extraction_turn_miss" ||
+		counts != "extraction_turn_miss=1;ok=1;retrieval_session_miss=1" {
+		t.Fatalf("stage = %q, counts = %q", stage, counts)
+	}
+
+	stage, counts = longMemEvalReplicateStageSummary([]string{
+		"custom-z",
+		"custom-a",
+	})
+	if stage != "custom-a" || counts != "custom-a=1;custom-z=1" {
+		t.Fatalf("fallback stage = %q, counts = %q", stage, counts)
 	}
 }
 
