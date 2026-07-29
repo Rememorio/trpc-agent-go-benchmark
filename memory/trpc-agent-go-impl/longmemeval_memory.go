@@ -984,6 +984,7 @@ func isLongMemEvalResultOperation() bool {
 		flagLMEJudgeResults,
 		flagLMECompareResults,
 		flagLMECompareReplicates,
+		flagLMEApplyRecovery,
 	} {
 		if strings.TrimSpace(*value) != "" {
 			return true
@@ -1013,6 +1014,11 @@ func runLongMemEvalMemory(ctx context.Context) error {
 	}
 	if path := strings.TrimSpace(*flagLMECompareReplicates); path != "" {
 		return compareLongMemEvalReplicates(
+			path, longMemEvalAnalysisOutputDir(path),
+		)
+	}
+	if path := strings.TrimSpace(*flagLMEApplyRecovery); path != "" {
+		return applyLongMemEvalRecovery(
 			path, longMemEvalAnalysisOutputDir(path),
 		)
 	}

@@ -344,6 +344,11 @@ var (
 		"",
 		"Aggregate and gate LongMemEval answer replicates from a comparison manifest",
 	)
+	flagLMEApplyRecovery = flag.String(
+		"lme-apply-recovery",
+		"",
+		"Apply a preregistered case/backend recovery manifest to LongMemEval results",
+	)
 	flagMem0Host = flag.String(
 		"mem0-host",
 		"",
