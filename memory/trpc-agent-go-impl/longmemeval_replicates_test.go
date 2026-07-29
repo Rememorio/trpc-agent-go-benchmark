@@ -38,6 +38,8 @@ func TestCompareLongMemEvalReplicates(t *testing.T) {
 		t.Fatalf("decode replicate comparison: %v", err)
 	}
 	if comparison.SchemaVersion != lmeReplicateComparisonSchemaVersion ||
+		comparison.MemoryResponseCacheMode !=
+			lmeReplicateMemoryCachesIndependent ||
 		!comparison.Gate.Passed ||
 		!comparison.Gate.IntegrityPassed ||
 		!comparison.Gate.OutcomePassed ||
@@ -1127,6 +1129,9 @@ func TestValidateLongMemEvalReplicateManifest(t *testing.T) {
 		{name: "unsupported first kind", mutate: func(m *lmeReplicateComparisonManifest) { m.Replicates[0].Kind = "unsupported" }, wantError: "want \"primary\" or \"independent-reanswer\""},
 		{name: "later primary kind", mutate: func(m *lmeReplicateComparisonManifest) { m.Replicates[1].Kind = lmeReplicateKindPrimary }, wantError: "want \"independent-reanswer\""},
 		{name: "duplicate name", mutate: func(m *lmeReplicateComparisonManifest) { m.Replicates[1].Name = "r1" }, wantError: "duplicated"},
+		{name: "cache mode", mutate: func(m *lmeReplicateComparisonManifest) {
+			m.MemoryResponseCacheMode = "unsupported"
+		}, wantError: "memory response cache mode"},
 		{name: "gate", mutate: func(m *lmeReplicateComparisonManifest) { m.Gate.JudgeRuns = 2 }, wantError: "invalid promotion gate"},
 		{name: "negative uncached gate", mutate: func(m *lmeReplicateComparisonManifest) {
 			m.Gate.MemoryLLMUncachedTokenRatioMaximum = -1
@@ -1157,6 +1162,10 @@ func TestValidateLongMemEvalReplicateManifest(t *testing.T) {
 	if err := validateLongMemEvalReplicateManifest(valid); err != nil {
 		t.Fatalf("valid manifest: %v", err)
 	}
+	valid.MemoryResponseCacheMode = lmeReplicateMemoryCachesShared
+	if err := validateLongMemEvalReplicateManifest(valid); err != nil {
+		t.Fatalf("valid shared-cache manifest: %v", err)
+	}
 	allIndependent := valid
 	allIndependent.Replicates = append(
 		[]lmeReplicateComparisonPair(nil),
@@ -1166,6 +1175,76 @@ func TestValidateLongMemEvalReplicateManifest(t *testing.T) {
 		lmeReplicateKindIndependentReanswer
 	if err := validateLongMemEvalReplicateManifest(allIndependent); err != nil {
 		t.Fatalf("all-independent manifest: %v", err)
+	}
+}
+
+func TestLoadLongMemEvalReplicateComparisonSupportsSharedMemoryCaches(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	manifestPath := writeLongMemEvalReplicateFixture(t, dir)
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatalf("read manifest: %v", err)
+	}
+	var manifest lmeReplicateComparisonManifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatalf("decode manifest: %v", err)
+	}
+	manifest.MemoryResponseCacheMode = lmeReplicateMemoryCachesShared
+	for _, spec := range manifest.Replicates {
+		baselinePath := filepath.Join(dir, spec.BaselineResults)
+		candidatePath := filepath.Join(dir, spec.CandidateResults)
+		baseline, err := loadLongMemEvalResults(baselinePath)
+		if err != nil {
+			t.Fatalf("load baseline: %v", err)
+		}
+		candidate, err := loadLongMemEvalResults(candidatePath)
+		if err != nil {
+			t.Fatalf("load candidate: %v", err)
+		}
+		for _, key := range []string{
+			"model_response_cache_ledger_id",
+			"embedding_response_cache_ledger_id",
+		} {
+			candidate.Metadata[key] = baseline.Metadata[key]
+		}
+		if err := writeLongMemEvalResults(candidatePath, candidate); err != nil {
+			t.Fatalf("write candidate: %v", err)
+		}
+	}
+	data, err = json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		t.Fatalf("encode manifest: %v", err)
+	}
+	if err := os.WriteFile(manifestPath, append(data, '\n'), 0644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+
+	loaded, _, _, err := loadLongMemEvalReplicateComparison(manifestPath)
+	if err != nil {
+		t.Fatalf("load shared-cache comparison: %v", err)
+	}
+	if loaded.MemoryResponseCacheMode != lmeReplicateMemoryCachesShared {
+		t.Fatalf("cache mode = %q", loaded.MemoryResponseCacheMode)
+	}
+	outputDir := filepath.Join(dir, "output")
+	if err := compareLongMemEvalReplicates(manifestPath, outputDir); err != nil {
+		t.Fatalf("compare shared-cache replicates: %v", err)
+	}
+	data, err = os.ReadFile(filepath.Join(outputDir, "replicate_comparison.json"))
+	if err != nil {
+		t.Fatalf("read comparison: %v", err)
+	}
+	var comparison lmeReplicateComparison
+	if err := json.Unmarshal(data, &comparison); err != nil {
+		t.Fatalf("decode comparison: %v", err)
+	}
+	if comparison.MemoryResponseCacheMode != lmeReplicateMemoryCachesShared {
+		t.Fatalf("comparison cache mode = %q",
+			comparison.MemoryResponseCacheMode)
 	}
 }
 

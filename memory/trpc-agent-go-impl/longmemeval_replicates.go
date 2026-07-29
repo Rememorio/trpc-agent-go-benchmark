@@ -27,9 +27,11 @@ import (
 
 const (
 	lmeReplicateManifestSchemaVersion   = 2
-	lmeReplicateComparisonSchemaVersion = 4
+	lmeReplicateComparisonSchemaVersion = 5
 	lmeReplicateKindPrimary             = "primary"
 	lmeReplicateKindIndependentReanswer = "independent-reanswer"
+	lmeReplicateMemoryCachesIndependent = "independent"
+	lmeReplicateMemoryCachesShared      = "shared"
 
 	lmeReplicateArmPGVectorMain      = "pgvector_main"
 	lmeReplicateArmMem0OSS           = "mem0_oss"
@@ -37,9 +39,10 @@ const (
 )
 
 type lmeReplicateComparisonManifest struct {
-	SchemaVersion int                          `json:"schema_version"`
-	Replicates    []lmeReplicateComparisonPair `json:"replicates"`
-	Gate          lmeReplicatePromotionGate    `json:"gate"`
+	SchemaVersion           int                          `json:"schema_version"`
+	MemoryResponseCacheMode string                       `json:"memory_response_cache_mode,omitempty"`
+	Replicates              []lmeReplicateComparisonPair `json:"replicates"`
+	Gate                    lmeReplicatePromotionGate    `json:"gate"`
 }
 
 type lmeReplicateComparisonPair struct {
@@ -75,15 +78,16 @@ type lmeLoadedReplicateComparisonPair struct {
 }
 
 type lmeReplicateComparison struct {
-	SchemaVersion  int                         `json:"schema_version"`
-	CreatedAt      string                      `json:"created_at"`
-	ManifestSHA256 string                      `json:"manifest_sha256"`
-	ReplicateCount int                         `json:"replicate_count"`
-	Inputs         []lmeReplicateInputAudit    `json:"inputs"`
-	Arms           map[string]*lmeReplicateArm `json:"arms"`
-	Cases          []lmeReplicateCase          `json:"cases"`
-	Pairwise       []lmeReplicatePairwise      `json:"pairwise"`
-	Gate           lmeReplicateGateResult      `json:"gate"`
+	SchemaVersion           int                         `json:"schema_version"`
+	CreatedAt               string                      `json:"created_at"`
+	ManifestSHA256          string                      `json:"manifest_sha256"`
+	MemoryResponseCacheMode string                      `json:"memory_response_cache_mode"`
+	ReplicateCount          int                         `json:"replicate_count"`
+	Inputs                  []lmeReplicateInputAudit    `json:"inputs"`
+	Arms                    map[string]*lmeReplicateArm `json:"arms"`
+	Cases                   []lmeReplicateCase          `json:"cases"`
+	Pairwise                []lmeReplicatePairwise      `json:"pairwise"`
+	Gate                    lmeReplicateGateResult      `json:"gate"`
 }
 
 type lmeReplicateInputAudit struct {
@@ -352,8 +356,8 @@ func loadLongMemEvalReplicateComparison(
 		if err != nil {
 			return manifest, manifestDigest, nil, fmt.Errorf("load replicate %q candidate: %w", spec.Name, err)
 		}
-		if err := validateLongMemEvalReplicateComparison(
-			baseline, candidate,
+		if err := validateLongMemEvalReplicateComparisonMode(
+			baseline, candidate, manifest.MemoryResponseCacheMode,
 		); err != nil {
 			return manifest, manifestDigest, nil, fmt.Errorf("validate replicate %q comparison: %w", spec.Name, err)
 		}
@@ -415,13 +419,35 @@ func loadLongMemEvalReplicateComparison(
 func validateLongMemEvalReplicateComparison(
 	baseline, candidate *runResult,
 ) error {
-	if err := validateLongMemEvalIndependentMemoryResponseCaches(
-		baseline, candidate,
-	); err != nil {
-		return err
+	return validateLongMemEvalReplicateComparisonMode(
+		baseline, candidate, lmeReplicateMemoryCachesIndependent,
+	)
+}
+
+func validateLongMemEvalReplicateComparisonMode(
+	baseline, candidate *runResult,
+	cacheMode string,
+) error {
+	comparisonMode := lmeMemoryResponseCachesIndependent
+	if cacheMode == lmeReplicateMemoryCachesShared {
+		comparisonMode = lmeMemoryResponseCachesShared
+	} else {
+		if cacheMode != "" &&
+			cacheMode != lmeReplicateMemoryCachesIndependent {
+			return fmt.Errorf(
+				"unsupported LongMemEval replicate memory response "+
+					"cache mode %q",
+				cacheMode,
+			)
+		}
+		if err := validateLongMemEvalIndependentMemoryResponseCaches(
+			baseline, candidate,
+		); err != nil {
+			return err
+		}
 	}
 	return validateLongMemEvalComparisonWithMemoryResponseCaches(
-		baseline, candidate, lmeMemoryResponseCachesIndependent,
+		baseline, candidate, comparisonMode,
 	)
 }
 
@@ -494,6 +520,18 @@ func validateLongMemEvalReplicateManifest(manifest lmeReplicateComparisonManifes
 	}
 	if len(manifest.Replicates) < 3 || len(manifest.Replicates)%2 == 0 {
 		return fmt.Errorf("LongMemEval replicate manifest requires an odd count of at least 3, got %d", len(manifest.Replicates))
+	}
+	if manifest.MemoryResponseCacheMode != "" &&
+		manifest.MemoryResponseCacheMode !=
+			lmeReplicateMemoryCachesIndependent &&
+		manifest.MemoryResponseCacheMode != lmeReplicateMemoryCachesShared {
+		return fmt.Errorf(
+			"LongMemEval replicate memory response cache mode is %q, "+
+				"want %q or %q",
+			manifest.MemoryResponseCacheMode,
+			lmeReplicateMemoryCachesIndependent,
+			lmeReplicateMemoryCachesShared,
+		)
 	}
 	seen := make(map[string]bool, len(manifest.Replicates))
 	for index, replicate := range manifest.Replicates {
@@ -749,12 +787,17 @@ func aggregateLongMemEvalReplicates(
 		return nil, errors.New("LongMemEval loaded replicate count does not match manifest")
 	}
 	comparison := &lmeReplicateComparison{
-		SchemaVersion:  lmeReplicateComparisonSchemaVersion,
-		CreatedAt:      time.Now().UTC().Format(time.RFC3339),
-		ManifestSHA256: manifestDigest,
-		ReplicateCount: len(pairs),
-		Inputs:         make([]lmeReplicateInputAudit, 0, len(pairs)),
-		Arms:           make(map[string]*lmeReplicateArm, 3),
+		SchemaVersion:           lmeReplicateComparisonSchemaVersion,
+		CreatedAt:               time.Now().UTC().Format(time.RFC3339),
+		ManifestSHA256:          manifestDigest,
+		MemoryResponseCacheMode: manifest.MemoryResponseCacheMode,
+		ReplicateCount:          len(pairs),
+		Inputs:                  make([]lmeReplicateInputAudit, 0, len(pairs)),
+		Arms:                    make(map[string]*lmeReplicateArm, 3),
+	}
+	if comparison.MemoryResponseCacheMode == "" {
+		comparison.MemoryResponseCacheMode =
+			lmeReplicateMemoryCachesIndependent
 	}
 	for _, pair := range pairs {
 		comparison.Inputs = append(comparison.Inputs, lmeReplicateInputAudit{
