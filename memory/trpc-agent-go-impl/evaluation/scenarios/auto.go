@@ -233,15 +233,6 @@ func (e *AutoEvaluator) seedMemories(
 	}
 
 	sessionSvc := newSessionService(e.config)
-	seedMemSvc := &noAutoMemoryService{inner: e.memoryService}
-	seedRunner := runner.NewRunner(
-		autoAppName,
-		seedAgent{},
-		runner.WithSessionService(sessionSvc),
-		runner.WithMemoryService(seedMemSvc),
-	)
-	defer seedRunner.Close()
-
 	seeds := make([]autoExtractionSeed, 0, len(sample.Conversation))
 	for _, sess := range sample.Conversation {
 		sessionID := fmt.Sprintf("seed-%s", sess.SessionID)
@@ -250,27 +241,18 @@ func (e *AutoEvaluator) seedMemories(
 		if t, ok := parseSessionDate(sess.SessionDate); ok {
 			seedCtx = extractor.WithReferenceDate(seedCtx, t)
 		}
-		ch, err := runner.RunWithMessages(
-			seedCtx, seedRunner,
-			userKey.UserID, sessionID, msgs,
+		seededSession, err := replayConversationSession(
+			seedCtx,
+			sessionSvc,
+			session.Key{
+				AppName:   autoAppName,
+				UserID:    userKey.UserID,
+				SessionID: sessionID,
+			},
+			msgs,
 		)
 		if err != nil {
-			return fmt.Errorf("seed session %s: %w", sess.SessionID, err)
-		}
-		if _, err := collectFinalText(ch); err != nil {
-			return fmt.Errorf("seed session %s: %w", sess.SessionID, err)
-		}
-		key := session.Key{
-			AppName:   autoAppName,
-			UserID:    userKey.UserID,
-			SessionID: sessionID,
-		}
-		seededSession, err := sessionSvc.GetSession(seedCtx, key)
-		if err != nil {
-			return fmt.Errorf("get seed session %s: %w", sess.SessionID, err)
-		}
-		if seededSession == nil {
-			return fmt.Errorf("get seed session %s: not found", sess.SessionID)
+			return fmt.Errorf("replay session %s: %w", sess.SessionID, err)
 		}
 		seeds = append(seeds, autoExtractionSeed{
 			ctx:     seedCtx,

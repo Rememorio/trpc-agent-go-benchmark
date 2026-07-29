@@ -15,8 +15,10 @@ import (
 	"testing"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go-benchmark/memory/trpc-agent-go-impl/evaluation/dataset"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -32,6 +34,83 @@ func TestAutoExtractionWaitTimeout(t *testing.T) {
 	}
 	if got := autoExtractionWaitTimeout(200, 0); got != 60*time.Minute {
 		t.Fatalf("maximum timeout = %s, want 60m", got)
+	}
+}
+
+func TestSeedMemoriesReplaysEachDatasetTurnOnce(t *testing.T) {
+	service := &replayCapturingMemoryService{}
+	evaluator := &AutoEvaluator{
+		memoryService: service,
+		config: Config{
+			AutoExtractionTimeout: testWaitTimeout,
+		},
+	}
+	sample := &dataset.LoCoMoSample{
+		SampleID: "locomo10-test",
+		Conversation: []dataset.Session{
+			{
+				SessionID:   "session-1",
+				SessionDate: "14 August, 2023",
+				Turns: []dataset.Turn{
+					{Speaker: "Melanie", Text: "I attended the concert."},
+					{Speaker: "Caroline", Text: "Which concert?"},
+					{Speaker: "Melanie", Text: "Matt Patterson."},
+				},
+			},
+			{
+				SessionID:   "session-2",
+				SessionDate: "15 August, 2023",
+				Turns: []dataset.Turn{
+					{Speaker: "Caroline", Text: "I bought the tickets."},
+					{Speaker: "Melanie", Text: "That was thoughtful."},
+				},
+			},
+		},
+	}
+
+	err := evaluator.seedMemories(
+		context.Background(),
+		memory.UserKey{AppName: autoAppName, UserID: sample.SampleID},
+		sample,
+	)
+	if err != nil {
+		t.Fatalf("seed memories: %v", err)
+	}
+	if len(service.sessions) != len(sample.Conversation) {
+		t.Fatalf(
+			"extraction sessions = %d, want %d",
+			len(service.sessions),
+			len(sample.Conversation),
+		)
+	}
+
+	for sessionIndex, gotSession := range service.sessions {
+		want := sessionMessages(sample.Conversation[sessionIndex])
+		want = userAssistantMessages(want)
+		got := sessionEventMessages(gotSession)
+		if len(got) != len(want) {
+			t.Fatalf(
+				"session %d messages = %d, want %d: %+v",
+				sessionIndex,
+				len(got),
+				len(want),
+				got,
+			)
+		}
+		for messageIndex := range want {
+			if got[messageIndex].Role != want[messageIndex].Role ||
+				got[messageIndex].Content != want[messageIndex].Content {
+				t.Fatalf(
+					"session %d message %d = (%q, %q), want (%q, %q)",
+					sessionIndex,
+					messageIndex,
+					got[messageIndex].Role,
+					got[messageIndex].Content,
+					want[messageIndex].Role,
+					want[messageIndex].Content,
+				)
+			}
+		}
 	}
 }
 
@@ -228,6 +307,60 @@ type controlledAutoExtractionEnqueuer struct {
 	firstSession string
 	releaseFirst <-chan struct{}
 	failFirst    bool
+}
+
+type replayCapturingMemoryService struct {
+	memory.Service
+	sessions []*session.Session
+}
+
+func (s *replayCapturingMemoryService) ClearMemories(
+	context.Context,
+	memory.UserKey,
+) error {
+	s.sessions = nil
+	return nil
+}
+
+func (s *replayCapturingMemoryService) EnqueueAutoMemoryJob(
+	_ context.Context,
+	sess *session.Session,
+) error {
+	s.sessions = append(s.sessions, sess)
+	want := latestAutoExtractionTimestamp(sess)
+	sess.SetState(
+		memory.SessionStateKeyAutoMemoryLastExtractAt,
+		[]byte(want.Format(time.RFC3339Nano)),
+	)
+	return nil
+}
+
+func userAssistantMessages(messages []model.Message) []model.Message {
+	var filtered []model.Message
+	for _, message := range messages {
+		if message.Role == model.RoleUser ||
+			message.Role == model.RoleAssistant {
+			filtered = append(filtered, message)
+		}
+	}
+	return filtered
+}
+
+func sessionEventMessages(sess *session.Session) []model.Message {
+	var messages []model.Message
+	for _, evt := range sess.GetEvents() {
+		if evt.Response == nil {
+			continue
+		}
+		for _, choice := range evt.Response.Choices {
+			message := choice.Message
+			if message.Content == "" && len(message.ContentParts) == 0 {
+				continue
+			}
+			messages = append(messages, message)
+		}
+	}
+	return messages
 }
 
 func (s *controlledAutoExtractionEnqueuer) EnqueueAutoMemoryJob(

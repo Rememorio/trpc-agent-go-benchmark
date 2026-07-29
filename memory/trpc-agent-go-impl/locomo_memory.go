@@ -158,7 +158,7 @@ type EvalSummary struct {
 }
 
 const (
-	locomoAutoReplayProtocol = "chronological-session-sequential-auto-v3"
+	locomoAutoReplayProtocol = "chronological-session-sequential-auto-v4"
 	locomoRoleMapping        = "session-opening human speaker=user; other human speaker=assistant; " +
 		"speaker names retained in message content"
 )

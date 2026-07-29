@@ -139,7 +139,7 @@ func (e *SessionRecallEvaluator) Evaluate(
 	for _, sess := range sample.Conversation {
 		sessionID := fmt.Sprintf("seed-%s", sess.SessionID)
 		if err := e.seedSession(
-			ctx, userID, sessionID, sample, sess,
+			ctx, userID, sessionID, sess,
 		); err != nil {
 			return nil, fmt.Errorf(
 				"seed session %s: %w", sess.SessionID, err,
@@ -371,7 +371,6 @@ func buildSessionRecallTrace(
 func (e *SessionRecallEvaluator) seedSession(
 	ctx context.Context,
 	userID, sessionID string,
-	sample *dataset.LoCoMoSample,
 	sess dataset.Session,
 ) error {
 	key := session.Key{
@@ -379,35 +378,14 @@ func (e *SessionRecallEvaluator) seedSession(
 		UserID:    userID,
 		SessionID: sessionID,
 	}
-	_ = e.sessionService.DeleteSession(ctx, key)
-	s, err := e.sessionService.CreateSession(
-		ctx, key, nil,
+	_, err := replayConversationSession(
+		ctx,
+		e.sessionService,
+		key,
+		sessionRecallMessages(sess),
 	)
 	if err != nil {
-		return fmt.Errorf("create session: %w", err)
-	}
-
-	msgs := sessionRecallMessages(sess)
-	for i, msg := range msgs {
-		if msg.Role != model.RoleUser &&
-			msg.Role != model.RoleAssistant {
-			continue
-		}
-		evt := event.New(
-			fmt.Sprintf("%s-%d", sessionID, i),
-			seedAgentName,
-			event.WithResponse(&model.Response{
-				Done: true,
-				Choices: []model.Choice{
-					{Message: msg},
-				},
-			}),
-		)
-		if err := e.sessionService.AppendEvent(
-			ctx, s, evt,
-		); err != nil {
-			return fmt.Errorf("append event: %w", err)
-		}
+		return err
 	}
 	return nil
 }

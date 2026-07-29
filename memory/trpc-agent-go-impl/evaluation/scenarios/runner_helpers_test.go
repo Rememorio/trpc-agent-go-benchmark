@@ -19,6 +19,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go-benchmark/memory/trpc-agent-go-impl/evaluation/dataset"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
 type recoveryModel struct {
@@ -76,6 +77,64 @@ func (m *recoveryModel) GenerateContent(
 
 func (*recoveryModel) Info() model.Info {
 	return model.Info{}
+}
+
+func TestReplayConversationSessionPreservesDatasetTurns(t *testing.T) {
+	ctx := context.Background()
+	sessionSvc := newSessionService(Config{})
+	messages := []model.Message{
+		model.NewSystemMessage("SessionDate: 14 August, 2023"),
+		model.NewUserMessage("[Melanie]: I attended the concert."),
+		model.NewAssistantMessage("[Caroline]: Which concert?"),
+	}
+	gotSession, err := replayConversationSession(
+		ctx,
+		sessionSvc,
+		session.Key{
+			AppName:   autoAppName,
+			UserID:    "locomo10_1",
+			SessionID: "seed-session-1",
+		},
+		messages,
+	)
+	if err != nil {
+		t.Fatalf("replay conversation session: %v", err)
+	}
+	if gotSession == nil {
+		t.Fatal("replay session is nil")
+	}
+
+	var got []model.Message
+	for _, evt := range gotSession.GetEvents() {
+		if evt.Response == nil {
+			continue
+		}
+		for _, choice := range evt.Response.Choices {
+			msg := choice.Message
+			if msg.Content == "" && len(msg.ContentParts) == 0 {
+				continue
+			}
+			got = append(got, msg)
+		}
+	}
+	want := messages[1:]
+	if len(got) != len(want) {
+		t.Fatalf("persisted messages = %d, want %d: %+v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i].Role != want[i].Role ||
+			got[i].Content != want[i].Content {
+			t.Fatalf(
+				"persisted message %d = (%q, %q), want (%q, %q); all=%+v",
+				i,
+				got[i].Role,
+				got[i].Content,
+				want[i].Role,
+				want[i].Content,
+				got,
+			)
+		}
+	}
 }
 
 func TestSessionMessagesAnchorsOpeningSpeakerAsUser(t *testing.T) {

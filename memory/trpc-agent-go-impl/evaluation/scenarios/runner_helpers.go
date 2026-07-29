@@ -17,7 +17,6 @@ import (
 	"strings"
 	"time"
 
-	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -148,49 +147,40 @@ func (s *noAutoMemoryService) Close() error {
 	return s.inner.Close()
 }
 
-// seedAgent is a minimal agent used to trigger Runner's auto memory enqueue.
-// It does not call an LLM and produces a deterministic response.
-type seedAgent struct{}
-
-func (seedAgent) Run(
+// replayConversationSession stores historical user/assistant turns exactly
+// once. Historical replay must not execute an agent because Runner.Run treats
+// one user message as a new current turn and persists the agent's response.
+func replayConversationSession(
 	ctx context.Context,
-	invocation *agent.Invocation,
-) (<-chan *event.Event, error) {
-	ch := make(chan *event.Event, 2)
-	go func() {
-		defer close(ch)
-		if invocation == nil {
-			return
+	service session.Service,
+	key session.Key,
+	messages []model.Message,
+) (*session.Session, error) {
+	_ = service.DeleteSession(ctx, key)
+	sess, err := service.CreateSession(ctx, key, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create replay session: %w", err)
+	}
+	for index, message := range messages {
+		if message.Role != model.RoleUser &&
+			message.Role != model.RoleAssistant {
+			continue
 		}
-		rsp := &model.Response{
-			Done: true,
-			Choices: []model.Choice{
-				{Message: model.NewAssistantMessage("OK.")},
-			},
-		}
-		_ = event.EmitEvent(ctx, ch, event.NewResponseEvent(
-			invocation.InvocationID,
+		evt := event.New(
+			fmt.Sprintf("%s-%d", key.SessionID, index),
 			seedAgentName,
-			rsp,
-		))
-	}()
-	return ch, nil
-}
-
-func (seedAgent) Tools() []tool.Tool {
-	return nil
-}
-
-func (seedAgent) Info() agent.Info {
-	return agent.Info{Name: seedAgentName, Description: "Seed agent for benchmarks."}
-}
-
-func (seedAgent) SubAgents() []agent.Agent {
-	return nil
-}
-
-func (seedAgent) FindSubAgent(_ string) agent.Agent {
-	return nil
+			event.WithResponse(&model.Response{
+				Done: true,
+				Choices: []model.Choice{
+					{Message: message},
+				},
+			}),
+		)
+		if err := service.AppendEvent(ctx, sess, evt); err != nil {
+			return nil, fmt.Errorf("append replay event %d: %w", index, err)
+		}
+	}
+	return sess, nil
 }
 
 func sessionMessages(sess dataset.Session) []model.Message {

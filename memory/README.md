@@ -183,7 +183,10 @@ background. The QA stage only performs memory search.
 LoCoMo sessions are replayed chronologically and extracted once per session.
 Because both participants are humans, each session's opening speaker is mapped
 to the transport `user` role and the other speaker to `assistant`; speaker names
-remain in the message text. This keeps every opening turn on strict chat APIs.
+remain in the message text. Historical replay writes only these mapped dataset
+turns into the session: it does not execute a placeholder agent or append a
+synthetic response/current-turn duplicate. This keeps every opening turn on
+strict chat APIs while preserving the source transcript exactly once.
 
 ```bash
 go run . -scenario auto
