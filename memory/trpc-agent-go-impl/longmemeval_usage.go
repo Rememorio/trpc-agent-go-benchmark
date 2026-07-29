@@ -123,6 +123,7 @@ type lmeEmbeddingUsage struct {
 	Requests          int `json:"requests,omitempty"`
 	ResponseCacheHits int `json:"response_cache_hits,omitempty"`
 	UsageMissingCalls int `json:"usage_missing_calls,omitempty"`
+	ProviderErrors    int `json:"provider_errors,omitempty"`
 }
 
 func (u *lmeEmbeddingUsage) Add(other lmeEmbeddingUsage) {
@@ -132,12 +133,13 @@ func (u *lmeEmbeddingUsage) Add(other lmeEmbeddingUsage) {
 	u.Requests += other.Requests
 	u.ResponseCacheHits += other.ResponseCacheHits
 	u.UsageMissingCalls += other.UsageMissingCalls
+	u.ProviderErrors += other.ProviderErrors
 }
 
 func (u lmeEmbeddingUsage) IsZero() bool {
 	return u.PromptTokens == 0 && u.TotalTokens == 0 && u.Calls == 0 &&
 		u.Requests == 0 && u.ResponseCacheHits == 0 &&
-		u.UsageMissingCalls == 0
+		u.UsageMissingCalls == 0 && u.ProviderErrors == 0
 }
 
 func embeddingUsagePtr(u lmeEmbeddingUsage) *lmeEmbeddingUsage {
@@ -470,6 +472,9 @@ func (e *lmeTrackingEmbedder) GetEmbeddingWithUsage(
 
 	embedding, usage, err := e.base.GetEmbeddingWithUsage(ctx, text)
 	if err != nil {
+		e.mu.Lock()
+		e.usage.ProviderErrors++
+		e.mu.Unlock()
 		return nil, nil, err
 	}
 	if e.responseCache != nil {

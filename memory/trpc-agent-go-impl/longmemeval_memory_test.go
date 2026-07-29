@@ -46,7 +46,8 @@ type lmeStagedExtractorStub struct {
 }
 
 type lmePairProvenanceBackend struct {
-	ingested int
+	ingested       int
+	providerErrors int
 }
 
 func (b *lmePairProvenanceBackend) Name() string { return "pair-provenance" }
@@ -85,6 +86,17 @@ func (b *lmePairProvenanceBackend) Read(
 }
 
 func (b *lmePairProvenanceBackend) SnapshotProviderUsage() lmeProviderUsage {
+	if b.providerErrors > 0 {
+		errors := b.providerErrors
+		b.providerErrors = 0
+		return lmeProviderUsage{
+			Embedding: lmeEmbeddingUsage{
+				Requests:       errors,
+				ProviderErrors: errors,
+			},
+			Reported: true,
+		}
+	}
 	return lmeProviderUsage{}
 }
 
@@ -1275,6 +1287,37 @@ func TestLongMemEvalTrackingEmbedderRecordsUsage(t *testing.T) {
 	}
 	usage := tracker.Snapshot()
 	if usage.PromptTokens != 7 || usage.TotalTokens != 7 || usage.Calls != 1 {
+		t.Fatalf("unexpected embedding usage: %#v", usage)
+	}
+}
+
+func TestLongMemEvalTrackingEmbedderRecordsProviderError(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		_ *http.Request,
+	) {
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	base := embeddingopenai.New(
+		embeddingopenai.WithAPIKey("test"),
+		embeddingopenai.WithBaseURL(server.URL),
+		embeddingopenai.WithModel("text-embedding-3-small"),
+		embeddingopenai.WithDimensions(2),
+		embeddingopenai.WithMaxRetries(0),
+	)
+	tracker := newLongMemEvalTrackingEmbedder(base)
+	if _, err := tracker.GetEmbedding(
+		context.Background(), "hello",
+	); err == nil {
+		t.Fatal("get embedding succeeded, want provider error")
+	}
+	usage := tracker.Snapshot()
+	if usage.Requests != 1 || usage.Calls != 0 ||
+		usage.ProviderErrors != 1 {
 		t.Fatalf("unexpected embedding usage: %#v", usage)
 	}
 }
@@ -3877,6 +3920,62 @@ func TestRunCaseBackendKeepsAnswerProvenanceOnProducingPair(t *testing.T) {
 	}
 	if result.Retrieval[0].SourceHasAnswer {
 		t.Fatalf("retrieval inherited answer provenance: %+v", result.Retrieval)
+	}
+}
+
+func TestRunCaseBackendStopsIngestionOnEmbeddingProviderError(t *testing.T) {
+	oldAnswer := *flagLMEAnswer
+	oldIngestWait := *flagLMEIngestWait
+	oldMaxSessions := *flagLMEMaxSessions
+	oldMaxPairs := *flagLMEMaxPairs
+	oldTopK := *flagVectorTopK
+	*flagLMEAnswer = false
+	*flagLMEIngestWait = 0
+	*flagLMEMaxSessions = 0
+	*flagLMEMaxPairs = 0
+	*flagVectorTopK = 30
+	t.Cleanup(func() {
+		*flagLMEAnswer = oldAnswer
+		*flagLMEIngestWait = oldIngestWait
+		*flagLMEMaxSessions = oldMaxSessions
+		*flagLMEMaxPairs = oldMaxPairs
+		*flagVectorTopK = oldTopK
+	})
+
+	instance := &lmeInstance{
+		QuestionID:   "question-1",
+		QuestionType: "single-session-user",
+		Question:     "What fact was retained?",
+		Answer:       flexString("first fact"),
+		HaystackDates: []string{
+			"2026/07/20 (Mon) 12:00",
+		},
+		HaystackSessionIDs: []string{
+			"session-1",
+		},
+		HaystackSessions: [][]lmeTurn{{
+			{Role: "user", Content: "first fact"},
+			{Role: "assistant", Content: "acknowledged"},
+			{Role: "user", Content: "second fact"},
+			{Role: "assistant", Content: "acknowledged"},
+		}},
+	}
+	backend := &lmePairProvenanceBackend{providerErrors: 1}
+	result := runCaseBackend(
+		context.Background(), nil, &lmeTokenTracker{}, backend,
+		instance, "run-1", "provider-error-scope", "glm52", "glm", nil,
+	)
+
+	if !strings.Contains(result.Error, "embedding provider request failed") {
+		t.Fatalf("runCaseBackend() error = %q", result.Error)
+	}
+	if backend.ingested != 1 || len(result.IngestTraces) != 1 {
+		t.Fatalf("ingestion continued after provider error: ingested=%d traces=%d",
+			backend.ingested, len(result.IngestTraces))
+	}
+	if result.EmbeddingUsage == nil ||
+		result.EmbeddingUsage.ProviderErrors != 1 {
+		t.Fatalf("embedding usage = %+v", result.EmbeddingUsage)
 	}
 }
 

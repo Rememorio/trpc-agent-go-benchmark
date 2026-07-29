@@ -1285,11 +1285,14 @@ func evaluateLongMemEvalReplicateGate(
 			arm.Name+"_provider_usage",
 			arm.ProviderUsageReportedCases == arm.Cases &&
 				arm.MemoryTokenUsage.UsageMissingCalls == 0 &&
-				arm.MemoryEmbeddingUsage.UsageMissingCalls == 0,
-			fmt.Sprintf("reported=%d/%d llm_missing=%d embedding_missing=%d",
+				arm.MemoryEmbeddingUsage.UsageMissingCalls == 0 &&
+				arm.MemoryEmbeddingUsage.ProviderErrors == 0,
+			fmt.Sprintf("reported=%d/%d llm_missing=%d embedding_missing=%d embedding_errors=%d",
 				arm.ProviderUsageReportedCases, arm.Cases,
-				arm.MemoryTokenUsage.UsageMissingCalls, arm.MemoryEmbeddingUsage.UsageMissingCalls),
-			"reported for every case with zero missing calls")
+				arm.MemoryTokenUsage.UsageMissingCalls,
+				arm.MemoryEmbeddingUsage.UsageMissingCalls,
+				arm.MemoryEmbeddingUsage.ProviderErrors),
+			"reported for every case with zero missing calls and provider errors")
 	}
 	addLongMemEvalReplicateIngestionChecks(
 		&result, comparison, main, mem0, candidate,

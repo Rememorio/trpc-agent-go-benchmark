@@ -425,28 +425,27 @@ func TestReplicateGateSeparatesOutcomeFromIntegrityAndCost(t *testing.T) {
 		lmeReplicateArmMem0OSS:           {IngestedPairs: 1},
 		lmeReplicateArmPGVectorCandidate: {IngestedPairs: 1},
 	}
-	result := evaluateLongMemEvalReplicateGate(
-		&lmeReplicateComparison{
-			Arms: map[string]*lmeReplicateArm{
-				lmeReplicateArmPGVectorMain: arm(
-					lmeReplicateArmPGVectorMain,
-				),
-				lmeReplicateArmMem0OSS: arm(
-					lmeReplicateArmMem0OSS,
-				),
-				lmeReplicateArmPGVectorCandidate: arm(
-					lmeReplicateArmPGVectorCandidate,
-				),
-			},
-			Cases: []lmeReplicateCase{{Arms: caseArms}},
+	comparison := &lmeReplicateComparison{
+		Arms: map[string]*lmeReplicateArm{
+			lmeReplicateArmPGVectorMain: arm(
+				lmeReplicateArmPGVectorMain,
+			),
+			lmeReplicateArmMem0OSS: arm(
+				lmeReplicateArmMem0OSS,
+			),
+			lmeReplicateArmPGVectorCandidate: arm(
+				lmeReplicateArmPGVectorCandidate,
+			),
 		},
-		lmeReplicatePromotionGate{
-			ExpectedCases: 1, JudgeRuns: 3, PerTypeMaxDeficit: 0,
-			MemoryLLMTokenRatioMaximum:         1.55,
-			MemoryEmbeddingRequestRatioMaximum: 2,
-			FinalMemoryCountRatioMaximum:       3,
-		},
-	)
+		Cases: []lmeReplicateCase{{Arms: caseArms}},
+	}
+	gate := lmeReplicatePromotionGate{
+		ExpectedCases: 1, JudgeRuns: 3, PerTypeMaxDeficit: 0,
+		MemoryLLMTokenRatioMaximum:         1.55,
+		MemoryEmbeddingRequestRatioMaximum: 2,
+		FinalMemoryCountRatioMaximum:       3,
+	}
+	result := evaluateLongMemEvalReplicateGate(comparison, gate)
 
 	if result.Passed || result.OutcomePassed {
 		t.Fatalf("outcome gate unexpectedly passed: %+v", result)
@@ -468,6 +467,23 @@ func TestReplicateGateSeparatesOutcomeFromIntegrityAndCost(t *testing.T) {
 			t.Fatalf("cost check has wrong dimension: %+v", check)
 		}
 	}
+
+	comparison.Arms[lmeReplicateArmPGVectorCandidate].
+		MemoryEmbeddingUsage.ProviderErrors = 1
+	result = evaluateLongMemEvalReplicateGate(comparison, gate)
+	if result.IntegrityPassed {
+		t.Fatal("integrity gate passed with an embedding provider error")
+	}
+	for _, check := range result.Checks {
+		if check.Name == "pgvector_candidate_provider_usage" {
+			if check.Passed ||
+				!strings.Contains(check.Actual, "embedding_errors=1") {
+				t.Fatalf("provider usage check = %+v", check)
+			}
+			return
+		}
+	}
+	t.Fatal("candidate provider usage check is missing")
 }
 
 func TestReplicateGateRejectsIncompleteLogicalTokenCosts(t *testing.T) {

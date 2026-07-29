@@ -1581,6 +1581,11 @@ func runCaseBackend(
 				tracker,
 				backend,
 			)
+			if embeddingUsage.ProviderErrors > 0 && err == nil {
+				err = fmt.Errorf(
+					"embedding provider request failed",
+				)
+			}
 			modelCalls := tracker.SnapshotCalls()
 			if len(modelCalls) > 0 {
 				if trace.Extraction == nil {
