@@ -331,7 +331,9 @@ func loadLongMemEvalReplicateComparison(
 		if err := validateLongMemEvalReplicateKind(spec, baseline, candidate); err != nil {
 			return manifest, manifestDigest, nil, err
 		}
-		if err := validateLongMemEvalReplicateFreshCaches(spec.Name, baseline); err != nil {
+		if err := validateLongMemEvalReplicateFreshCaches(
+			spec.Name, baseline, candidate,
+		); err != nil {
 			return manifest, manifestDigest, nil, err
 		}
 		if err := validateLongMemEvalReplicateJudges(spec.Name, manifest.Gate.JudgeRuns, baseline, candidate); err != nil {
@@ -542,17 +544,72 @@ func validateLongMemEvalReplicateKind(
 	return nil
 }
 
-func validateLongMemEvalReplicateFreshCaches(replicate string, baseline *runResult) error {
-	if baseline == nil {
-		return fmt.Errorf("replicate %q baseline is nil", replicate)
+func validateLongMemEvalReplicateFreshCaches(
+	replicate string,
+	baseline, candidate *runResult,
+) error {
+	if baseline == nil || candidate == nil {
+		return fmt.Errorf("replicate %q comparison results must not be nil", replicate)
 	}
-	for _, key := range []string{"answer_cache_initial_entries", "judge_cache_initial_entries"} {
-		value, ok := longMemEvalMetadataInt(baseline.Metadata[key])
-		if !ok {
-			return fmt.Errorf("replicate %q baseline metadata %q is not an integer", replicate, key)
+	type cachePosition struct {
+		name    string
+		initial int
+		final   int
+	}
+	for _, prefix := range []string{"answer_cache", "judge_cache"} {
+		positions := make([]cachePosition, 0, 2)
+		for _, result := range []struct {
+			name   string
+			result *runResult
+		}{
+			{name: "baseline", result: baseline},
+			{name: "candidate", result: candidate},
+		} {
+			initialKey := prefix + "_initial_entries"
+			initial, ok := longMemEvalMetadataInt(
+				result.result.Metadata[initialKey],
+			)
+			if !ok {
+				return fmt.Errorf(
+					"replicate %q %s metadata %q is not an integer",
+					replicate, result.name, initialKey,
+				)
+			}
+			finalKey := prefix + "_final_entries"
+			final, ok := longMemEvalMetadataInt(
+				result.result.Metadata[finalKey],
+			)
+			if !ok {
+				return fmt.Errorf(
+					"replicate %q %s metadata %q is not an integer",
+					replicate, result.name, finalKey,
+				)
+			}
+			if initial < 0 || final < initial {
+				return fmt.Errorf(
+					"replicate %q %s %s cache entries are not monotonic: "+
+						"initial=%d final=%d",
+					replicate, result.name, prefix, initial, final,
+				)
+			}
+			positions = append(positions, cachePosition{
+				name: result.name, initial: initial, final: final,
+			})
 		}
-		if value != 0 {
-			return fmt.Errorf("replicate %q baseline %s is %d, want 0", replicate, key, value)
+		first, second := positions[0], positions[1]
+		baselineFirst := first.initial == 0 &&
+			first.final == second.initial
+		candidateFirst := second.initial == 0 &&
+			second.final == first.initial
+		if !baselineFirst && !candidateFirst {
+			return fmt.Errorf(
+				"replicate %q %s cache does not form a fresh contiguous "+
+					"timeline: %s initial=%d final=%d, "+
+					"%s initial=%d final=%d",
+				replicate, prefix,
+				first.name, first.initial, first.final,
+				second.name, second.initial, second.final,
+			)
 		}
 	}
 	return nil
