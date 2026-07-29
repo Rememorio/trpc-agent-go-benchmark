@@ -211,6 +211,8 @@ func TestRunEvaluationRecordsFailedSampleAndCost(t *testing.T) {
 	failureResult := &scenarios.SampleResult{
 		SampleID:                 "sample-1",
 		TotalTimeMs:              1234,
+		IngestDurationMs:         1100,
+		QADurationMs:             100,
 		TokenUsage:               &extractionUsage,
 		ExtractionTokenUsage:     &extractionUsage,
 		EmbeddingUsage:           &extractionEmbeddingUsage,
@@ -251,6 +253,14 @@ func TestRunEvaluationRecordsFailedSampleAndCost(t *testing.T) {
 	if result.Summary.ExtractionEmbeddingUsage == nil ||
 		result.Summary.ExtractionEmbeddingUsage.Calls != 3 {
 		t.Fatalf("embedding summary = %+v", result.Summary.EmbeddingUsage)
+	}
+	if result.Summary.IngestDurationMs != 1100 ||
+		result.Summary.QADurationMs != 100 {
+		t.Fatalf(
+			"phase durations = ingest %d, QA %d",
+			result.Summary.IngestDurationMs,
+			result.Summary.QADurationMs,
+		)
 	}
 }
 
@@ -319,6 +329,8 @@ func TestBuildEvaluationResultAggregatesAutoPhaseUsage(t *testing.T) {
 			EmbeddingUsage:           &totalEmbeddings,
 			ExtractionEmbeddingUsage: &extractionEmbeddings,
 			QAEmbeddingUsage:         &qaEmbeddings,
+			IngestDurationMs:         1200,
+			QADurationMs:             300,
 		}},
 		metrics.NewCategoryAggregator(),
 		1,
@@ -374,6 +386,14 @@ func TestBuildEvaluationResultAggregatesAutoPhaseUsage(t *testing.T) {
 		t.Fatalf(
 			"total cached tokens = %d, want 40",
 			result.Summary.TotalCachedTokens,
+		)
+	}
+	if result.Summary.IngestDurationMs != 1200 ||
+		result.Summary.QADurationMs != 300 {
+		t.Fatalf(
+			"phase durations = ingest %d, QA %d",
+			result.Summary.IngestDurationMs,
+			result.Summary.QADurationMs,
 		)
 	}
 }

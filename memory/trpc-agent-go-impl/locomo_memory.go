@@ -79,6 +79,8 @@ type EvaluationFailure struct {
 	SampleID                 string                          `json:"sample_id"`
 	Error                    string                          `json:"error"`
 	TotalTimeMs              int64                           `json:"total_time_ms"`
+	IngestDurationMs         int64                           `json:"ingest_duration_ms,omitempty"`
+	QADurationMs             int64                           `json:"qa_duration_ms,omitempty"`
 	TokenUsage               *scenarios.TokenUsage           `json:"token_usage,omitempty"`
 	ExtractionTokenUsage     *scenarios.TokenUsage           `json:"extraction_token_usage,omitempty"`
 	QATokenUsage             *scenarios.TokenUsage           `json:"qa_token_usage,omitempty"`
@@ -120,14 +122,16 @@ type EvalMetadata struct {
 
 // EvalSummary holds aggregated evaluation summary.
 type EvalSummary struct {
-	TotalSamples    int     `json:"total_samples"`
-	FailedSamples   int     `json:"failed_samples,omitempty"`
-	TotalQuestions  int     `json:"total_questions"`
-	OverallF1       float64 `json:"overall_f1"`
-	OverallBLEU     float64 `json:"overall_bleu"`
-	OverallLLMScore float64 `json:"overall_llm_score,omitempty"`
-	TotalTimeMs     int64   `json:"total_time_ms"`
-	AvgLatencyMs    float64 `json:"avg_latency_ms"`
+	TotalSamples     int     `json:"total_samples"`
+	FailedSamples    int     `json:"failed_samples,omitempty"`
+	TotalQuestions   int     `json:"total_questions"`
+	OverallF1        float64 `json:"overall_f1"`
+	OverallBLEU      float64 `json:"overall_bleu"`
+	OverallLLMScore  float64 `json:"overall_llm_score,omitempty"`
+	TotalTimeMs      int64   `json:"total_time_ms"`
+	AvgLatencyMs     float64 `json:"avg_latency_ms"`
+	IngestDurationMs int64   `json:"ingest_duration_ms,omitempty"`
+	QADurationMs     int64   `json:"qa_duration_ms,omitempty"`
 
 	// Token usage statistics.
 	TotalPromptTokens       int     `json:"total_prompt_tokens"`
@@ -947,6 +951,8 @@ func evaluationFailure(
 		return failure
 	}
 	failure.TotalTimeMs = result.TotalTimeMs
+	failure.IngestDurationMs = result.IngestDurationMs
+	failure.QADurationMs = result.QADurationMs
 	failure.TokenUsage = result.TokenUsage
 	failure.ExtractionTokenUsage = result.ExtractionTokenUsage
 	failure.QATokenUsage = result.QATokenUsage
@@ -975,6 +981,8 @@ func attachEvaluationFailures(
 	)
 	qaEmbeddings := embeddingValueOrZero(result.Summary.QAEmbeddingUsage)
 	for _, failure := range failures {
+		result.Summary.IngestDurationMs += failure.IngestDurationMs
+		result.Summary.QADurationMs += failure.QADurationMs
 		if failure.ExtractionTokenUsage != nil {
 			extractionTokens.Add(*failure.ExtractionTokenUsage)
 		}
@@ -1116,6 +1124,8 @@ func buildEvaluationResult(
 			OverallLLMScore:          overall.LLMScore,
 			TotalTimeMs:              totalTime.Milliseconds(),
 			AvgLatencyMs:             float64(totalTime.Milliseconds()) / float64(qCount),
+			IngestDurationMs:         phaseUsage.ingestDurationMs,
+			QADurationMs:             phaseUsage.qaDurationMs,
 			TotalPromptTokens:        totalUsage.PromptTokens,
 			TotalCompletionTokens:    totalUsage.CompletionTokens,
 			TotalTokens:              totalUsage.TotalTokens,
@@ -1168,6 +1178,8 @@ type locomoPhaseUsage struct {
 	embeddings           scenarios.EmbeddingUsage
 	extractionEmbeddings scenarios.EmbeddingUsage
 	qaEmbeddings         scenarios.EmbeddingUsage
+	ingestDurationMs     int64
+	qaDurationMs         int64
 }
 
 func aggregateLoCoMoPhaseUsage(
@@ -1195,6 +1207,8 @@ func aggregateLoCoMoPhaseUsage(
 		if sample.QAEmbeddingUsage != nil {
 			usage.qaEmbeddings.Add(*sample.QAEmbeddingUsage)
 		}
+		usage.ingestDurationMs += sample.IngestDurationMs
+		usage.qaDurationMs += sample.QADurationMs
 	}
 	return usage
 }

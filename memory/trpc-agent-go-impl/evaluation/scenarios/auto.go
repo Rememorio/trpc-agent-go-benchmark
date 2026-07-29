@@ -84,14 +84,23 @@ func (e *AutoEvaluator) Evaluate(
 		e.config.SnapshotEmbeddingUsage()
 	}
 
+	ingestStartedAt := time.Now()
 	if e.config.ReuseMemories {
 		if err := e.requireExistingMemories(ctx, userKey); err != nil {
 			return e.failedExtractionResult(startTime, sample), err
 		}
 	} else {
 		if err := e.seedMemories(ctx, userKey, sample); err != nil {
-			return e.failedExtractionResult(startTime, sample), err
+			result := e.failedExtractionResult(startTime, sample)
+			result.IngestDurationMs = time.Since(
+				ingestStartedAt,
+			).Milliseconds()
+			return result, err
 		}
+	}
+	var ingestDurationMs int64
+	if !e.config.ReuseMemories {
+		ingestDurationMs = time.Since(ingestStartedAt).Milliseconds()
 	}
 	var extractionUsage TokenUsage
 	var extractionCalls []ExtractionCallTrace
@@ -105,6 +114,7 @@ func (e *AutoEvaluator) Evaluate(
 	}
 
 	// Phase 2: Answer questions via agent with memory_search.
+	qaStartedAt := time.Now()
 	qaMemSvc := &noAutoMemoryService{inner: e.memoryService}
 	qaAgent := newAutoQAAgent(
 		e.model,
@@ -154,6 +164,8 @@ func (e *AutoEvaluator) Evaluate(
 	result.ByCategory = catAgg.GetCategoryMetrics()
 	result.Overall = catAgg.GetOverall()
 	result.TotalTimeMs = time.Since(startTime).Milliseconds()
+	result.IngestDurationMs = ingestDurationMs
+	result.QADurationMs = time.Since(qaStartedAt).Milliseconds()
 	result.QATokenUsage = tokenUsagePointer(sampleUsage)
 	result.ExtractionTokenUsage = tokenUsagePointer(extractionUsage)
 	result.ExtractionCalls = extractionCalls

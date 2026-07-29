@@ -11,6 +11,7 @@ package scenarios
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -20,6 +21,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 func TestAutoExtractionWaitTimeout(t *testing.T) {
@@ -111,6 +113,89 @@ func TestSeedMemoriesReplaysEachDatasetTurnOnce(t *testing.T) {
 				)
 			}
 		}
+	}
+}
+
+func TestAutoEvaluatorRecordsPhaseDurations(t *testing.T) {
+	sample := &dataset.LoCoMoSample{
+		SampleID: "sample-1",
+		Conversation: []dataset.Session{{
+			SessionID: "session-1",
+			Turns: []dataset.Turn{{
+				Speaker: "Alice",
+				Text:    "I moved to Paris.",
+			}},
+		}},
+	}
+
+	freshService := &replayCapturingMemoryService{
+		enqueueDelay: 5 * time.Millisecond,
+	}
+	fresh := NewAutoEvaluator(
+		nil,
+		nil,
+		freshService,
+		Config{AutoExtractionTimeout: testWaitTimeout},
+	)
+	freshResult, err := fresh.Evaluate(context.Background(), sample)
+	if err != nil {
+		t.Fatalf("fresh evaluate: %v", err)
+	}
+	if freshResult.IngestDurationMs <= 0 {
+		t.Fatalf(
+			"fresh ingest duration = %d, want positive",
+			freshResult.IngestDurationMs,
+		)
+	}
+	if freshResult.TotalTimeMs < freshResult.IngestDurationMs {
+		t.Fatalf(
+			"total duration %d is less than ingest duration %d",
+			freshResult.TotalTimeMs,
+			freshResult.IngestDurationMs,
+		)
+	}
+
+	reuse := NewAutoEvaluator(
+		nil,
+		nil,
+		&replayCapturingMemoryService{existingMemories: true},
+		Config{ReuseMemories: true},
+	)
+	reuseResult, err := reuse.Evaluate(context.Background(), sample)
+	if err != nil {
+		t.Fatalf("reuse evaluate: %v", err)
+	}
+	if reuseResult.IngestDurationMs != 0 {
+		t.Fatalf(
+			"reuse ingest duration = %d, want zero",
+			reuseResult.IngestDurationMs,
+		)
+	}
+
+	failed := NewAutoEvaluator(
+		nil,
+		nil,
+		&replayCapturingMemoryService{
+			enqueueDelay: 5 * time.Millisecond,
+			enqueueErr:   errors.New("provider unavailable"),
+		},
+		Config{AutoExtractionTimeout: testWaitTimeout},
+	)
+	failedResult, err := failed.Evaluate(context.Background(), sample)
+	if err == nil || !strings.Contains(err.Error(), "provider unavailable") {
+		t.Fatalf("failed evaluate error = %v", err)
+	}
+	if failedResult.IngestDurationMs <= 0 {
+		t.Fatalf(
+			"failed ingest duration = %d, want positive",
+			failedResult.IngestDurationMs,
+		)
+	}
+	if failedResult.QADurationMs != 0 {
+		t.Fatalf(
+			"failed QA duration = %d, want zero",
+			failedResult.QADurationMs,
+		)
 	}
 }
 
@@ -311,7 +396,10 @@ type controlledAutoExtractionEnqueuer struct {
 
 type replayCapturingMemoryService struct {
 	memory.Service
-	sessions []*session.Session
+	sessions         []*session.Session
+	enqueueDelay     time.Duration
+	enqueueErr       error
+	existingMemories bool
 }
 
 func (s *replayCapturingMemoryService) ClearMemories(
@@ -326,12 +414,33 @@ func (s *replayCapturingMemoryService) EnqueueAutoMemoryJob(
 	_ context.Context,
 	sess *session.Session,
 ) error {
+	if s.enqueueDelay > 0 {
+		time.Sleep(s.enqueueDelay)
+	}
+	if s.enqueueErr != nil {
+		return s.enqueueErr
+	}
 	s.sessions = append(s.sessions, sess)
 	want := latestAutoExtractionTimestamp(sess)
 	sess.SetState(
 		memory.SessionStateKeyAutoMemoryLastExtractAt,
 		[]byte(want.Format(time.RFC3339Nano)),
 	)
+	return nil
+}
+
+func (s *replayCapturingMemoryService) ReadMemories(
+	context.Context,
+	memory.UserKey,
+	int,
+) ([]*memory.Entry, error) {
+	if !s.existingMemories {
+		return nil, nil
+	}
+	return []*memory.Entry{{}}, nil
+}
+
+func (s *replayCapturingMemoryService) Tools() []tool.Tool {
 	return nil
 }
 

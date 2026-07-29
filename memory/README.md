@@ -199,6 +199,8 @@ remain in the message text. Historical replay writes only these mapped dataset
 turns into the session: it does not execute a placeholder agent or append a
 synthetic response/current-turn duplicate. This keeps every opening turn on
 strict chat APIs while preserving the source transcript exactly once.
+Results report memory ingest and QA durations separately; fixed-memory answer
+replays therefore record zero ingest duration.
 The legacy result tables above predate this protocol correction.
 
 ```bash

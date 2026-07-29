@@ -165,6 +165,8 @@ type SampleResult struct {
 	ByCategory               map[string]metrics.CategoryMetrics `json:"by_category"`
 	Overall                  metrics.CategoryMetrics            `json:"overall"`
 	TotalTimeMs              int64                              `json:"total_time_ms"`
+	IngestDurationMs         int64                              `json:"ingest_duration_ms,omitempty"`
+	QADurationMs             int64                              `json:"qa_duration_ms,omitempty"`
 	TokenUsage               *TokenUsage                        `json:"token_usage,omitempty"`
 	ExtractionTokenUsage     *TokenUsage                        `json:"extraction_token_usage,omitempty"`
 	QATokenUsage             *TokenUsage                        `json:"qa_token_usage,omitempty"`
