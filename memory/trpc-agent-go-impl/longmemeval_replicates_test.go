@@ -1276,6 +1276,89 @@ func TestLoadLongMemEvalReplicateComparisonSupportsSharedMemoryCaches(
 	}
 }
 
+func TestCompareLongMemEvalReplicatesAllowsRegisteredInterveningCacheRuns(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	manifestPath := writeLongMemEvalReplicateFixture(t, dir)
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatalf("read manifest: %v", err)
+	}
+	var manifest lmeReplicateComparisonManifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatalf("decode manifest: %v", err)
+	}
+	for index := range manifest.Replicates {
+		spec := &manifest.Replicates[index]
+		baselinePath := filepath.Join(dir, spec.BaselineResults)
+		candidatePath := filepath.Join(dir, spec.CandidateResults)
+		baseline, err := loadLongMemEvalResults(baselinePath)
+		if err != nil {
+			t.Fatalf("load baseline: %v", err)
+		}
+		candidate, err := loadLongMemEvalResults(candidatePath)
+		if err != nil {
+			t.Fatalf("load candidate: %v", err)
+		}
+		baseline.Metadata["answer_cache_initial_entries"] = 0
+		baseline.Metadata["answer_cache_final_entries"] = 1
+		candidate.Metadata["answer_cache_initial_entries"] = 2
+		candidate.Metadata["answer_cache_final_entries"] = 3
+		baseline.Metadata["judge_cache_initial_entries"] = 2
+		baseline.Metadata["judge_cache_final_entries"] = 3
+		candidate.Metadata["judge_cache_initial_entries"] = 0
+		candidate.Metadata["judge_cache_final_entries"] = 1
+		middle := *candidate
+		middle.Metadata = maps.Clone(candidate.Metadata)
+		middle.Metadata["implementation"] = "intervening-" + spec.Name
+		middle.Metadata["answer_cache_initial_entries"] = 1
+		middle.Metadata["answer_cache_final_entries"] = 2
+		middle.Metadata["judge_cache_initial_entries"] = 1
+		middle.Metadata["judge_cache_final_entries"] = 2
+		middlePath := filepath.Join(
+			filepath.Dir(candidatePath), "middle.json",
+		)
+		if err := writeLongMemEvalResults(baselinePath, baseline); err != nil {
+			t.Fatalf("write baseline: %v", err)
+		}
+		if err := writeLongMemEvalResults(candidatePath, candidate); err != nil {
+			t.Fatalf("write candidate: %v", err)
+		}
+		if err := writeLongMemEvalResults(middlePath, &middle); err != nil {
+			t.Fatalf("write middle: %v", err)
+		}
+		middleRelative, err := filepath.Rel(dir, middlePath)
+		if err != nil {
+			t.Fatalf("relative middle path: %v", err)
+		}
+		spec.AnswerCacheTimelineResults = []string{
+			spec.BaselineResults,
+			filepath.ToSlash(middleRelative),
+			spec.CandidateResults,
+		}
+		spec.JudgeCacheTimelineResults = []string{
+			spec.CandidateResults,
+			filepath.ToSlash(middleRelative),
+			spec.BaselineResults,
+		}
+	}
+	data, err = json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		t.Fatalf("encode manifest: %v", err)
+	}
+	if err := os.WriteFile(manifestPath, append(data, '\n'), 0644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	if err := compareLongMemEvalReplicates(
+		manifestPath, filepath.Join(dir, "output"),
+	); err != nil {
+		t.Fatalf("compare registered cache timelines: %v", err)
+	}
+}
+
 func TestValidateLongMemEvalReplicateKind(t *testing.T) {
 	t.Parallel()
 
