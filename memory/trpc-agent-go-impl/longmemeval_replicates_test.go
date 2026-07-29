@@ -10,6 +10,7 @@ package main
 
 import (
 	"encoding/json"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1200,23 +1201,67 @@ func TestValidateLongMemEvalReplicateKind(t *testing.T) {
 func TestValidateLongMemEvalReplicateFreshCaches(t *testing.T) {
 	t.Parallel()
 
-	valid := &runResult{Metadata: map[string]any{
+	baseline := &runResult{Metadata: map[string]any{
 		"answer_cache_initial_entries": 0,
-		"judge_cache_initial_entries":  0,
+		"answer_cache_final_entries":   2,
+		"judge_cache_initial_entries":  1,
+		"judge_cache_final_entries":    3,
 	}}
-	if err := validateLongMemEvalReplicateFreshCaches("replicate", valid); err != nil {
+	candidate := &runResult{Metadata: map[string]any{
+		"answer_cache_initial_entries": 2,
+		"answer_cache_final_entries":   3,
+		"judge_cache_initial_entries":  0,
+		"judge_cache_final_entries":    1,
+	}}
+	if err := validateLongMemEvalReplicateFreshCaches(
+		"replicate", baseline, candidate,
+	); err != nil {
 		t.Fatalf("fresh caches: %v", err)
 	}
-	for _, key := range []string{"answer_cache_initial_entries", "judge_cache_initial_entries"} {
-		t.Run(key, func(t *testing.T) {
-			result := &runResult{Metadata: map[string]any{
-				"answer_cache_initial_entries": 0,
-				"judge_cache_initial_entries":  0,
-			}}
-			result.Metadata[key] = 1
-			err := validateLongMemEvalReplicateFreshCaches("replicate", result)
-			if err == nil || !strings.Contains(err.Error(), key+" is 1, want 0") {
-				t.Fatalf("fresh cache error = %v", err)
+	for _, test := range []struct {
+		name      string
+		mutate    func(*runResult, *runResult)
+		wantError string
+	}{
+		{
+			name: "missing candidate answer final",
+			mutate: func(_, candidate *runResult) {
+				delete(candidate.Metadata, "answer_cache_final_entries")
+			},
+			wantError: "candidate metadata \"answer_cache_final_entries\"",
+		},
+		{
+			name: "nonmonotonic baseline answer cache",
+			mutate: func(baseline, _ *runResult) {
+				baseline.Metadata["answer_cache_final_entries"] = -1
+			},
+			wantError: "baseline answer_cache cache entries are not monotonic",
+		},
+		{
+			name: "nonempty start",
+			mutate: func(baseline, candidate *runResult) {
+				baseline.Metadata["answer_cache_initial_entries"] = 1
+				candidate.Metadata["answer_cache_initial_entries"] = 2
+			},
+			wantError: "answer_cache cache does not form a fresh contiguous timeline",
+		},
+		{
+			name: "timeline gap",
+			mutate: func(baseline, _ *runResult) {
+				baseline.Metadata["answer_cache_final_entries"] = 1
+			},
+			wantError: "answer_cache cache does not form a fresh contiguous timeline",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			baseline := &runResult{Metadata: maps.Clone(baseline.Metadata)}
+			candidate := &runResult{Metadata: maps.Clone(candidate.Metadata)}
+			test.mutate(baseline, candidate)
+			err := validateLongMemEvalReplicateFreshCaches(
+				"replicate", baseline, candidate,
+			)
+			if err == nil || !strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf("fresh cache error = %v, want %q", err, test.wantError)
 			}
 		})
 	}
@@ -1601,9 +1646,11 @@ func longMemEvalReplicateFixtureResult(
 	metadata["answer_cache_shared"] = true
 	metadata["answer_cache_ledger_id"] = answerLedger
 	metadata["answer_cache_initial_entries"] = 0
+	metadata["answer_cache_final_entries"] = 0
 	metadata["answer_cache_logical_usage_missing_hits"] = 0
 	metadata["judge_cache_ledger_id"] = judgeLedger
 	metadata["judge_cache_initial_entries"] = 0
+	metadata["judge_cache_final_entries"] = 0
 	metadata["judge_cache_logical_usage_missing_hits"] = 0
 	metadata["model_response_cache_format_version"] =
 		lmeModelCacheFormatVersion
