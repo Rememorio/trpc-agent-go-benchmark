@@ -266,6 +266,7 @@ type lmePair struct {
 
 type backendResult struct {
 	Backend               string              `json:"backend"`
+	PersistedTableSuffix  string              `json:"persistence_table_suffix,omitempty"`
 	UserID                string              `json:"user_id"`
 	SessionID             string              `json:"session_id"`
 	IngestedPairs         int                 `json:"ingested_pairs"`
@@ -1549,10 +1550,11 @@ func runCaseBackend(
 	provenance := make(map[string]map[string]bool)
 	answerProvenance := make(map[string]bool)
 	br := &backendResult{
-		Backend:      backend.Name(),
-		UserID:       userID,
-		SessionID:    sessionID,
-		IngestTraces: make([]ingestTrace, 0),
+		Backend:              backend.Name(),
+		PersistedTableSuffix: longMemEvalPersistenceTableSuffix(backend.Name()),
+		UserID:               userID,
+		SessionID:            sessionID,
+		IngestTraces:         make([]ingestTrace, 0),
 	}
 
 	pairsSeen := 0
@@ -1811,6 +1813,13 @@ afterIngest:
 	br.Evidence = computeEvidenceMetrics(inst, br, *flagVectorTopK)
 	br.FailureStage = classifyFailure(inst, br)
 	return br
+}
+
+func longMemEvalPersistenceTableSuffix(backendName string) string {
+	if backendName != "pgvector" {
+		return ""
+	}
+	return strings.TrimSpace(*flagTableSuffix)
 }
 
 func newBackend(

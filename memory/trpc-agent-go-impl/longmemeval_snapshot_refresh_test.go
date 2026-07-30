@@ -68,6 +68,31 @@ func (b *snapshotRefreshTestBackend) ReadSnapshotProvenance(
 	return b.provenance, b.truncated, nil
 }
 
+func TestValidateLongMemEvalSnapshotRefreshPersistenceTable(t *testing.T) {
+	restoreStringFlag(t, flagTableSuffix, "_snapshot")
+	result := &runResult{
+		Metadata: map[string]any{"table_suffix": "_snapshot"},
+		Cases: []*caseResult{{
+			BackendResults: map[string]*backendResult{"pgvector": {
+				PersistedTableSuffix: "_snapshot",
+			}},
+		}},
+	}
+	if err := validateLongMemEvalSnapshotRefresh(
+		result, []string{"pgvector"},
+	); err != nil {
+		t.Fatalf("validate snapshot refresh: %v", err)
+	}
+
+	result.Cases[0].BackendResults["pgvector"].PersistedTableSuffix =
+		"_replacement"
+	if err := validateLongMemEvalSnapshotRefresh(
+		result, []string{"pgvector"},
+	); err == nil {
+		t.Fatal("snapshot refresh accepted a replacement table")
+	}
+}
+
 func TestRefreshLongMemEvalMemorySnapshotResultRepairsFinalSnapshot(t *testing.T) {
 	oldMemory := memorySnapshot{
 		ID: "old", Memory: "unrelated", SourceSessions: []string{"session-1"},

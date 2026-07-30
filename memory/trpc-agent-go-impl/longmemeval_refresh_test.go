@@ -36,7 +36,9 @@ func TestValidateLongMemEvalRetrievalRefresh(t *testing.T) {
 			"top_k":           float64(30),
 		},
 		Cases: []*caseResult{{
-			BackendResults: map[string]*backendResult{"pgvector": {}},
+			BackendResults: map[string]*backendResult{"pgvector": {
+				PersistedTableSuffix: "_refresh_test",
+			}},
 		}},
 	}
 	if err := validateLongMemEvalRetrievalRefresh(result); err != nil {
@@ -46,6 +48,33 @@ func TestValidateLongMemEvalRetrievalRefresh(t *testing.T) {
 	result.Metadata["table_suffix"] = "_other"
 	if err := validateLongMemEvalRetrievalRefresh(result); err == nil {
 		t.Fatal("validate retrieval refresh accepted a different table")
+	}
+
+	result.Metadata["table_suffix"] = "_refresh_test"
+	result.Cases[0].BackendResults["pgvector"].PersistedTableSuffix =
+		"_replacement"
+	if err := validateLongMemEvalRetrievalRefresh(result); err == nil {
+		t.Fatal("validate retrieval refresh accepted a replacement table")
+	}
+
+	result.Cases[0].BackendResults["pgvector"].PersistedTableSuffix =
+		"_refresh_test"
+	result.Cases = append(result.Cases, &caseResult{
+		BackendResults: map[string]*backendResult{"pgvector": {}},
+	})
+	if err := validateLongMemEvalRetrievalRefresh(result); err == nil {
+		t.Fatal("validate retrieval refresh accepted mixed table provenance")
+	}
+}
+
+func TestLongMemEvalPersistenceTableSuffix(t *testing.T) {
+	restoreStringFlag(t, flagTableSuffix, " _isolated ")
+
+	if got := longMemEvalPersistenceTableSuffix("pgvector"); got != "_isolated" {
+		t.Fatalf("pgvector persistence table suffix = %q", got)
+	}
+	if got := longMemEvalPersistenceTableSuffix("mem0"); got != "" {
+		t.Fatalf("mem0 persistence table suffix = %q, want empty", got)
 	}
 }
 

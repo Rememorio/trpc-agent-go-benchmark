@@ -116,6 +116,11 @@ func validateLongMemEvalSnapshotRefresh(result *runResult, backendNames []string
 				*flagTableSuffix, recordedSuffix,
 			)
 		}
+		if err := validateLongMemEvalPersistenceTableSuffixes(
+			result, recordedSuffix,
+		); err != nil {
+			return err
+		}
 	}
 	return nil
 }

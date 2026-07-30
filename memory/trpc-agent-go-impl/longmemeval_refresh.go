@@ -130,6 +130,11 @@ func validateLongMemEvalRetrievalRefresh(result *runResult) error {
 			*flagTableSuffix, recordedSuffix,
 		)
 	}
+	if err := validateLongMemEvalPersistenceTableSuffixes(
+		result, recordedSuffix,
+	); err != nil {
+		return err
+	}
 	if recordedSuffix == "" && *flagTableSuffix != "" {
 		return fmt.Errorf(
 			"table-suffix %q does not match retrieval source %q",
@@ -176,6 +181,40 @@ func validateLongMemEvalRetrievalRefresh(result *runResult) error {
 	}
 	if !hasPGVector {
 		return errors.New("retrieval refresh source has no pgvector results")
+	}
+	return nil
+}
+
+func validateLongMemEvalPersistenceTableSuffixes(
+	result *runResult,
+	recordedSuffix string,
+) error {
+	pgvectorResults := 0
+	explicitSources := 0
+	for _, cr := range result.Cases {
+		if cr == nil {
+			continue
+		}
+		br := cr.BackendResults["pgvector"]
+		if br == nil {
+			continue
+		}
+		pgvectorResults++
+		suffix := strings.TrimSpace(br.PersistedTableSuffix)
+		if suffix == "" {
+			continue
+		}
+		explicitSources++
+		if suffix != recordedSuffix {
+			return errors.New(
+				"pgvector persistence table suffix does not match result metadata",
+			)
+		}
+	}
+	if explicitSources > 0 && explicitSources != pgvectorResults {
+		return errors.New(
+			"pgvector results mix explicit and legacy persistence table provenance",
+		)
 	}
 	return nil
 }
