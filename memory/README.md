@@ -424,7 +424,7 @@ LME_AGENT_REPLACEMENT="trpc.group/trpc-go/trpc-agent-go@<candidate-pseudo-versio
   -lme-user-scope "$LME_BLIND_USER_SCOPE" \
   -lme-model-response-cache "$LME_CANDIDATE_MODEL_CACHE" \
   -lme-embedding-response-cache "$LME_CANDIDATE_EMBEDDING_CACHE" \
-  -pgvector-update-policy reconcile \
+  -pgvector-update-policy history-preserving \
   -pgvector-assistant-result-extraction=true \
   -vector-topk 30 \
   -table-suffix _lme_holdout_candidate \
@@ -461,6 +461,8 @@ LME_AGENT_PROFILE=upstream \
 
 # Run candidate pgvector on the exact same selection. Do not rerun Mem0: the
 # comparison command reuses the frozen reference arm from the upstream run.
+LME_AGENT_REPLACEMENT="trpc.group/trpc-go/trpc-agent-go@<candidate-pseudo-version>" \
+LME_AGENT_PROFILE=candidate \
 ./run-longmemeval.sh \
   -dataset-format longmemeval \
   -dataset ../../summary/data/longmemeval-cleaned/longmemeval_oracle.json \
@@ -469,7 +471,7 @@ LME_AGENT_PROFILE=upstream \
   -lme-abstention-count 4 \
   -lme-sample-seed 48 \
   -lme-implementation candidate-<commit> \
-  -pgvector-update-policy reconcile \
+  -pgvector-update-policy history-preserving \
   -pgvector-assistant-result-extraction=true \
   -lme-answer=true \
   -lme-answer-cache ../results/lme-answer-cache.json \
@@ -719,8 +721,22 @@ each text hash, model, and dimension across both arms, preventing provider-side
 vector drift from changing retrieval order before model replay. Embedding usage
 then records logical `requests`, ledger `response_cache_hits`, and real provider
 `calls`/tokens separately. Strict comparison verifies that both arms used the
-same persistent embedding ledger without cache errors. Use an independent
-uncached run for production cost.
+same persistent embedding ledger without cache errors. Each new run also
+records `embedding_provider_retry`, including maximum attempts, the backoff
+sequence, and total backoff budget. Strict comparison requires that policy to
+match whenever either result records it, while retaining compatibility with
+older result pairs that predate the field. Use an independent uncached run for
+production cost.
+
+`-lme-apply-recovery` accepts only a preregistered replacement whose dataset,
+selection, protocol, build, case/backend scope, and source checksum match the
+failed run. When persistent caches are present, recovery additionally requires
+the same ledger and configuration and an exact timeline join: each retry's
+initial entry count must equal the previous segment's final count. The recovery
+artifact records each segment's result hash and physical hits, misses, errors,
+and entry counts in `cache_lineage`. Merged physical counters include
+superseded attempts; canonical provider cost remains derived from the final
+per-case traces.
 
 The judge command checkpoints `judged_results.json` after each case. An odd
 `-lme-judge-runs` value greater than one records every independent vote and
