@@ -17,6 +17,8 @@ func TestApplyLongMemEvalRecovery(t *testing.T) {
 
 	source := recoveryTestResult("source-answer", 2)
 	replacement := recoveryTestResult("replacement-answer", 1)
+	setRecoveryTestCacheMetadata(source.Metadata, 0, 2, 1, 2)
+	setRecoveryTestCacheMetadata(replacement.Metadata, 2, 3, 2, 1)
 	replacement.Cases = replacement.Cases[:1]
 	replacement.Cases[0].BackendResults = map[string]*backendResult{
 		"pgvector": replacement.Cases[0].BackendResults["pgvector"],
@@ -79,6 +81,31 @@ func TestApplyLongMemEvalRecovery(t *testing.T) {
 	if !ok || recovery["replacement_count"] != float64(1) ||
 		recovery["quality_outcomes_inspected"] != false {
 		t.Fatalf("unexpected recovery metadata: %#v", recovery)
+	}
+	if recovery["cache_counter_semantics"] !=
+		longMemEvalRecoveryCacheCounterNote {
+		t.Fatalf(
+			"recovery cache counter semantics = %#v",
+			recovery["cache_counter_semantics"],
+		)
+	}
+	if got.Metadata["model_response_cache_initial_entries"] != float64(0) ||
+		got.Metadata["model_response_cache_final_entries"] != float64(3) ||
+		got.Metadata["model_response_cache_hits"] != float64(3) ||
+		got.Metadata["model_response_cache_misses"] != float64(3) {
+		t.Fatalf("unexpected merged cache metadata: %#v", got.Metadata)
+	}
+	cacheLineage, ok := recovery["cache_lineage"].(map[string]any)
+	if !ok {
+		t.Fatalf("recovery cache lineage = %#v", recovery["cache_lineage"])
+	}
+	modelLineage, ok := cacheLineage["model_response_cache"].(map[string]any)
+	if !ok || modelLineage["ledger_id"] != "test-ledger" {
+		t.Fatalf("model cache lineage = %#v", modelLineage)
+	}
+	segments, ok := modelLineage["segments"].([]any)
+	if !ok || len(segments) != 2 {
+		t.Fatalf("model cache lineage segments = %#v", modelLineage["segments"])
 	}
 }
 
@@ -173,6 +200,69 @@ func TestApplyLongMemEvalRecoveryRejectsInvalidInput(t *testing.T) {
 				}
 			},
 			wantErr: "build metadata does not match",
+		},
+		{
+			name: "cache ledger mismatch",
+			mutate: func(f *recoveryTestFixture) {
+				setRecoveryTestCacheMetadata(
+					f.source.Metadata, 0, 1, 0, 1,
+				)
+				setRecoveryTestCacheMetadata(
+					f.replacement.Metadata, 1, 2, 0, 1,
+				)
+				f.replacement.Metadata["model_response_cache_ledger_id"] =
+					"other-ledger"
+			},
+			wantErr: `metadata "model_response_cache_ledger_id" does not match`,
+		},
+		{
+			name: "cache timeline gap",
+			mutate: func(f *recoveryTestFixture) {
+				setRecoveryTestCacheMetadata(
+					f.source.Metadata, 0, 1, 0, 1,
+				)
+				setRecoveryTestCacheMetadata(
+					f.replacement.Metadata, 2, 3, 0, 1,
+				)
+			},
+			wantErr: "cache timeline is discontinuous",
+		},
+		{
+			name: "cache presence mismatch",
+			mutate: func(f *recoveryTestFixture) {
+				setRecoveryTestCacheMetadata(
+					f.source.Metadata, 0, 1, 0, 1,
+				)
+			},
+			wantErr: "presence does not match recovery source",
+		},
+		{
+			name: "negative cache counter",
+			mutate: func(f *recoveryTestFixture) {
+				setRecoveryTestCacheMetadata(
+					f.source.Metadata, 0, 1, 0, 1,
+				)
+				setRecoveryTestCacheMetadata(
+					f.replacement.Metadata, 1, 2, -1, 1,
+				)
+			},
+			wantErr: "not a non-negative integer",
+		},
+		{
+			name: "cache optional counter presence mismatch",
+			mutate: func(f *recoveryTestFixture) {
+				setRecoveryTestCacheMetadata(
+					f.source.Metadata, 0, 1, 0, 1,
+				)
+				setRecoveryTestCacheMetadata(
+					f.replacement.Metadata, 1, 2, 0, 1,
+				)
+				delete(
+					f.replacement.Metadata,
+					"model_response_cache_errors",
+				)
+			},
+			wantErr: "presence does not match recovery source",
 		},
 		{
 			name: "unregistered backend",
@@ -525,6 +615,24 @@ func recoveryTestResult(answer string, cases int) *runResult {
 	}
 	result.Summary = buildLongMemEvalSummary(result.Cases)
 	return result
+}
+
+func setRecoveryTestCacheMetadata(
+	metadata map[string]any,
+	initial,
+	final,
+	hits,
+	misses int,
+) {
+	metadata["model_response_cache_format_version"] = "test-cache-v1"
+	metadata["model_response_cache_shared"] = true
+	metadata["model_response_cache_ledger_id"] = "test-ledger"
+	metadata["model_response_cache_initial_entries"] = initial
+	metadata["model_response_cache_final_entries"] = final
+	metadata["model_response_cache_hits"] = hits
+	metadata["model_response_cache_misses"] = misses
+	metadata["model_response_cache_errors"] = 0
+	metadata["model_response_cache_require_hit"] = false
 }
 
 func writeRecoveryTestResults(t *testing.T, path string, result *runResult) {

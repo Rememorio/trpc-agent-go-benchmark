@@ -43,17 +43,19 @@ type longMemEvalRecoveryUnit struct {
 }
 
 type longMemEvalRecoveryRecord struct {
-	SchemaVersion            int                       `json:"schema_version"`
-	Status                   string                    `json:"status"`
-	RegisteredAt             string                    `json:"registered_at"`
-	Reason                   string                    `json:"reason"`
-	ManifestSHA256           string                    `json:"manifest_sha256"`
-	SourceResultsSHA256      string                    `json:"source_results_sha256"`
-	ReplacementResultsSHA256 []string                  `json:"replacement_results_sha256"`
-	ReplacedUnits            []longMemEvalRecoveryUnit `json:"replaced_units"`
-	ReplacementCount         int                       `json:"replacement_count"`
-	QualityOutcomesInspected bool                      `json:"quality_outcomes_inspected"`
-	MergerBuild              lmeBuildProvenance        `json:"merger_build"`
+	SchemaVersion            int                                        `json:"schema_version"`
+	Status                   string                                     `json:"status"`
+	RegisteredAt             string                                     `json:"registered_at"`
+	Reason                   string                                     `json:"reason"`
+	ManifestSHA256           string                                     `json:"manifest_sha256"`
+	SourceResultsSHA256      string                                     `json:"source_results_sha256"`
+	ReplacementResultsSHA256 []string                                   `json:"replacement_results_sha256"`
+	ReplacedUnits            []longMemEvalRecoveryUnit                  `json:"replaced_units"`
+	ReplacementCount         int                                        `json:"replacement_count"`
+	QualityOutcomesInspected bool                                       `json:"quality_outcomes_inspected"`
+	CacheLineage             map[string]longMemEvalRecoveryCacheLineage `json:"cache_lineage,omitempty"`
+	CacheCounterSemantics    string                                     `json:"cache_counter_semantics,omitempty"`
+	MergerBuild              lmeBuildProvenance                         `json:"merger_build"`
 }
 
 func applyLongMemEvalRecovery(manifestPath, outputDir string) error {
@@ -81,6 +83,12 @@ func applyLongMemEvalRecovery(manifestPath, outputDir string) error {
 	}
 	if err := validateLongMemEvalRecoverySource(result); err != nil {
 		return err
+	}
+	cacheLineage, err := newLongMemEvalRecoveryCacheLineage(
+		result.Metadata, sourceSHA,
+	)
+	if err != nil {
+		return fmt.Errorf("validate recovery source cache metadata: %w", err)
 	}
 
 	expected, err := indexLongMemEvalRecoveryUnits(manifest.ExpectedUnits)
@@ -111,6 +119,17 @@ func applyLongMemEvalRecovery(manifestPath, outputDir string) error {
 			result, replacementResult,
 		); err != nil {
 			return err
+		}
+		if err := appendLongMemEvalRecoveryCacheLineage(
+			result.Metadata,
+			replacementResult.Metadata,
+			replacementSHA,
+			cacheLineage,
+		); err != nil {
+			return fmt.Errorf(
+				"merge replacement cache metadata: %w",
+				err,
+			)
 		}
 		for _, replacementCase := range replacementResult.Cases {
 			if replacementCase == nil {
@@ -200,6 +219,8 @@ func applyLongMemEvalRecovery(manifestPath, outputDir string) error {
 		ReplacedUnits:            append([]longMemEvalRecoveryUnit(nil), manifest.ExpectedUnits...),
 		ReplacementCount:         len(replaced),
 		QualityOutcomesInspected: false,
+		CacheLineage:             cacheLineage,
+		CacheCounterSemantics:    longMemEvalRecoveryCacheCounterSemantics(cacheLineage),
 		MergerBuild:              currentLongMemEvalBuildProvenance(),
 	}
 	if result.Metadata == nil {
