@@ -1240,6 +1240,10 @@ func TestValidateLongMemEvalReplicateManifest(t *testing.T) {
 		{name: "negative search p95 gate", mutate: func(m *lmeReplicateComparisonManifest) {
 			m.Gate.MemorySearchP95MaximumMs = -1
 		}, wantError: "invalid promotion gate"},
+		{name: "shared cache latency gate", mutate: func(m *lmeReplicateComparisonManifest) {
+			m.MemoryResponseCacheMode = lmeReplicateMemoryCachesShared
+			m.Gate.MemoryIngestDurationRatioMaximum = 2
+		}, wantError: "shared memory response caches cannot gate"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			copyManifest := valid

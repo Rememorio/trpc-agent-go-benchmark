@@ -736,7 +736,12 @@ without cache errors. Each new run also
 records `embedding_provider_retry`, including maximum attempts, the backoff
 sequence, and total backoff budget. Strict comparison requires that policy to
 match whenever either result records it, while retaining compatibility with
-older result pairs that predate the field. Use an independent uncached run for
+older result pairs that predate the field. Shared-cache comparisons are
+diagnostic: logical requests and token usage remain comparable, but provider
+calls, provider tokens, ingest duration, and search duration can depend on arm
+order and cache warmth. Replicate-manifest validation therefore rejects latency
+gates in `shared` mode. Use independent, initially empty ledgers for each arm
+when latency is a promotion criterion, and use an independent uncached run for
 production cost.
 
 `-lme-apply-recovery` accepts only a preregistered replacement whose dataset,

@@ -638,6 +638,14 @@ func validateLongMemEvalReplicateManifest(manifest lmeReplicateComparisonManifes
 			gate.MemorySearchDurationRatioMaximum <= 0) {
 		return fmt.Errorf("LongMemEval replicate manifest has invalid promotion gate: %+v", gate)
 	}
+	if manifest.MemoryResponseCacheMode == lmeReplicateMemoryCachesShared &&
+		longMemEvalReplicateLatencyGateEnabled(gate) {
+		return errors.New(
+			"LongMemEval shared memory response caches cannot gate " +
+				"ingest or search latency; use independent initially empty " +
+				"ledgers for latency comparison",
+		)
+	}
 	return nil
 }
 
