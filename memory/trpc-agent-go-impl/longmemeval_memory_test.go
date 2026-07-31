@@ -269,11 +269,14 @@ func TestSaveCaseLogBlindProgressRedactsOutcomeContent(t *testing.T) {
 			LLMCalls:         1,
 		},
 		EmbeddingUsage: &lmeEmbeddingUsage{
-			PromptTokens:      3,
-			TotalTokens:       3,
-			Calls:             1,
-			Requests:          2,
-			ResponseCacheHits: 1,
+			PromptTokens:                3,
+			TotalTokens:                 3,
+			Calls:                       1,
+			Requests:                    2,
+			ResponseCacheHits:           1,
+			LogicalPromptTokens:         6,
+			LogicalTotalTokens:          6,
+			LogicalUsageMissingRequests: 0,
 		},
 		IngestTraces: []ingestTrace{{
 			SessionIndex:      2,
@@ -335,7 +338,7 @@ func TestSaveCaseLogBlindProgressRedactsOutcomeContent(t *testing.T) {
 		"RetrievalHits: 1",
 		"ErrorPresent: true",
 		"TokenUsage: prompt=10 completion=2 total=12 cached=4 calls=1",
-		"EmbeddingUsage: requests=2 cache_hits=1 prompt=3 total=3 calls=1",
+		"EmbeddingUsage: requests=2 cache_hits=1 provider_prompt=3 provider_total=3 calls=1 logical_prompt=6 logical_total=6 logical_missing_requests=0",
 		"[session_idx=2 pair=3]",
 		"duration=25ms new=1 total=4 snapshot_truncated=true error_present=true",
 	} {
@@ -1252,7 +1255,9 @@ func TestMem0UsageTransportRecordsHeader(t *testing.T) {
 	}
 	if usage.LLM.UsageMissingCalls != 1 || usage.Embedding.TotalTokens != 16 ||
 		usage.Embedding.Calls != 3 || usage.Embedding.Requests != 3 ||
-		usage.Embedding.UsageMissingCalls != 2 {
+		usage.Embedding.UsageMissingCalls != 2 ||
+		usage.Embedding.LogicalTotalTokens != 16 ||
+		usage.Embedding.LogicalUsageMissingRequests != 2 {
 		t.Fatalf("unexpected embedding usage: %#v", usage)
 	}
 }
@@ -1286,7 +1291,10 @@ func TestLongMemEvalTrackingEmbedderRecordsUsage(t *testing.T) {
 		t.Fatalf("embedding length = %d, want 2", len(got))
 	}
 	usage := tracker.Snapshot()
-	if usage.PromptTokens != 7 || usage.TotalTokens != 7 || usage.Calls != 1 {
+	if usage.PromptTokens != 7 || usage.TotalTokens != 7 || usage.Calls != 1 ||
+		usage.LogicalPromptTokens != 7 ||
+		usage.LogicalTotalTokens != 7 ||
+		usage.LogicalUsageMissingRequests != 0 {
 		t.Fatalf("unexpected embedding usage: %#v", usage)
 	}
 }
@@ -1317,7 +1325,8 @@ func TestLongMemEvalTrackingEmbedderRecordsProviderError(t *testing.T) {
 	}
 	usage := tracker.Snapshot()
 	if usage.Requests != 1 || usage.Calls != 0 ||
-		usage.ProviderErrors != 1 {
+		usage.ProviderErrors != 1 ||
+		usage.LogicalUsageMissingRequests != 1 {
 		t.Fatalf("unexpected embedding usage: %#v", usage)
 	}
 }
@@ -4332,6 +4341,65 @@ func TestAnalyzeLongMemEvalResults(t *testing.T) {
 	if !strings.Contains(string(analysis), "1/1") {
 		t.Fatalf("analysis missing judge summary: %s", analysis)
 	}
+	resourceUsage, err := os.ReadFile(filepath.Join(dir, "resource_usage.tsv"))
+	if err != nil {
+		t.Fatalf("read resource usage: %v", err)
+	}
+	if !strings.Contains(
+		string(resourceUsage),
+		"embedding_logical_missing_requests",
+	) {
+		t.Fatalf("resource usage missing logical embedding columns: %s",
+			resourceUsage)
+	}
+}
+
+func TestFormatLongMemEvalResourceUsageTSVSeparatesEmbeddingCosts(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	result := &runResult{
+		Metadata: map[string]any{"implementation": "candidate"},
+		Summary: &runSummary{
+			BackendSummaries: map[string]*backendSummary{
+				"pgvector": {
+					Cases:         2,
+					TotalMemories: 4,
+					TokenUsage: lmeTokenUsage{
+						PromptTokens: 10,
+						TotalTokens:  12,
+						CachedTokens: 3,
+						LLMCalls:     2,
+					},
+					EmbeddingUsage: lmeEmbeddingUsage{
+						Requests:                    4,
+						ResponseCacheHits:           2,
+						Calls:                       2,
+						PromptTokens:                8,
+						TotalTokens:                 8,
+						LogicalPromptTokens:         16,
+						LogicalTotalTokens:          16,
+						LogicalUsageMissingRequests: 0,
+					},
+					ProviderUsageCases: 2,
+				},
+			},
+		},
+	}
+	got := formatLongMemEvalResourceUsageTSV([]lmeResourceUsageSource{{
+		Arm: "candidate", Result: result,
+	}})
+	for _, want := range []string{
+		"embedding_provider_total_tokens",
+		"embedding_logical_total_tokens",
+		"embedding_logical_missing_requests",
+		"candidate\tcandidate\tpgvector\t2\t4\t2\t10\t12\t3\t4\t2\t2\t8\t8\t16\t16\t0\t2",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("resource usage TSV missing %q:\n%s", want, got)
+		}
+	}
 }
 
 func TestEvaluatedFailureStage(t *testing.T) {
@@ -4497,6 +4565,19 @@ func TestCompareLongMemEvalResults(t *testing.T) {
 				!strings.Contains(text, "mem0-oss-test-revision")) {
 			t.Fatalf("%s missing three-arm summary: %s", name, text)
 		}
+	}
+	resources, err := os.ReadFile(
+		filepath.Join(outputDir, "comparison_resources.tsv"),
+	)
+	if err != nil {
+		t.Fatalf("read comparison resources: %v", err)
+	}
+	if !strings.Contains(
+		string(resources),
+		"embedding_logical_total_tokens",
+	) {
+		t.Fatalf("comparison resources missing logical embedding columns: %s",
+			resources)
 	}
 	rows := compareLongMemEvalRows(
 		longMemEvalAnalysisRows(base),

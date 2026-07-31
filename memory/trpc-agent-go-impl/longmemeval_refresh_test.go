@@ -412,7 +412,12 @@ func TestRefreshLongMemEvalRetrievalResultRecordsEmbeddingCache(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build embedding cache key: %v", err)
 	}
-	if _, err := cache.Put(key, identity, []float64{0.25, 0.75}); err != nil {
+	if _, err := cache.Put(
+		key,
+		identity,
+		[]float64{0.25, 0.75},
+		&lmeEmbeddingLogicalUsage{PromptTokens: 4, TotalTokens: 4},
+	); err != nil {
 		t.Fatalf("seed embedding cache: %v", err)
 	}
 
@@ -421,7 +426,7 @@ func TestRefreshLongMemEvalRetrievalResultRecordsEmbeddingCache(t *testing.T) {
 		hits:   []memoryHit{{ID: persisted.ID, Memory: persisted.Memory, Score: 0.9}},
 		stored: []memorySnapshot{persisted},
 		onSearch: func() {
-			if _, ok := cache.Lookup(key); !ok {
+			if _, _, ok := cache.Lookup(key); !ok {
 				t.Error("seeded embedding cache entry was not found")
 			}
 		},

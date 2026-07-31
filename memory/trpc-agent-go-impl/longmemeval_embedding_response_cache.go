@@ -39,7 +39,13 @@ type lmeEmbeddingResponseCacheIdentity struct {
 type lmeEmbeddingResponseCacheEntry struct {
 	Identity  lmeEmbeddingResponseCacheIdentity `json:"identity"`
 	Embedding []float64                         `json:"embedding"`
+	Usage     *lmeEmbeddingLogicalUsage         `json:"usage,omitempty"`
 	CreatedAt string                            `json:"created_at"`
+}
+
+type lmeEmbeddingLogicalUsage struct {
+	PromptTokens int `json:"prompt_tokens"`
+	TotalTokens  int `json:"total_tokens"`
 }
 
 type lmeEmbeddingResponseCacheRecord struct {
@@ -251,32 +257,44 @@ func (c *longMemEvalEmbeddingResponseCache) Stats() (
 
 func (c *longMemEvalEmbeddingResponseCache) Lookup(
 	key string,
-) ([]float64, bool) {
+) ([]float64, *lmeEmbeddingLogicalUsage, bool) {
 	if c == nil {
-		return nil, false
+		return nil, nil, false
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	entry, ok := c.entries[key]
 	if !ok {
 		c.misses++
-		return nil, false
+		return nil, nil, false
 	}
 	c.hits++
-	return append([]float64(nil), entry.Embedding...), true
+	var usage *lmeEmbeddingLogicalUsage
+	if entry.Usage != nil {
+		copyUsage := *entry.Usage
+		usage = &copyUsage
+	}
+	return append([]float64(nil), entry.Embedding...), usage, true
 }
 
 func (c *longMemEvalEmbeddingResponseCache) Put(
 	key string,
 	identity lmeEmbeddingResponseCacheIdentity,
 	embedding []float64,
+	usage *lmeEmbeddingLogicalUsage,
 ) ([]float64, error) {
 	if c == nil {
 		return append([]float64(nil), embedding...), nil
 	}
+	var copiedUsage *lmeEmbeddingLogicalUsage
+	if usage != nil {
+		value := *usage
+		copiedUsage = &value
+	}
 	entry := lmeEmbeddingResponseCacheEntry{
 		Identity:  identity,
 		Embedding: append([]float64(nil), embedding...),
+		Usage:     copiedUsage,
 		CreatedAt: time.Now().UTC().Format(time.RFC3339),
 	}
 	if err := validateLongMemEvalEmbeddingResponseCacheEntry(key, entry); err != nil {
@@ -391,6 +409,15 @@ func validateLongMemEvalEmbeddingResponseCacheEntry(
 			return fmt.Errorf("embedding value %d is not finite", i)
 		}
 	}
+	if entry.Usage != nil &&
+		(entry.Usage.PromptTokens < 0 ||
+			entry.Usage.TotalTokens < entry.Usage.PromptTokens) {
+		return fmt.Errorf(
+			"embedding usage prompt=%d total=%d is invalid",
+			entry.Usage.PromptTokens,
+			entry.Usage.TotalTokens,
+		)
+	}
 	return nil
 }
 
@@ -410,7 +437,7 @@ func initializeLongMemEvalEmbeddingResponseCacheMetadata(
 	}
 	metadata["embedding_response_cache_initial_entries"] = cache.Len()
 	metadata["embedding_response_cache_require_hit"] = cache.RequireHit()
-	metadata["embedding_response_cache_note"] = "Identical embedding texts share an exact vector across paired runs; raw text is represented only by a hash. Embedding usage requests count logical embedder calls, calls and tokens count provider misses, and response_cache_hits count ledger hits."
+	metadata["embedding_response_cache_note"] = "Identical embedding texts share an exact vector across paired runs; raw text is represented only by a hash. Embedding requests count logical embedder calls; calls and tokens count provider misses; logical tokens include cache hits when the cache entry carries usage; logical_usage_missing_requests identifies legacy or failed requests without reconstructable usage."
 }
 
 func updateLongMemEvalEmbeddingResponseCacheMetadata(

@@ -1514,19 +1514,25 @@ func longMemEvalCaseActionProgress(
 
 func longMemEvalBackendProgress(backendName string, br *backendResult, blind bool) string {
 	if blind {
-		return fmt.Sprintf("  %s pairs=%d memories=%d snapshot_truncated=%v hits=%d calls=%d tokens=%d cached=%d embed_requests=%d embed_calls=%d embed_tokens=%d provider_usage=%v",
+		return fmt.Sprintf("  %s pairs=%d memories=%d snapshot_truncated=%v hits=%d calls=%d tokens=%d cached=%d embed_requests=%d embed_calls=%d embed_provider_tokens=%d embed_logical_tokens=%d embed_logical_missing=%d provider_usage=%v",
 			backendName, br.IngestedPairs, len(br.FinalMemories), br.SnapshotTruncated, len(br.Retrieval),
 			tokenCalls(br.TokenUsage), tokenTotal(br.TokenUsage), tokenCached(br.TokenUsage),
 			embeddingRequests(br.EmbeddingUsage),
-			embeddingCalls(br.EmbeddingUsage), embeddingTokens(br.EmbeddingUsage),
+			embeddingCalls(br.EmbeddingUsage),
+			embeddingTokens(br.EmbeddingUsage),
+			embeddingLogicalTokens(br.EmbeddingUsage),
+			embeddingLogicalUsageMissing(br.EmbeddingUsage),
 			br.ProviderUsageReported)
 	}
-	return fmt.Sprintf("  %s pairs=%d memories=%d snapshot_truncated=%v hits=%d evidence=%s calls=%d tokens=%d cached=%d embed_requests=%d embed_calls=%d embed_tokens=%d provider_usage=%v em=%v f1=%.3f answer=%q",
+	return fmt.Sprintf("  %s pairs=%d memories=%d snapshot_truncated=%v hits=%d evidence=%s calls=%d tokens=%d cached=%d embed_requests=%d embed_calls=%d embed_provider_tokens=%d embed_logical_tokens=%d embed_logical_missing=%d provider_usage=%v em=%v f1=%.3f answer=%q",
 		backendName, br.IngestedPairs, len(br.FinalMemories), br.SnapshotTruncated, len(br.Retrieval),
 		br.FailureStage,
 		tokenCalls(br.TokenUsage), tokenTotal(br.TokenUsage), tokenCached(br.TokenUsage),
 		embeddingRequests(br.EmbeddingUsage),
-		embeddingCalls(br.EmbeddingUsage), embeddingTokens(br.EmbeddingUsage),
+		embeddingCalls(br.EmbeddingUsage),
+		embeddingTokens(br.EmbeddingUsage),
+		embeddingLogicalTokens(br.EmbeddingUsage),
+		embeddingLogicalUsageMissing(br.EmbeddingUsage),
 		br.ProviderUsageReported,
 		br.ExactMatch, br.F1, truncate(br.Answer, 120))
 }
@@ -3692,12 +3698,15 @@ func saveCaseLog(
 			br.TokenUsage.CacheHitRate)
 	}
 	if br.EmbeddingUsage != nil {
-		fmt.Fprintf(&b, "EmbeddingUsage: requests=%d cache_hits=%d prompt=%d total=%d calls=%d\n\n",
+		fmt.Fprintf(&b, "EmbeddingUsage: requests=%d cache_hits=%d provider_prompt=%d provider_total=%d calls=%d logical_prompt=%d logical_total=%d logical_missing_requests=%d\n\n",
 			br.EmbeddingUsage.Requests,
 			br.EmbeddingUsage.ResponseCacheHits,
 			br.EmbeddingUsage.PromptTokens,
 			br.EmbeddingUsage.TotalTokens,
-			br.EmbeddingUsage.Calls)
+			br.EmbeddingUsage.Calls,
+			br.EmbeddingUsage.LogicalPromptTokens,
+			br.EmbeddingUsage.LogicalTotalTokens,
+			br.EmbeddingUsage.LogicalUsageMissingRequests)
 	}
 	fmt.Fprintf(&b, "ProviderUsage: reported=%v error=%s\n\n",
 		br.ProviderUsageReported, br.ProviderUsageError)
@@ -3715,12 +3724,15 @@ func saveCaseLog(
 				tr.TokenUsage.CacheHitRate)
 		}
 		if tr.EmbeddingUsage != nil {
-			fmt.Fprintf(&b, "  embedding_usage: requests=%d cache_hits=%d prompt=%d total=%d calls=%d\n",
+			fmt.Fprintf(&b, "  embedding_usage: requests=%d cache_hits=%d provider_prompt=%d provider_total=%d calls=%d logical_prompt=%d logical_total=%d logical_missing_requests=%d\n",
 				tr.EmbeddingUsage.Requests,
 				tr.EmbeddingUsage.ResponseCacheHits,
 				tr.EmbeddingUsage.PromptTokens,
 				tr.EmbeddingUsage.TotalTokens,
-				tr.EmbeddingUsage.Calls)
+				tr.EmbeddingUsage.Calls,
+				tr.EmbeddingUsage.LogicalPromptTokens,
+				tr.EmbeddingUsage.LogicalTotalTokens,
+				tr.EmbeddingUsage.LogicalUsageMissingRequests)
 		}
 		if tr.ProviderUsageReported || tr.ProviderUsageError != "" {
 			fmt.Fprintf(&b, "  provider_usage: reported=%v error=%s\n",
@@ -3886,12 +3898,15 @@ func saveBlindCaseLog(
 			br.TokenUsage.CacheHitRate)
 	}
 	if br.EmbeddingUsage != nil {
-		fmt.Fprintf(&b, "EmbeddingUsage: requests=%d cache_hits=%d prompt=%d total=%d calls=%d\n",
+		fmt.Fprintf(&b, "EmbeddingUsage: requests=%d cache_hits=%d provider_prompt=%d provider_total=%d calls=%d logical_prompt=%d logical_total=%d logical_missing_requests=%d\n",
 			br.EmbeddingUsage.Requests,
 			br.EmbeddingUsage.ResponseCacheHits,
 			br.EmbeddingUsage.PromptTokens,
 			br.EmbeddingUsage.TotalTokens,
-			br.EmbeddingUsage.Calls)
+			br.EmbeddingUsage.Calls,
+			br.EmbeddingUsage.LogicalPromptTokens,
+			br.EmbeddingUsage.LogicalTotalTokens,
+			br.EmbeddingUsage.LogicalUsageMissingRequests)
 	}
 	fmt.Fprintf(&b, "ProviderUsage: reported=%v error_present=%v\n\n",
 		br.ProviderUsageReported, br.ProviderUsageError != "")
@@ -3916,10 +3931,15 @@ func saveBlindCaseLog(
 				tr.TokenUsage.CacheHitRate)
 		}
 		if tr.EmbeddingUsage != nil {
-			fmt.Fprintf(&b, "  embedding_usage: prompt=%d total=%d calls=%d\n",
+			fmt.Fprintf(&b, "  embedding_usage: requests=%d cache_hits=%d provider_prompt=%d provider_total=%d calls=%d logical_prompt=%d logical_total=%d logical_missing_requests=%d\n",
+				tr.EmbeddingUsage.Requests,
+				tr.EmbeddingUsage.ResponseCacheHits,
 				tr.EmbeddingUsage.PromptTokens,
 				tr.EmbeddingUsage.TotalTokens,
-				tr.EmbeddingUsage.Calls)
+				tr.EmbeddingUsage.Calls,
+				tr.EmbeddingUsage.LogicalPromptTokens,
+				tr.EmbeddingUsage.LogicalTotalTokens,
+				tr.EmbeddingUsage.LogicalUsageMissingRequests)
 		}
 		if tr.ProviderUsageReported || tr.ProviderUsageError != "" {
 			fmt.Fprintf(&b, "  provider_usage: reported=%v error_present=%v\n",
@@ -3944,12 +3964,15 @@ func printLongMemEvalSummary(result *runResult) {
 	for _, cr := range result.Cases {
 		fmt.Printf("- %s (%s): %s\n", cr.QuestionID, cr.QuestionType, cr.Question)
 		for _, br := range cr.BackendResults {
-			fmt.Printf("  %s: pairs=%d memories=%d snapshotTruncated=%v hits=%d stage=%s calls=%d tokens=%d cached=%d embedRequests=%d embedCalls=%d embedTokens=%d providerUsage=%v EM=%v F1=%.3f BLEU=%.3f err=%s\n",
+			fmt.Printf("  %s: pairs=%d memories=%d snapshotTruncated=%v hits=%d stage=%s calls=%d tokens=%d cached=%d embedRequests=%d embedCalls=%d embedProviderTokens=%d embedLogicalTokens=%d embedLogicalMissing=%d providerUsage=%v EM=%v F1=%.3f BLEU=%.3f err=%s\n",
 				br.Backend, br.IngestedPairs, len(br.FinalMemories), br.SnapshotTruncated, len(br.Retrieval),
 				br.FailureStage,
 				tokenCalls(br.TokenUsage), tokenTotal(br.TokenUsage), tokenCached(br.TokenUsage),
 				embeddingRequests(br.EmbeddingUsage),
-				embeddingCalls(br.EmbeddingUsage), embeddingTokens(br.EmbeddingUsage),
+				embeddingCalls(br.EmbeddingUsage),
+				embeddingTokens(br.EmbeddingUsage),
+				embeddingLogicalTokens(br.EmbeddingUsage),
+				embeddingLogicalUsageMissing(br.EmbeddingUsage),
 				br.ProviderUsageReported,
 				br.ExactMatch, br.F1, br.BLEU,
 				longMemEvalBackendError(br))
@@ -3964,7 +3987,7 @@ func printLongMemEvalSummary(result *runResult) {
 		if summary.JudgedCases > 0 {
 			judgeText = fmt.Sprintf(" judge=%d/%d", summary.JudgeCorrect, summary.JudgedCases)
 		}
-		fmt.Printf("  %s: cases=%d EM=%d%s truncatedSnapshots=%d evidence=%d extractAny=%d retrievalAny=%d retrievalAll=%d turnEvidence=%d turnExtractAny=%d turnRetrievalAny=%d avgF1=%.3f avgBLEU=%.3f calls=%d tokens=%d cached=%d cacheHit=%.3f answerTokens=%d answerLogicalTokens=%d answerLogical=%d/%d judgeTokens=%d judgeLogicalTokens=%d judgeLogical=%d/%d embedRequests=%d embedCalls=%d embedTokens=%d providerUsage=%d/%d\n",
+		fmt.Printf("  %s: cases=%d EM=%d%s truncatedSnapshots=%d evidence=%d extractAny=%d retrievalAny=%d retrievalAll=%d turnEvidence=%d turnExtractAny=%d turnRetrievalAny=%d avgF1=%.3f avgBLEU=%.3f calls=%d tokens=%d cached=%d cacheHit=%.3f answerTokens=%d answerLogicalTokens=%d answerLogical=%d/%d judgeTokens=%d judgeLogicalTokens=%d judgeLogical=%d/%d embedRequests=%d embedCalls=%d embedProviderTokens=%d embedLogicalTokens=%d embedLogicalMissing=%d providerUsage=%d/%d\n",
 			backend, summary.Cases, summary.ExactMatches,
 			judgeText, summary.TruncatedSnapshots,
 			summary.EvidenceCases, summary.ExtractRecallAny, summary.RetrievalRecallAny, summary.RetrievalRecallAll,
@@ -3983,7 +4006,10 @@ func printLongMemEvalSummary(result *runResult) {
 			summary.JudgeLogicalUsageCases+
 				summary.JudgeLogicalUsageMissingCases,
 			summary.EmbeddingUsage.Requests,
-			summary.EmbeddingUsage.Calls, summary.EmbeddingUsage.TotalTokens,
+			summary.EmbeddingUsage.Calls,
+			summary.EmbeddingUsage.TotalTokens,
+			summary.EmbeddingUsage.LogicalTotalTokens,
+			summary.EmbeddingUsage.LogicalUsageMissingRequests,
 			summary.ProviderUsageCases, summary.Cases)
 	}
 }
@@ -4146,6 +4172,20 @@ func embeddingTokens(u *lmeEmbeddingUsage) int {
 		return 0
 	}
 	return u.TotalTokens
+}
+
+func embeddingLogicalTokens(u *lmeEmbeddingUsage) int {
+	if u == nil {
+		return 0
+	}
+	return u.LogicalTotalTokens
+}
+
+func embeddingLogicalUsageMissing(u *lmeEmbeddingUsage) int {
+	if u == nil {
+		return 0
+	}
+	return u.LogicalUsageMissingRequests
 }
 
 func resolveLongMemEvalDatasetPath() string {

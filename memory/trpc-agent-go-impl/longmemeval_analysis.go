@@ -101,6 +101,11 @@ type lmeCompareBackendSummary struct {
 	JudgeDriftIgnored int
 }
 
+type lmeResourceUsageSource struct {
+	Arm    string
+	Result *runResult
+}
+
 func analyzeLongMemEvalResults(path, outputDir string) error {
 	result, err := loadLongMemEvalResults(path)
 	if err != nil {
@@ -116,6 +121,13 @@ func analyzeLongMemEvalResults(path, outputDir string) error {
 	}
 	if err := os.WriteFile(filepath.Join(outputDir, "bad_cases.tsv"), []byte(formatLongMemEvalBadCases(rows)), 0644); err != nil {
 		return fmt.Errorf("write bad_cases.tsv: %w", err)
+	}
+	if err := writeLongMemEvalResourceUsageTSV(
+		outputDir,
+		"resource_usage.tsv",
+		[]lmeResourceUsageSource{{Arm: "run", Result: result}},
+	); err != nil {
+		return err
 	}
 	report := formatLongMemEvalAnalysisMarkdown(result, rows, analysis)
 	if err := os.WriteFile(filepath.Join(outputDir, "analysis.md"), []byte(report), 0644); err != nil {
@@ -166,6 +178,16 @@ func compareLongMemEvalResults(baselinePath, candidatePath, outputDir string) er
 	if len(rows) == 0 && len(mem0Rows) == 0 {
 		return errors.New("no shared LongMemEval baseline and candidate cases to compare")
 	}
+	if err := writeLongMemEvalResourceUsageTSV(
+		outputDir,
+		"comparison_resources.tsv",
+		[]lmeResourceUsageSource{
+			{Arm: "upstream_baseline", Result: baseline},
+			{Arm: "candidate", Result: candidate},
+		},
+	); err != nil {
+		return err
+	}
 	report := formatLongMemEvalComparisonMarkdown(
 		baselinePath,
 		candidatePath,
@@ -193,6 +215,91 @@ func writeLongMemEvalComparisonTSV(outputDir, name string, rows []lmeCompareRow)
 		return fmt.Errorf("write %s: %w", name, err)
 	}
 	return nil
+}
+
+func writeLongMemEvalResourceUsageTSV(
+	outputDir,
+	name string,
+	sources []lmeResourceUsageSource,
+) error {
+	path := filepath.Join(outputDir, name)
+	if err := os.WriteFile(
+		path,
+		[]byte(formatLongMemEvalResourceUsageTSV(sources)),
+		0644,
+	); err != nil {
+		return fmt.Errorf("write %s: %w", name, err)
+	}
+	return nil
+}
+
+func formatLongMemEvalResourceUsageTSV(
+	sources []lmeResourceUsageSource,
+) string {
+	var b strings.Builder
+	b.WriteString(
+		"arm\timplementation\tbackend\tcases\tmemories\tllm_calls\t" +
+			"llm_prompt_tokens\tllm_total_tokens\tllm_cached_tokens\t" +
+			"embedding_requests\tembedding_cache_hits\t" +
+			"embedding_provider_calls\tembedding_provider_prompt_tokens\t" +
+			"embedding_provider_total_tokens\t" +
+			"embedding_logical_prompt_tokens\t" +
+			"embedding_logical_total_tokens\t" +
+			"embedding_logical_missing_requests\tprovider_usage_cases\n",
+	)
+	for _, source := range sources {
+		if source.Result == nil || source.Result.Summary == nil {
+			continue
+		}
+		backends := make(
+			[]string,
+			0,
+			len(source.Result.Summary.BackendSummaries),
+		)
+		for backend := range source.Result.Summary.BackendSummaries {
+			backends = append(backends, backend)
+		}
+		sort.Strings(backends)
+		for _, backend := range backends {
+			usage := source.Result.Summary.BackendSummaries[backend]
+			if usage == nil {
+				continue
+			}
+			implementation := longMemEvalResultImplementation(source.Result)
+			if backend == "mem0" {
+				implementation = longMemEvalReferenceImplementation(
+					source.Result,
+				)
+			}
+			embeddingUsage := normalizeLongMemEvalEmbeddingUsage(
+				usage.EmbeddingUsage,
+			)
+			fmt.Fprintf(
+				&b,
+				"%s\t%s\t%s\t%d\t%d\t%d\t%d\t%d\t%d\t"+
+					"%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\n",
+				tsvCell(source.Arm),
+				tsvCell(implementation),
+				tsvCell(backend),
+				usage.Cases,
+				usage.TotalMemories,
+				usage.TokenUsage.LLMCalls,
+				usage.TokenUsage.PromptTokens,
+				usage.TokenUsage.TotalTokens,
+				usage.TokenUsage.CachedTokens,
+				embeddingUsage.Requests,
+				embeddingUsage.ResponseCacheHits,
+				embeddingUsage.Calls,
+				embeddingUsage.PromptTokens,
+				embeddingUsage.TotalTokens,
+				embeddingUsage.LogicalPromptTokens,
+				embeddingUsage.LogicalTotalTokens,
+				embeddingUsage.LogicalUsageMissingRequests,
+				usage.ProviderUsageCases,
+			)
+		}
+	}
+	return b.String()
 }
 
 func validateLongMemEvalComparison(baseline, candidate *runResult) error {
@@ -1188,8 +1295,8 @@ func writeLongMemEvalComparisonArms(b *strings.Builder, baseline, candidate *run
 	} else {
 		b.WriteString("## Two-Arm Summary\n\n")
 	}
-	b.WriteString("| Arm | Implementation | Backend | Cases | Correct | EM | Avg F1 | Memories | LLM Calls | LLM Tokens | Cached | Embedding Requests | Ledger Hits | Provider Embedding Calls | Embedding Tokens | Ingest (s) |\n")
-	b.WriteString("|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n")
+	b.WriteString("| Arm | Implementation | Backend | Cases | Correct | EM | Avg F1 | Memories | LLM Calls | LLM Tokens | Cached | Embedding Requests | Ledger Hits | Provider Embedding Calls | Provider Embedding Tokens | Logical Embedding Tokens | Missing Logical Usage | Ingest (s) |\n")
+	b.WriteString("|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n")
 	if hasPGVector {
 		arm := "baseline"
 		if hasMem0 {
@@ -1261,6 +1368,9 @@ func writeLongMemEvalComparisonArm(
 	if result != nil && result.Summary != nil && result.Summary.BackendSummaries[backend] != nil {
 		usage = *result.Summary.BackendSummaries[backend]
 	}
+	embeddingUsage := normalizeLongMemEvalEmbeddingUsage(
+		usage.EmbeddingUsage,
+	)
 	ingestDurationMs := int64(0)
 	if result != nil {
 		for _, cr := range result.Cases {
@@ -1271,7 +1381,7 @@ func writeLongMemEvalComparisonArm(
 	}
 	fmt.Fprintf(
 		b,
-		"| %s | %s | %s | %d | %d | %d | %.4f | %d | %d | %d | %d | %d | %d | %d | %d | %.1f |\n",
+		"| %s | %s | %s | %d | %d | %d | %.4f | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %.1f |\n",
 		mdCell(arm),
 		mdCell(implementation),
 		mdCell(backend),
@@ -1283,10 +1393,12 @@ func writeLongMemEvalComparisonArm(
 		usage.TokenUsage.LLMCalls,
 		usage.TokenUsage.TotalTokens,
 		usage.TokenUsage.CachedTokens,
-		usage.EmbeddingUsage.Requests,
-		usage.EmbeddingUsage.ResponseCacheHits,
-		usage.EmbeddingUsage.Calls,
-		usage.EmbeddingUsage.TotalTokens,
+		embeddingUsage.Requests,
+		embeddingUsage.ResponseCacheHits,
+		embeddingUsage.Calls,
+		embeddingUsage.TotalTokens,
+		embeddingUsage.LogicalTotalTokens,
+		embeddingUsage.LogicalUsageMissingRequests,
 		float64(ingestDurationMs)/1000,
 	)
 }
@@ -1403,8 +1515,8 @@ func formatLongMemEvalAnalysisMarkdown(
 		"Answer-stage labels use a valid semantic-judge verdict when available. `results.json` retains the pre-judge `failure_stage`, which is also exposed as `raw_stage` for bad cases.\n\n")
 
 	b.WriteString("## Backend Summary\n\n")
-	b.WriteString("| Backend | Cases | EM | Judge | Avg F1 | Avg BLEU | LLM Calls | LLM Tokens | Cached | Cache Hit | Embedding Requests | Ledger Hits | Provider Embedding Calls | Embedding Tokens | Provider Usage |\n")
-	b.WriteString("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n")
+	b.WriteString("| Backend | Cases | EM | Judge | Avg F1 | Avg BLEU | LLM Calls | LLM Tokens | Cached | Cache Hit | Embedding Requests | Ledger Hits | Provider Embedding Calls | Provider Embedding Tokens | Logical Embedding Tokens | Missing Logical Usage | Provider Usage |\n")
+	b.WriteString("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n")
 	for _, backend := range sortedAnalysisBackends(analysis) {
 		a := analysis[backend]
 		avgF1, avgBLEU := 0.0, 0.0
@@ -1421,16 +1533,21 @@ func formatLongMemEvalAnalysisMarkdown(
 			result.Summary.BackendSummaries[backend] != nil {
 			usage = *result.Summary.BackendSummaries[backend]
 		}
-		fmt.Fprintf(&b, "| %s | %d | %d | %s | %.4f | %.4f | %d | %d | %d | %.4f | %d | %d | %d | %d | %d/%d |\n",
+		embeddingUsage := normalizeLongMemEvalEmbeddingUsage(
+			usage.EmbeddingUsage,
+		)
+		fmt.Fprintf(&b, "| %s | %d | %d | %s | %.4f | %.4f | %d | %d | %d | %.4f | %d | %d | %d | %d | %d | %d | %d/%d |\n",
 			backend, a.Cases, a.ExactMatches, judge, avgF1, avgBLEU,
 			usage.TokenUsage.LLMCalls,
 			usage.TokenUsage.TotalTokens,
 			usage.TokenUsage.CachedTokens,
 			usage.TokenUsage.CacheHitRate,
-			usage.EmbeddingUsage.Requests,
-			usage.EmbeddingUsage.ResponseCacheHits,
-			usage.EmbeddingUsage.Calls,
-			usage.EmbeddingUsage.TotalTokens,
+			embeddingUsage.Requests,
+			embeddingUsage.ResponseCacheHits,
+			embeddingUsage.Calls,
+			embeddingUsage.TotalTokens,
+			embeddingUsage.LogicalTotalTokens,
+			embeddingUsage.LogicalUsageMissingRequests,
 			usage.ProviderUsageCases,
 			a.Cases)
 	}

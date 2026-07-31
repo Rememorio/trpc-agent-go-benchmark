@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"sync"
 	"time"
@@ -117,13 +118,16 @@ func longMemEvalLogicalUsageFromCalls(
 }
 
 type lmeEmbeddingUsage struct {
-	PromptTokens      int `json:"prompt_tokens"`
-	TotalTokens       int `json:"total_tokens"`
-	Calls             int `json:"calls"`
-	Requests          int `json:"requests,omitempty"`
-	ResponseCacheHits int `json:"response_cache_hits,omitempty"`
-	UsageMissingCalls int `json:"usage_missing_calls,omitempty"`
-	ProviderErrors    int `json:"provider_errors,omitempty"`
+	PromptTokens                int `json:"prompt_tokens"`
+	TotalTokens                 int `json:"total_tokens"`
+	Calls                       int `json:"calls"`
+	Requests                    int `json:"requests,omitempty"`
+	ResponseCacheHits           int `json:"response_cache_hits,omitempty"`
+	UsageMissingCalls           int `json:"usage_missing_calls,omitempty"`
+	ProviderErrors              int `json:"provider_errors,omitempty"`
+	LogicalPromptTokens         int `json:"logical_prompt_tokens,omitempty"`
+	LogicalTotalTokens          int `json:"logical_total_tokens,omitempty"`
+	LogicalUsageMissingRequests int `json:"logical_usage_missing_requests,omitempty"`
 }
 
 func (u *lmeEmbeddingUsage) Add(other lmeEmbeddingUsage) {
@@ -134,12 +138,52 @@ func (u *lmeEmbeddingUsage) Add(other lmeEmbeddingUsage) {
 	u.ResponseCacheHits += other.ResponseCacheHits
 	u.UsageMissingCalls += other.UsageMissingCalls
 	u.ProviderErrors += other.ProviderErrors
+	u.LogicalPromptTokens += other.LogicalPromptTokens
+	u.LogicalTotalTokens += other.LogicalTotalTokens
+	u.LogicalUsageMissingRequests += other.LogicalUsageMissingRequests
 }
 
 func (u lmeEmbeddingUsage) IsZero() bool {
 	return u.PromptTokens == 0 && u.TotalTokens == 0 && u.Calls == 0 &&
 		u.Requests == 0 && u.ResponseCacheHits == 0 &&
-		u.UsageMissingCalls == 0 && u.ProviderErrors == 0
+		u.UsageMissingCalls == 0 && u.ProviderErrors == 0 &&
+		u.LogicalPromptTokens == 0 && u.LogicalTotalTokens == 0 &&
+		u.LogicalUsageMissingRequests == 0
+}
+
+func normalizeLongMemEvalEmbeddingUsage(
+	usage lmeEmbeddingUsage,
+) lmeEmbeddingUsage {
+	if usage.Requests == 0 && usage.Calls > 0 {
+		usage.Requests = usage.Calls
+	}
+	if usage.LogicalPromptTokens != 0 ||
+		usage.LogicalTotalTokens != 0 ||
+		usage.LogicalUsageMissingRequests != 0 {
+		return usage
+	}
+
+	// Legacy usage retains complete provider usage for cache misses. Preserve
+	// that known portion and mark cache hits or failed requests as unknown.
+	usage.LogicalPromptTokens = usage.PromptTokens
+	usage.LogicalTotalTokens = usage.TotalTokens
+	usage.LogicalUsageMissingRequests = usage.UsageMissingCalls
+	knownRequests := usage.Calls + usage.ResponseCacheHits
+	if usage.Requests > knownRequests {
+		usage.LogicalUsageMissingRequests += usage.Requests - knownRequests
+	}
+	usage.LogicalUsageMissingRequests += usage.ResponseCacheHits
+	return usage
+}
+
+func longMemEvalLogicalEmbeddingUsageComplete(
+	usage lmeEmbeddingUsage,
+) bool {
+	return usage.Requests > 0 &&
+		usage.LogicalPromptTokens >= 0 &&
+		usage.LogicalTotalTokens > 0 &&
+		usage.LogicalTotalTokens >= usage.LogicalPromptTokens &&
+		usage.LogicalUsageMissingRequests == 0
 }
 
 func embeddingUsagePtr(u lmeEmbeddingUsage) *lmeEmbeddingUsage {
@@ -456,14 +500,18 @@ func (e *lmeTrackingEmbedder) GetEmbeddingWithUsage(
 		if err != nil {
 			return nil, nil, err
 		}
-		if embedding, ok := e.responseCache.Lookup(cacheKey); ok {
+		if embedding, logicalUsage, ok := e.responseCache.Lookup(cacheKey); ok {
 			e.mu.Lock()
 			e.usage.ResponseCacheHits++
+			e.usage.addLogical(logicalUsage)
 			e.mu.Unlock()
 			return embedding, nil, nil
 		}
 		if e.responseCache.RequireHit() {
 			e.responseCache.recordError()
+			e.mu.Lock()
+			e.usage.LogicalUsageMissingRequests++
+			e.mu.Unlock()
 			return nil, nil, fmt.Errorf(
 				"required LongMemEval embedding response cache entry is missing",
 			)
@@ -474,24 +522,94 @@ func (e *lmeTrackingEmbedder) GetEmbeddingWithUsage(
 	if err != nil {
 		e.mu.Lock()
 		e.usage.ProviderErrors++
+		e.usage.LogicalUsageMissingRequests++
 		e.mu.Unlock()
 		return nil, nil, err
 	}
+	logicalUsage, logicalUsageComplete :=
+		longMemEvalEmbeddingLogicalUsageFromProvider(usage)
+	e.mu.Lock()
+	e.usage.Calls++
+	if logicalUsageComplete {
+		e.usage.PromptTokens += logicalUsage.PromptTokens
+		e.usage.TotalTokens += logicalUsage.TotalTokens
+		e.usage.addLogical(logicalUsage)
+	} else {
+		e.usage.UsageMissingCalls++
+		e.usage.LogicalUsageMissingRequests++
+	}
+	e.mu.Unlock()
 	if e.responseCache != nil {
 		var err error
 		embedding, err = e.responseCache.Put(
-			cacheKey, cacheIdentity, embedding,
+			cacheKey, cacheIdentity, embedding, logicalUsage,
 		)
 		if err != nil {
 			return nil, nil, err
 		}
 	}
-	e.mu.Lock()
-	e.usage.Calls++
-	e.usage.PromptTokens += usageInt(usage["prompt_tokens"])
-	e.usage.TotalTokens += usageInt(usage["total_tokens"])
-	e.mu.Unlock()
 	return embedding, usage, nil
+}
+
+func (u *lmeEmbeddingUsage) addLogical(
+	usage *lmeEmbeddingLogicalUsage,
+) {
+	if usage == nil {
+		u.LogicalUsageMissingRequests++
+		return
+	}
+	u.LogicalPromptTokens += usage.PromptTokens
+	u.LogicalTotalTokens += usage.TotalTokens
+}
+
+func longMemEvalEmbeddingLogicalUsageFromProvider(
+	usage map[string]any,
+) (*lmeEmbeddingLogicalUsage, bool) {
+	prompt, promptOK := usageIntExact(usage["prompt_tokens"])
+	total, totalOK := usageIntExact(usage["total_tokens"])
+	if !promptOK || !totalOK || prompt < 0 || total < prompt {
+		return nil, false
+	}
+	return &lmeEmbeddingLogicalUsage{
+		PromptTokens: prompt,
+		TotalTokens:  total,
+	}, true
+}
+
+func usageIntExact(value any) (int, bool) {
+	switch value := value.(type) {
+	case int:
+		return value, true
+	case int32:
+		return int(value), true
+	case int64:
+		converted := int(value)
+		if int64(converted) != value {
+			return 0, false
+		}
+		return converted, true
+	case float64:
+		if value != math.Trunc(value) {
+			return 0, false
+		}
+		converted := int(value)
+		if float64(converted) != value {
+			return 0, false
+		}
+		return converted, true
+	case json.Number:
+		parsed, err := value.Int64()
+		if err != nil {
+			return 0, false
+		}
+		converted := int(parsed)
+		if int64(converted) != parsed {
+			return 0, false
+		}
+		return converted, true
+	default:
+		return 0, false
+	}
 }
 
 func (e *lmeTrackingEmbedder) GetDimensions() int { return e.base.GetDimensions() }
@@ -541,12 +659,10 @@ func (t *lmeProviderUsageTracker) RecordHeader(raw string) {
 		t.mu.Unlock()
 		return
 	}
-	// Mem0 reports physical embedding calls and does not use the benchmark's
-	// client-side embedding response cache. Older server payloads omit the
-	// logical request count, so each reported call is also one request.
-	if usage.Embedding.Requests == 0 && usage.Embedding.Calls > 0 {
-		usage.Embedding.Requests = usage.Embedding.Calls
-	}
+	// Mem0 does not use the benchmark's client-side embedding response cache,
+	// so legacy server payloads normalize physical calls directly to logical
+	// requests and tokens.
+	usage.Embedding = normalizeLongMemEvalEmbeddingUsage(usage.Embedding)
 	t.mu.Lock()
 	t.usage.LLM.Add(usage.LLM)
 	t.usage.Embedding.Add(usage.Embedding)

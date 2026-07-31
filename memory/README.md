@@ -649,15 +649,22 @@ The candidate passes only when both majority and replicate totals strictly beat
 both baselines, category deficits stay bounded, all usage is reported, and the
 pre-registered cost ratios hold. Embedding cost is gated on logical requests,
 which are independent of shared response-ledger execution order; provider calls
-and tokens remain visible as realized cache-sensitive cost. When
+and tokens remain visible as realized cache-sensitive cost. Each embedding
+ledger entry also stores the successful request's token usage, so logical
+embedding tokens include both provider misses and exact cache hits. A legacy
+ledger remains readable, but its cache-hit usage is reported through
+`logical_usage_missing_requests` instead of being reconstructed as zero. When
 `memory_llm_uncached_token_ratio_maximum` is positive, the gate also bounds logical
 total tokens minus cached prompt tokens; omitting it preserves manifests
 created before this dimension was introduced. A positive
-`memory_embedding_token_ratio_maximum` independently bounds realized embedding
-tokens, so fewer requests cannot hide substantially longer embedded content.
+`memory_embedding_token_ratio_maximum` independently bounds logical embedding
+tokens and fails when either pgvector arm has incomplete logical embedding
+usage, so cache order or fewer requests cannot hide substantially longer
+embedded content.
 Formal replicate
 aggregation also rejects incomplete answer or judge logical usage. The JSON,
-TSV, and Markdown outputs retain input hashes and gate details for audit. Each
+TSV, and Markdown outputs retain provider and logical embedding costs, input
+hashes, and gate details for audit. Each
 JSON gate check is classified as `integrity`, `outcome`, or `cost`, with
 separate `integrity_passed`, `outcome_passed`, and `cost_passed` summaries. A
 valid negative quality result therefore remains distinguishable from a broken
@@ -720,8 +727,12 @@ shared `-lme-embedding-response-cache` ledger. It fixes the exact vector for
 each text hash, model, and dimension across both arms, preventing provider-side
 vector drift from changing retrieval order before model replay. Embedding usage
 then records logical `requests`, ledger `response_cache_hits`, and real provider
-`calls`/tokens separately. Strict comparison verifies that both arms used the
-same persistent embedding ledger without cache errors. Each new run also
+`calls`/tokens separately. New ledger entries retain their successful provider
+usage so `logical_prompt_tokens` and `logical_total_tokens` include exact cache
+hits without charging them as additional provider calls. Legacy entries without
+usage remain readable and increment `logical_usage_missing_requests`. Strict
+comparison verifies that both arms used the same persistent embedding ledger
+without cache errors. Each new run also
 records `embedding_provider_retry`, including maximum attempts, the backoff
 sequence, and total backoff budget. Strict comparison requires that policy to
 match whenever either result records it, while retaining compatibility with
@@ -754,14 +765,16 @@ only missing or invalid ones. Analysis treats a valid
 semantic-judge result as the primary correctness signal and falls back to exact
 match when no judge result is available. It writes `analysis.md` and
 `bad_cases.tsv`, including raw pipeline stages, evidence status, backend
-disagreements, and answer-gap diagnostics. Comparison uses the same correctness
-rule and rejects runs whose dataset, selection, replay protocol, retrieval
-depth, answer model, embedding model, prompt versions, or judge configuration
-differ. It writes `comparison.md` and `comparison.tsv`, compares upstream and
-candidate pgvector quality and cost, and presents Mem0 from the upstream run as
-a frozen third arm. Pass the same persistent judge-cache file to every formal
-arm; judged comparison verifies its stable ledger ID and rejects results from
-different or ephemeral caches.
+disagreements, and answer-gap diagnostics. `resource_usage.tsv` separately
+reports provider and logical embedding costs. Comparison uses the same
+correctness rule and rejects runs whose dataset, selection, replay protocol,
+retrieval depth, answer model, embedding model, prompt versions, or judge
+configuration differ. It writes `comparison.md`, `comparison.tsv`, and
+`comparison_resources.tsv`, compares upstream and candidate pgvector quality
+and cost, and presents Mem0 from the upstream run as a frozen third arm. Pass
+the same persistent judge-cache file to every formal arm; judged comparison
+verifies its stable ledger ID and rejects results from different or ephemeral
+caches.
 When normalized questions, references, and answers are identical, comparison
 treats conflicting judge verdicts as unchanged and reports the ignored judge
 drift instead of a model regression.

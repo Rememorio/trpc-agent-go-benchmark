@@ -39,7 +39,13 @@ func TestLongMemEvalEmbeddingResponseCachePersistsWithoutRawText(
 	if err != nil {
 		t.Fatalf("cache key: %v", err)
 	}
-	if _, err := cache.Put(key, identity, []float64{0.1, 0.2}); err != nil {
+	usage := &lmeEmbeddingLogicalUsage{
+		PromptTokens: 7,
+		TotalTokens:  7,
+	}
+	if _, err := cache.Put(
+		key, identity, []float64{0.1, 0.2}, usage,
+	); err != nil {
 		t.Fatalf("put cache entry: %v", err)
 	}
 	data, err := os.ReadFile(path)
@@ -54,14 +60,21 @@ func TestLongMemEvalEmbeddingResponseCachePersistsWithoutRawText(
 	if err != nil {
 		t.Fatalf("reopen cache: %v", err)
 	}
-	got, ok := reopened.Lookup(key)
+	got, gotUsage, ok := reopened.Lookup(key)
 	if !ok || len(got) != 2 || got[0] != 0.1 || got[1] != 0.2 {
 		t.Fatalf("replayed embedding = %#v, ok=%v", got, ok)
 	}
+	if gotUsage == nil || *gotUsage != *usage {
+		t.Fatalf("replayed usage = %#v, want %#v", gotUsage, usage)
+	}
 	got[0] = 99
-	again, ok := reopened.Lookup(key)
+	gotUsage.TotalTokens = 99
+	again, againUsage, ok := reopened.Lookup(key)
 	if !ok || again[0] != 0.1 {
 		t.Fatalf("cache returned mutable embedding: %#v", again)
+	}
+	if againUsage == nil || *againUsage != *usage {
+		t.Fatalf("cache returned mutable usage: %#v", againUsage)
 	}
 	if reopened.LedgerID() == "" || reopened.Len() != 1 {
 		t.Fatalf(
@@ -121,7 +134,9 @@ func TestLongMemEvalTrackingEmbedderSeparatesLogicalAndProviderCalls(
 	}
 	firstUsage := first.Snapshot()
 	if firstUsage.Requests != 2 || firstUsage.ResponseCacheHits != 1 ||
-		firstUsage.Calls != 1 || firstUsage.TotalTokens != 7 {
+		firstUsage.Calls != 1 || firstUsage.TotalTokens != 7 ||
+		firstUsage.LogicalTotalTokens != 14 ||
+		firstUsage.LogicalUsageMissingRequests != 0 {
 		t.Fatalf("first arm usage = %#v", firstUsage)
 	}
 
@@ -137,11 +152,195 @@ func TestLongMemEvalTrackingEmbedderSeparatesLogicalAndProviderCalls(
 	}
 	secondUsage := second.Snapshot()
 	if secondUsage.Requests != 1 || secondUsage.ResponseCacheHits != 1 ||
-		secondUsage.Calls != 0 || secondUsage.TotalTokens != 0 {
+		secondUsage.Calls != 0 || secondUsage.TotalTokens != 0 ||
+		secondUsage.LogicalTotalTokens != 7 ||
+		secondUsage.LogicalUsageMissingRequests != 0 {
 		t.Fatalf("second arm usage = %#v", secondUsage)
 	}
 	if providerCalls != 1 {
 		t.Fatalf("provider calls = %d, want 1", providerCalls)
+	}
+}
+
+func TestLongMemEvalTrackingEmbedderRecordsUsageBeforeCacheWriteFailure(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprint(w, `{
+  "object":"list",
+  "data":[{"object":"embedding","embedding":[0.1,0.2],"index":0}],
+  "model":"text-embedding-3-small",
+  "usage":{"prompt_tokens":7,"total_tokens":7}
+}`)
+		},
+	))
+	defer server.Close()
+
+	path := filepath.Join(t.TempDir(), "embeddings.jsonl")
+	cache, err := openLongMemEvalEmbeddingResponseCache(path)
+	if err != nil {
+		t.Fatalf("open cache: %v", err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatalf("remove cache ledger: %v", err)
+	}
+	if err := os.Mkdir(path, 0755); err != nil {
+		t.Fatalf("replace cache ledger with directory: %v", err)
+	}
+
+	base := embeddingopenai.New(
+		embeddingopenai.WithAPIKey("test"),
+		embeddingopenai.WithBaseURL(server.URL),
+		embeddingopenai.WithModel("text-embedding-3-small"),
+		embeddingopenai.WithDimensions(2),
+	)
+	tracker := newLongMemEvalTrackingEmbedderWithCache(
+		base, cache, "text-embedding-3-small",
+	)
+	if _, err := tracker.GetEmbedding(
+		context.Background(), "uncached text",
+	); err == nil || !strings.Contains(err.Error(), "for append") {
+		t.Fatalf("cache write error = %v", err)
+	}
+	usage := tracker.Snapshot()
+	if usage.Requests != 1 || usage.Calls != 1 ||
+		usage.PromptTokens != 7 || usage.TotalTokens != 7 ||
+		usage.LogicalPromptTokens != 7 ||
+		usage.LogicalTotalTokens != 7 ||
+		usage.LogicalUsageMissingRequests != 0 {
+		t.Fatalf("usage after cache write failure = %#v", usage)
+	}
+	_, _, cacheErrors := cache.Stats()
+	if cacheErrors != 1 {
+		t.Fatalf("cache errors = %d, want 1", cacheErrors)
+	}
+}
+
+func TestLongMemEvalTrackingEmbedderMarksLegacyCacheUsageMissing(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	providerCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, _ *http.Request) {
+			providerCalls++
+			w.WriteHeader(http.StatusInternalServerError)
+		},
+	))
+	defer server.Close()
+
+	cache, err := openLongMemEvalEmbeddingResponseCache(
+		filepath.Join(t.TempDir(), "embeddings.jsonl"),
+	)
+	if err != nil {
+		t.Fatalf("open cache: %v", err)
+	}
+	identity, key, err := longMemEvalEmbeddingResponseCacheKey(
+		"legacy text", "text-embedding-3-small", 2,
+	)
+	if err != nil {
+		t.Fatalf("cache key: %v", err)
+	}
+	if _, err := cache.Put(
+		key, identity, []float64{0.1, 0.2}, nil,
+	); err != nil {
+		t.Fatalf("put legacy cache entry: %v", err)
+	}
+
+	base := embeddingopenai.New(
+		embeddingopenai.WithAPIKey("test"),
+		embeddingopenai.WithBaseURL(server.URL),
+		embeddingopenai.WithModel("text-embedding-3-small"),
+		embeddingopenai.WithDimensions(2),
+	)
+	tracker := newLongMemEvalTrackingEmbedderWithCache(
+		base, cache, "text-embedding-3-small",
+	)
+	if _, err := tracker.GetEmbedding(
+		context.Background(), "legacy text",
+	); err != nil {
+		t.Fatalf("legacy cache hit: %v", err)
+	}
+	usage := tracker.Snapshot()
+	if usage.Requests != 1 || usage.ResponseCacheHits != 1 ||
+		usage.Calls != 0 || usage.LogicalTotalTokens != 0 ||
+		usage.LogicalUsageMissingRequests != 1 {
+		t.Fatalf("legacy cache usage = %#v", usage)
+	}
+	if providerCalls != 0 {
+		t.Fatalf("provider calls = %d, want 0", providerCalls)
+	}
+}
+
+func TestNormalizeLongMemEvalEmbeddingUsageMarksUnknownLegacyCosts(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	got := normalizeLongMemEvalEmbeddingUsage(lmeEmbeddingUsage{
+		PromptTokens:      8,
+		TotalTokens:       8,
+		Calls:             2,
+		Requests:          5,
+		ResponseCacheHits: 2,
+		UsageMissingCalls: 1,
+	})
+	if got.LogicalPromptTokens != 8 || got.LogicalTotalTokens != 8 ||
+		got.LogicalUsageMissingRequests != 4 {
+		t.Fatalf("normalized legacy usage = %#v", got)
+	}
+
+	explicit := lmeEmbeddingUsage{
+		PromptTokens:                8,
+		TotalTokens:                 8,
+		Calls:                       2,
+		Requests:                    5,
+		ResponseCacheHits:           2,
+		LogicalPromptTokens:         20,
+		LogicalTotalTokens:          20,
+		LogicalUsageMissingRequests: 0,
+	}
+	if got := normalizeLongMemEvalEmbeddingUsage(explicit); got != explicit {
+		t.Fatalf("explicit logical usage changed: got %#v want %#v",
+			got, explicit)
+	}
+	if !longMemEvalLogicalEmbeddingUsageComplete(explicit) {
+		t.Fatalf("explicit logical usage is incomplete: %#v", explicit)
+	}
+	explicit.LogicalTotalTokens = explicit.LogicalPromptTokens - 1
+	if longMemEvalLogicalEmbeddingUsageComplete(explicit) {
+		t.Fatalf("invalid logical token ordering accepted: %#v", explicit)
+	}
+}
+
+func TestUsageIntExactRejectsLossyValues(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name  string
+		value any
+		want  int
+		ok    bool
+	}{
+		{name: "int", value: 7, want: 7, ok: true},
+		{name: "int64", value: int64(7), want: 7, ok: true},
+		{name: "integral float", value: float64(7), want: 7, ok: true},
+		{name: "fraction", value: 7.5},
+		{name: "overflow", value: 1e100},
+		{name: "string", value: "7"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, ok := usageIntExact(test.value)
+			if got != test.want || ok != test.ok {
+				t.Fatalf("usageIntExact(%v) = (%d, %t), want (%d, %t)",
+					test.value, got, ok, test.want, test.ok)
+			}
+		})
 	}
 }
 

@@ -27,7 +27,7 @@ import (
 
 const (
 	lmeReplicateManifestSchemaVersion   = 2
-	lmeReplicateComparisonSchemaVersion = 5
+	lmeReplicateComparisonSchemaVersion = 6
 	lmeReplicateKindPrimary             = "primary"
 	lmeReplicateKindIndependentReanswer = "independent-reanswer"
 	lmeReplicateMemoryCachesIndependent = "independent"
@@ -1232,12 +1232,9 @@ func aggregateLongMemEvalReplicateArm(
 						pair.Spec.Name, cr.QuestionID, backend,
 					)
 				}
-				embeddingUsage := *br.EmbeddingUsage
-				if backend == "mem0" &&
-					embeddingUsage.Requests == 0 &&
-					embeddingUsage.Calls > 0 {
-					embeddingUsage.Requests = embeddingUsage.Calls
-				}
+				embeddingUsage := normalizeLongMemEvalEmbeddingUsage(
+					*br.EmbeddingUsage,
+				)
 				caseMemoryUsage[cr.QuestionID] = memoryUsage
 				caseMemoryUsageMissing[cr.QuestionID] = missing
 				caseEmbeddingUsage[cr.QuestionID] = embeddingUsage
@@ -1566,12 +1563,9 @@ func addLongMemEvalReplicateSourceCost(arm *lmeReplicateArm, result *runResult, 
 				}
 			}
 		}
-		embeddingUsage := *br.EmbeddingUsage
-		if backend == "mem0" &&
-			embeddingUsage.Requests == 0 &&
-			embeddingUsage.Calls > 0 {
-			embeddingUsage.Requests = embeddingUsage.Calls
-		}
+		embeddingUsage := normalizeLongMemEvalEmbeddingUsage(
+			*br.EmbeddingUsage,
+		)
 		arm.MemoryEmbeddingUsage.Add(embeddingUsage)
 		arm.IngestedPairs += br.IngestedPairs
 		arm.FinalMemories += len(br.FinalMemories)
@@ -1940,13 +1934,46 @@ func evaluateLongMemEvalReplicateGate(
 		candidate.MemoryEmbeddingUsage.Requests, main.MemoryEmbeddingUsage.Requests,
 		gate.MemoryEmbeddingRequestRatioMaximum)
 	if gate.MemoryEmbeddingTokenRatioMaximum > 0 {
-		addLongMemEvalReplicateRatioCheck(
-			&result,
-			"candidate_memory_embedding_tokens_vs_main",
-			candidate.MemoryEmbeddingUsage.TotalTokens,
-			main.MemoryEmbeddingUsage.TotalTokens,
-			gate.MemoryEmbeddingTokenRatioMaximum,
-		)
+		if longMemEvalLogicalEmbeddingUsageComplete(
+			main.MemoryEmbeddingUsage,
+		) && longMemEvalLogicalEmbeddingUsageComplete(
+			candidate.MemoryEmbeddingUsage,
+		) {
+			addLongMemEvalReplicateRatioCheck(
+				&result,
+				"candidate_memory_embedding_logical_tokens_vs_main",
+				candidate.MemoryEmbeddingUsage.LogicalTotalTokens,
+				main.MemoryEmbeddingUsage.LogicalTotalTokens,
+				gate.MemoryEmbeddingTokenRatioMaximum,
+			)
+		} else {
+			result.add(
+				lmeReplicateGateDimensionCost,
+				"candidate_memory_embedding_logical_tokens_vs_main",
+				false,
+				fmt.Sprintf(
+					"logical usage incomplete: "+
+						"main prompt=%d total=%d missing=%d/%d; "+
+						"candidate prompt=%d total=%d missing=%d/%d",
+					main.MemoryEmbeddingUsage.
+						LogicalPromptTokens,
+					main.MemoryEmbeddingUsage.
+						LogicalTotalTokens,
+					main.MemoryEmbeddingUsage.
+						LogicalUsageMissingRequests,
+					main.MemoryEmbeddingUsage.Requests,
+					candidate.MemoryEmbeddingUsage.
+						LogicalPromptTokens,
+					candidate.MemoryEmbeddingUsage.
+						LogicalTotalTokens,
+					candidate.MemoryEmbeddingUsage.
+						LogicalUsageMissingRequests,
+					candidate.MemoryEmbeddingUsage.Requests,
+				),
+				"complete logical embedding token usage for both "+
+					"PGVector arms",
+			)
+		}
 	}
 	addLongMemEvalReplicateRatioCheck(&result, "candidate_final_memories_vs_main",
 		candidate.FinalMemories, main.FinalMemories, gate.FinalMemoryCountRatioMaximum)
@@ -2243,8 +2270,12 @@ func formatLongMemEvalReplicateComparisonTSV(comparison *lmeReplicateComparison)
 		prefix := longMemEvalReplicateArmColumnPrefix(armName)
 		fmt.Fprintf(
 			&b,
-			"\t%s_primary\t%s_correct_replicates\t%s_majority",
-			prefix, prefix, prefix,
+			"\t%s_primary\t%s_correct_replicates\t%s_majority\t"+
+				"%s_embedding_requests\t%s_embedding_provider_calls\t"+
+				"%s_embedding_provider_tokens\t"+
+				"%s_embedding_logical_tokens\t"+
+				"%s_embedding_logical_missing_requests",
+			prefix, prefix, prefix, prefix, prefix, prefix, prefix, prefix,
 		)
 	}
 	b.WriteByte('\n')
@@ -2253,10 +2284,15 @@ func formatLongMemEvalReplicateComparisonTSV(comparison *lmeReplicateComparison)
 		for _, armName := range armOrder {
 			arm := item.Arms[armName]
 			fmt.Fprintf(
-				&b, "\t%t\t%d\t%t",
+				&b, "\t%t\t%d\t%t\t%d\t%d\t%d\t%d\t%d",
 				arm.PrimaryCorrect,
 				arm.CorrectReplicates,
 				arm.MajorityCorrect,
+				arm.MemoryEmbeddingUsage.Requests,
+				arm.MemoryEmbeddingUsage.Calls,
+				arm.MemoryEmbeddingUsage.TotalTokens,
+				arm.MemoryEmbeddingUsage.LogicalTotalTokens,
+				arm.MemoryEmbeddingUsage.LogicalUsageMissingRequests,
 			)
 		}
 		b.WriteByte('\n')
@@ -2410,11 +2446,11 @@ func formatLongMemEvalReplicateComparisonMarkdown(comparison *lmeReplicateCompar
 		gateStatus = "PASS"
 	}
 	fmt.Fprintf(&b, "- Promotion gate: **%s**\n\n", gateStatus)
-	b.WriteString("| Arm | Primary | Majority | Correct replicates | Unstable | Pairs | Provider-observed memory LLM tokens | Logical memory LLM tokens | Logical answer tokens | Logical judge tokens | Memory model cache hits | Logical memory cost complete | Embedding requests | Embedding provider calls | Embedding provider tokens | Memories | Ingest ms | Search ms |\n")
-	b.WriteString("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | :---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
+	b.WriteString("| Arm | Primary | Majority | Correct replicates | Unstable | Pairs | Provider-observed memory LLM tokens | Logical memory LLM tokens | Logical answer tokens | Logical judge tokens | Memory model cache hits | Logical memory cost complete | Embedding requests | Embedding provider calls | Embedding provider tokens | Logical embedding tokens | Missing logical embedding usage | Memories | Ingest ms | Search ms |\n")
+	b.WriteString("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | :---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
 	for _, name := range longMemEvalReplicateArmOrder(comparison) {
 		arm := comparison.Arms[name]
-		fmt.Fprintf(&b, "| %s | %d/%d | %d/%d | %d/%d | %d | %d | %d | %d | %d | %d | %d | %t | %d | %d | %d | %d | %d | %d |\n",
+		fmt.Fprintf(&b, "| %s | %d/%d | %d/%d | %d/%d | %d | %d | %d | %d | %d | %d | %d | %t | %d | %d | %d | %d | %d | %d | %d | %d |\n",
 			name, arm.PrimaryCorrect, arm.Cases, arm.MajorityCorrect, arm.Cases,
 			arm.CorrectReplicates, arm.TotalAnswerReplicates, arm.UnstableCases,
 			arm.IngestedPairs,
@@ -2425,11 +2461,13 @@ func formatLongMemEvalReplicateComparisonMarkdown(comparison *lmeReplicateCompar
 			arm.MemoryModelCacheHits, arm.MemoryLogicalUsageComplete,
 			arm.MemoryEmbeddingUsage.Requests,
 			arm.MemoryEmbeddingUsage.Calls, arm.MemoryEmbeddingUsage.TotalTokens,
+			arm.MemoryEmbeddingUsage.LogicalTotalTokens,
+			arm.MemoryEmbeddingUsage.LogicalUsageMissingRequests,
 			arm.FinalMemories, arm.IngestDurationMs, arm.SearchDurationMs)
 	}
 	b.WriteString("\n## Resource Accounting by Type\n\n")
-	b.WriteString("| Arm | Type | Cases | Logical memory tokens | Missing memory usages | Embedding requests | Embedding tokens | Logical answer tokens | Logical judge tokens | Memories | Ingest ms | Search ms |\n")
-	b.WriteString("| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
+	b.WriteString("| Arm | Type | Cases | Logical memory tokens | Missing memory usages | Embedding requests | Embedding provider tokens | Logical embedding tokens | Missing logical embedding usage | Logical answer tokens | Logical judge tokens | Memories | Ingest ms | Search ms |\n")
+	b.WriteString("| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
 	for _, name := range longMemEvalReplicateArmOrder(comparison) {
 		arm := comparison.Arms[name]
 		typeNames := make([]string, 0, len(arm.ByType))
@@ -2441,7 +2479,7 @@ func formatLongMemEvalReplicateComparisonMarkdown(comparison *lmeReplicateCompar
 			summary := arm.ByType[typeName]
 			fmt.Fprintf(
 				&b,
-				"| %s | %s | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d |\n",
+				"| %s | %s | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d |\n",
 				name,
 				typeName,
 				summary.Cases,
@@ -2449,6 +2487,8 @@ func formatLongMemEvalReplicateComparisonMarkdown(comparison *lmeReplicateCompar
 				summary.MemoryLogicalUsageMissingCalls,
 				summary.MemoryEmbeddingUsage.Requests,
 				summary.MemoryEmbeddingUsage.TotalTokens,
+				summary.MemoryEmbeddingUsage.LogicalTotalTokens,
+				summary.MemoryEmbeddingUsage.LogicalUsageMissingRequests,
 				summary.AnswerLogicalTokenUsage.TotalTokens,
 				summary.JudgeLogicalTokenUsage.TotalTokens,
 				summary.FinalMemories,

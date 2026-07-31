@@ -81,6 +81,8 @@ func TestCompareLongMemEvalReplicates(t *testing.T) {
 		candidate.AnswerLogicalTokenUsage.TotalTokens != 60 ||
 		candidate.JudgeLogicalTokenUsage.TotalTokens != 216 ||
 		candidate.MemoryEmbeddingUsage.TotalTokens != 30 ||
+		candidate.MemoryEmbeddingUsage.LogicalTotalTokens != 30 ||
+		candidate.MemoryEmbeddingUsage.LogicalUsageMissingRequests != 0 ||
 		candidate.IngestedPairs != 2 ||
 		candidate.FinalMemories != 12 ||
 		candidate.ExtractionDiagnostics.TracedPairs != 2 ||
@@ -151,6 +153,13 @@ func TestCompareLongMemEvalReplicates(t *testing.T) {
 			t.Fatalf("%s missing comparison details: %s", name, contents)
 		}
 		if strings.HasSuffix(name, ".md") {
+			if !strings.Contains(
+				string(contents),
+				"Logical embedding tokens",
+			) {
+				t.Fatalf("%s missing logical embedding accounting: %s",
+					name, contents)
+			}
 			for _, section := range []string{
 				"## Resource Accounting by Type",
 				"## Pairwise Majority Outcomes",
@@ -165,6 +174,14 @@ func TestCompareLongMemEvalReplicates(t *testing.T) {
 						name, section, contents)
 				}
 			}
+		}
+		if name == "replicate_comparison.tsv" &&
+			!strings.Contains(
+				string(contents),
+				"candidate_embedding_logical_tokens",
+			) {
+			t.Fatalf("%s missing logical embedding columns: %s",
+				name, contents)
 		}
 	}
 	badCases, err := os.ReadFile(
@@ -368,7 +385,8 @@ func TestReplicateGateOptionallyUsesEmbeddingTokens(t *testing.T) {
 		name string,
 		majority int,
 		correct int,
-		embeddingTokens int,
+		providerTokens int,
+		logicalTokens int,
 	) *lmeReplicateArm {
 		return &lmeReplicateArm{
 			Name: name, Cases: 2, MajorityCorrect: majority,
@@ -376,8 +394,9 @@ func TestReplicateGateOptionallyUsesEmbeddingTokens(t *testing.T) {
 			MemoryLogicalTokenUsage:    lmeTokenUsage{TotalTokens: 100},
 			MemoryLogicalUsageComplete: true,
 			MemoryEmbeddingUsage: lmeEmbeddingUsage{
-				Requests:    100,
-				TotalTokens: embeddingTokens,
+				Requests:           100,
+				TotalTokens:        providerTokens,
+				LogicalTotalTokens: logicalTokens,
 			},
 			FinalMemories: 10,
 			ByType: map[string]*lmeReplicateTypeSummary{
@@ -388,13 +407,13 @@ func TestReplicateGateOptionallyUsesEmbeddingTokens(t *testing.T) {
 	comparison := &lmeReplicateComparison{
 		Arms: map[string]*lmeReplicateArm{
 			lmeReplicateArmPGVectorMain: arm(
-				lmeReplicateArmPGVectorMain, 0, 0, 100,
+				lmeReplicateArmPGVectorMain, 0, 0, 100, 100,
 			),
 			lmeReplicateArmMem0OSS: arm(
-				lmeReplicateArmMem0OSS, 0, 0, 100,
+				lmeReplicateArmMem0OSS, 0, 0, 100, 100,
 			),
 			lmeReplicateArmPGVectorCandidate: arm(
-				lmeReplicateArmPGVectorCandidate, 2, 6, 250,
+				lmeReplicateArmPGVectorCandidate, 2, 6, 50, 250,
 			),
 		},
 	}
@@ -407,7 +426,8 @@ func TestReplicateGateOptionallyUsesEmbeddingTokens(t *testing.T) {
 
 	withoutTokenGate := evaluateLongMemEvalReplicateGate(comparison, gate)
 	for _, check := range withoutTokenGate.Checks {
-		if check.Name == "candidate_memory_embedding_tokens_vs_main" {
+		if check.Name ==
+			"candidate_memory_embedding_logical_tokens_vs_main" {
 			t.Fatalf("optional embedding token check unexpectedly present: %+v",
 				check)
 		}
@@ -416,7 +436,8 @@ func TestReplicateGateOptionallyUsesEmbeddingTokens(t *testing.T) {
 	gate.MemoryEmbeddingTokenRatioMaximum = 2
 	withTokenGate := evaluateLongMemEvalReplicateGate(comparison, gate)
 	for _, check := range withTokenGate.Checks {
-		if check.Name != "candidate_memory_embedding_tokens_vs_main" {
+		if check.Name !=
+			"candidate_memory_embedding_logical_tokens_vs_main" {
 			continue
 		}
 		if check.Passed || check.Actual != "2.500000 (250/100)" {
@@ -425,6 +446,63 @@ func TestReplicateGateOptionallyUsesEmbeddingTokens(t *testing.T) {
 		return
 	}
 	t.Fatal("embedding token check is missing")
+}
+
+func TestReplicateGateRejectsIncompleteLogicalEmbeddingTokens(t *testing.T) {
+	t.Parallel()
+
+	arm := func(name string, majority, correct int) *lmeReplicateArm {
+		return &lmeReplicateArm{
+			Name: name, Cases: 2, MajorityCorrect: majority,
+			CorrectReplicates: correct, ProviderUsageReportedCases: 2,
+			MemoryLogicalTokenUsage:    lmeTokenUsage{TotalTokens: 100},
+			MemoryLogicalUsageComplete: true,
+			MemoryEmbeddingUsage: lmeEmbeddingUsage{
+				Requests:                    100,
+				TotalTokens:                 50,
+				LogicalTotalTokens:          100,
+				LogicalUsageMissingRequests: 1,
+			},
+			FinalMemories: 10,
+			ByType: map[string]*lmeReplicateTypeSummary{
+				"single-session-user": {MajorityCorrect: majority},
+			},
+		}
+	}
+	comparison := &lmeReplicateComparison{
+		Arms: map[string]*lmeReplicateArm{
+			lmeReplicateArmPGVectorMain: arm(
+				lmeReplicateArmPGVectorMain, 0, 0,
+			),
+			lmeReplicateArmMem0OSS: arm(
+				lmeReplicateArmMem0OSS, 0, 0,
+			),
+			lmeReplicateArmPGVectorCandidate: arm(
+				lmeReplicateArmPGVectorCandidate, 2, 6,
+			),
+		},
+	}
+	gate := lmeReplicatePromotionGate{
+		ExpectedCases: 2, JudgeRuns: 3, PerTypeMaxDeficit: 0,
+		MemoryLLMTokenRatioMaximum:         1.55,
+		MemoryEmbeddingRequestRatioMaximum: 2,
+		MemoryEmbeddingTokenRatioMaximum:   2,
+		FinalMemoryCountRatioMaximum:       3,
+	}
+
+	result := evaluateLongMemEvalReplicateGate(comparison, gate)
+	for _, check := range result.Checks {
+		if check.Name !=
+			"candidate_memory_embedding_logical_tokens_vs_main" {
+			continue
+		}
+		if check.Passed ||
+			!strings.Contains(check.Actual, "logical usage incomplete") {
+			t.Fatalf("embedding completeness check = %+v", check)
+		}
+		return
+	}
+	t.Fatal("embedding logical completeness check is missing")
 }
 
 func TestReplicateGateOptionallyUsesUncachedLogicalTokens(t *testing.T) {
