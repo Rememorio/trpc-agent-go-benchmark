@@ -4643,6 +4643,7 @@ func testLongMemEvalComparisonMetadata(implementation string) map[string]any {
 		"model_variant":              "glm",
 		"model_temperature":          0,
 		"embedding_model":            "embedding-model",
+		"embedding_provider_retry":   currentEmbeddingProviderRetryPolicy(),
 		"memory_attribution_version": lmeAttributionProtocolVersion,
 		"answer_prompt_version":      lmeAnswerPromptVersion,
 		"answer_generation":          currentLongMemEvalAnswerGeneration(),
@@ -4653,6 +4654,20 @@ func testLongMemEvalComparisonMetadata(implementation string) map[string]any {
 		"judge_cache_format_version": lmeJudgeCacheFormatVersion,
 		"judge_cache_shared":         true,
 		"judge_cache_ledger_id":      "shared-test-ledger",
+	}
+}
+
+func TestValidateLongMemEvalComparisonMatchesEmbeddingRetryPolicy(t *testing.T) {
+	t.Parallel()
+
+	baseline := &runResult{Metadata: testLongMemEvalComparisonMetadata("upstream-main")}
+	candidate := &runResult{Metadata: testLongMemEvalComparisonMetadata("candidate-2196")}
+	policy := currentEmbeddingProviderRetryPolicy()
+	policy.TotalBackoffMS++
+	candidate.Metadata["embedding_provider_retry"] = policy
+	err := validateLongMemEvalComparison(baseline, candidate)
+	if err == nil || !strings.Contains(err.Error(), "embedding_provider_retry") {
+		t.Fatalf("embedding retry policy error = %v, want metadata mismatch", err)
 	}
 }
 

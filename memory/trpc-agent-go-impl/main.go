@@ -596,6 +596,28 @@ var lmeEmbeddingRetryBackoff = []time.Duration{
 	90 * time.Second,
 }
 
+type embeddingProviderRetryPolicy struct {
+	MaxRetries     int     `json:"max_retries"`
+	MaxAttempts    int     `json:"max_attempts"`
+	BackoffMS      []int64 `json:"backoff_ms"`
+	TotalBackoffMS int64   `json:"total_backoff_ms"`
+}
+
+func currentEmbeddingProviderRetryPolicy() embeddingProviderRetryPolicy {
+	backoffMS := make([]int64, len(lmeEmbeddingRetryBackoff))
+	var totalBackoffMS int64
+	for i, backoff := range lmeEmbeddingRetryBackoff {
+		backoffMS[i] = backoff.Milliseconds()
+		totalBackoffMS += backoffMS[i]
+	}
+	return embeddingProviderRetryPolicy{
+		MaxRetries:     len(backoffMS),
+		MaxAttempts:    len(backoffMS) + 1,
+		BackoffMS:      backoffMS,
+		TotalBackoffMS: totalBackoffMS,
+	}
+}
+
 func newEmbeddingEmbedder(modelName string) *openai.Embedder {
 	opts := []openai.Option{
 		openai.WithModel(modelName),

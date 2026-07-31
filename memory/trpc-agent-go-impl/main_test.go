@@ -9,7 +9,36 @@
 
 package main
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
+
+func TestCurrentEmbeddingProviderRetryPolicy(t *testing.T) {
+	policy := currentEmbeddingProviderRetryPolicy()
+	wantBackoffMS := []int64{
+		2000,
+		4000,
+		8000,
+		16000,
+		32000,
+		60000,
+		90000,
+	}
+	if policy.MaxRetries != 7 || policy.MaxAttempts != 8 {
+		t.Fatalf(
+			"retry counts = retries %d, attempts %d; want 7 and 8",
+			policy.MaxRetries,
+			policy.MaxAttempts,
+		)
+	}
+	if !reflect.DeepEqual(policy.BackoffMS, wantBackoffMS) {
+		t.Fatalf("retry backoff = %v, want %v", policy.BackoffMS, wantBackoffMS)
+	}
+	if policy.TotalBackoffMS != 212000 {
+		t.Fatalf("total retry backoff = %d, want 212000", policy.TotalBackoffMS)
+	}
+}
 
 func TestIsLongMemEvalInvocation(t *testing.T) {
 	resultFlags := map[string]*string{

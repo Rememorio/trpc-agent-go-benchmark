@@ -1223,6 +1223,7 @@ func runLongMemEvalMemory(ctx context.Context) error {
 			"memory_attribution_note":      "pgvector derives assistant attribution from its internal memory marker and otherwise defaults to user; self-hosted Mem0 OSS reads attributed_to from the structured API record, falling back to record metadata, and rejects missing or invalid attribution.",
 			"model_call_timeout":           flagLMEModelCallTimeout.String(),
 			"embedding_model":              getEmbedModelName(),
+			"embedding_provider_retry":     currentEmbeddingProviderRetryPolicy(),
 			"pgvector_extraction":          pgExtractionConfig,
 			"backends":                     backends,
 			"top_k":                        *flagVectorTopK,

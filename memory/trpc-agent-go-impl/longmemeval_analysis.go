@@ -258,6 +258,7 @@ func validateLongMemEvalComparisonWithMemoryResponseCaches(
 		"judge_model",
 		"judge_model_variant",
 		"judge_runs",
+		"embedding_provider_retry",
 	} {
 		if err := compareLongMemEvalMetadataValue(baseline.Metadata, candidate.Metadata, key, false); err != nil {
 			return err
