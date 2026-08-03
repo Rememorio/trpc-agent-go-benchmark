@@ -503,8 +503,45 @@ func (e *lmeTrackingEmbedder) GetEmbeddingWithUsage(
 		if embedding, logicalUsage, ok := e.responseCache.Lookup(cacheKey); ok {
 			e.mu.Lock()
 			e.usage.ResponseCacheHits++
+			e.mu.Unlock()
+			if logicalUsage == nil &&
+				e.responseCache.RecoverMissingUsage() {
+				logicalUsage, err = e.responseCache.RecoverUsage(
+					ctx, cacheKey,
+					func() (*lmeEmbeddingLogicalUsage, error) {
+						_, usage, err := e.base.GetEmbeddingWithUsage(ctx, text)
+						if err != nil {
+							e.mu.Lock()
+							e.usage.ProviderErrors++
+							e.mu.Unlock()
+							return nil, err
+						}
+						logicalUsage, complete :=
+							longMemEvalEmbeddingLogicalUsageFromProvider(usage)
+						e.mu.Lock()
+						e.usage.Calls++
+						if complete {
+							e.usage.PromptTokens += logicalUsage.PromptTokens
+							e.usage.TotalTokens += logicalUsage.TotalTokens
+						} else {
+							e.usage.UsageMissingCalls++
+						}
+						e.mu.Unlock()
+						if !complete {
+							return nil, fmt.Errorf(
+								"embedding provider omitted usage during cache recovery",
+							)
+						}
+						return logicalUsage, nil
+					},
+				)
+			}
+			e.mu.Lock()
 			e.usage.addLogical(logicalUsage)
 			e.mu.Unlock()
+			if err != nil {
+				return nil, nil, err
+			}
 			return embedding, nil, nil
 		}
 		if e.responseCache.RequireHit() {

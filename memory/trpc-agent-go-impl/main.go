@@ -330,6 +330,11 @@ var (
 		false,
 		"Fail before an embedding provider call when a LongMemEval cache entry is missing",
 	)
+	flagLMEEmbeddingResponseCacheRecoverMissingUsage = flag.Bool(
+		"lme-embedding-response-cache-recover-missing-usage",
+		false,
+		"Recover missing usage from the provider while preserving cached embedding vectors; requires require-hit",
+	)
 	flagLoCoMoReuseMemories = flag.Bool(
 		"locomo-reuse-memories",
 		false,

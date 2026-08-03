@@ -277,6 +277,232 @@ func TestLongMemEvalTrackingEmbedderMarksLegacyCacheUsageMissing(
 	}
 }
 
+func TestLongMemEvalTrackingEmbedderRecoversUsageAndPreservesVector(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	providerCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, _ *http.Request) {
+			providerCalls++
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprint(w, `{
+  "object":"list",
+  "data":[{"object":"embedding","embedding":[9,8],"index":0}],
+  "model":"text-embedding-3-small",
+  "usage":{"prompt_tokens":7,"total_tokens":7}
+}`)
+		},
+	))
+	defer server.Close()
+
+	path := filepath.Join(t.TempDir(), "embeddings.jsonl")
+	cache, err := openLongMemEvalEmbeddingResponseCache(path)
+	if err != nil {
+		t.Fatalf("open cache: %v", err)
+	}
+	identity, key, err := longMemEvalEmbeddingResponseCacheKey(
+		"legacy text", "text-embedding-3-small", 2,
+	)
+	if err != nil {
+		t.Fatalf("cache key: %v", err)
+	}
+	wantVector := []float64{0.1, 0.2}
+	if _, err := cache.Put(key, identity, wantVector, nil); err != nil {
+		t.Fatalf("put legacy cache entry: %v", err)
+	}
+	cache.requireHit = true
+	cache.recoverMissingUsage = true
+
+	newBase := func() *embeddingopenai.Embedder {
+		return embeddingopenai.New(
+			embeddingopenai.WithAPIKey("test"),
+			embeddingopenai.WithBaseURL(server.URL),
+			embeddingopenai.WithModel("text-embedding-3-small"),
+			embeddingopenai.WithDimensions(2),
+		)
+	}
+	tracker := newLongMemEvalTrackingEmbedderWithCache(
+		newBase(), cache, "text-embedding-3-small",
+	)
+	got, err := tracker.GetEmbedding(context.Background(), "legacy text")
+	if err != nil {
+		t.Fatalf("recover cache usage: %v", err)
+	}
+	if len(got) != 2 || got[0] != wantVector[0] || got[1] != wantVector[1] {
+		t.Fatalf("recovered embedding = %#v, want sealed vector %#v", got, wantVector)
+	}
+	usage := tracker.Snapshot()
+	if usage.Requests != 1 || usage.ResponseCacheHits != 1 ||
+		usage.Calls != 1 || usage.PromptTokens != 7 ||
+		usage.TotalTokens != 7 || usage.LogicalPromptTokens != 7 ||
+		usage.LogicalTotalTokens != 7 ||
+		usage.LogicalUsageMissingRequests != 0 {
+		t.Fatalf("recovered usage = %#v", usage)
+	}
+	if providerCalls != 1 || cache.UsageRecoveries() != 1 {
+		t.Fatalf(
+			"provider calls=%d usage recoveries=%d, want 1 each",
+			providerCalls, cache.UsageRecoveries(),
+		)
+	}
+
+	reopened, err := openLongMemEvalEmbeddingResponseCache(path)
+	if err != nil {
+		t.Fatalf("reopen recovered cache: %v", err)
+	}
+	second := newLongMemEvalTrackingEmbedderWithCache(
+		newBase(), reopened, "text-embedding-3-small",
+	)
+	got, err = second.GetEmbedding(context.Background(), "legacy text")
+	if err != nil {
+		t.Fatalf("replay recovered cache: %v", err)
+	}
+	if len(got) != 2 || got[0] != wantVector[0] || got[1] != wantVector[1] {
+		t.Fatalf("replayed embedding = %#v, want sealed vector %#v", got, wantVector)
+	}
+	secondUsage := second.Snapshot()
+	if secondUsage.Calls != 0 || secondUsage.ResponseCacheHits != 1 ||
+		secondUsage.LogicalTotalTokens != 7 ||
+		secondUsage.LogicalUsageMissingRequests != 0 {
+		t.Fatalf("replayed recovered usage = %#v", secondUsage)
+	}
+	if providerCalls != 1 {
+		t.Fatalf("provider calls after replay = %d, want 1", providerCalls)
+	}
+}
+
+func TestLongMemEvalTrackingEmbedderRejectsIncompleteRecoveredUsage(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprint(w, `{
+  "object":"list",
+  "data":[{"object":"embedding","embedding":[9,8],"index":0}],
+  "model":"text-embedding-3-small"
+}`)
+		},
+	))
+	defer server.Close()
+
+	cache, err := openLongMemEvalEmbeddingResponseCache(
+		filepath.Join(t.TempDir(), "embeddings.jsonl"),
+	)
+	if err != nil {
+		t.Fatalf("open cache: %v", err)
+	}
+	identity, key, err := longMemEvalEmbeddingResponseCacheKey(
+		"legacy text", "text-embedding-3-small", 2,
+	)
+	if err != nil {
+		t.Fatalf("cache key: %v", err)
+	}
+	wantVector := []float64{0.1, 0.2}
+	if _, err := cache.Put(key, identity, wantVector, nil); err != nil {
+		t.Fatalf("put legacy cache entry: %v", err)
+	}
+	cache.requireHit = true
+	cache.recoverMissingUsage = true
+	base := embeddingopenai.New(
+		embeddingopenai.WithAPIKey("test"),
+		embeddingopenai.WithBaseURL(server.URL),
+		embeddingopenai.WithModel("text-embedding-3-small"),
+		embeddingopenai.WithDimensions(2),
+	)
+	tracker := newLongMemEvalTrackingEmbedderWithCache(
+		base, cache, "text-embedding-3-small",
+	)
+	if _, err := tracker.GetEmbedding(
+		context.Background(), "legacy text",
+	); err == nil || !strings.Contains(err.Error(), "omitted usage") {
+		t.Fatalf("incomplete recovery error = %v", err)
+	}
+	usage := tracker.Snapshot()
+	if usage.Requests != 1 || usage.ResponseCacheHits != 1 ||
+		usage.Calls != 1 || usage.UsageMissingCalls != 1 ||
+		usage.LogicalUsageMissingRequests != 1 {
+		t.Fatalf("incomplete recovered usage = %#v", usage)
+	}
+	got, gotUsage, ok := cache.Lookup(key)
+	if !ok || gotUsage != nil || len(got) != 2 ||
+		got[0] != wantVector[0] || got[1] != wantVector[1] {
+		t.Fatalf(
+			"cache changed after failed recovery: embedding=%#v usage=%#v ok=%t",
+			got, gotUsage, ok,
+		)
+	}
+	if cache.UsageRecoveries() != 0 {
+		t.Fatalf("usage recoveries = %d, want 0", cache.UsageRecoveries())
+	}
+}
+
+func TestLongMemEvalEmbeddingResponseCacheRejectsInvalidUsageUpdates(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "embeddings.jsonl")
+	cache, err := openLongMemEvalEmbeddingResponseCache(path)
+	if err != nil {
+		t.Fatalf("open cache: %v", err)
+	}
+	header, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read header: %v", err)
+	}
+	unknownUpdate := append(header, []byte(
+		`{"type":"usage","key":"unknown","usage":{"prompt_tokens":1,"total_tokens":1}}`+"\n",
+	)...)
+	if err := os.WriteFile(path, unknownUpdate, 0644); err != nil {
+		t.Fatalf("write unknown usage update: %v", err)
+	}
+	if _, err := openLongMemEvalEmbeddingResponseCache(path); err == nil ||
+		!strings.Contains(err.Error(), "unknown key") {
+		t.Fatalf("unknown usage update error = %v", err)
+	}
+
+	path = filepath.Join(t.TempDir(), "duplicate.jsonl")
+	cache, err = openLongMemEvalEmbeddingResponseCache(path)
+	if err != nil {
+		t.Fatalf("open duplicate cache: %v", err)
+	}
+	identity, key, err := longMemEvalEmbeddingResponseCacheKey(
+		"legacy text", "text-embedding-3-small", 2,
+	)
+	if err != nil {
+		t.Fatalf("cache key: %v", err)
+	}
+	if _, err := cache.Put(key, identity, []float64{0.1, 0.2}, nil); err != nil {
+		t.Fatalf("put legacy cache entry: %v", err)
+	}
+	usage := &lmeEmbeddingLogicalUsage{PromptTokens: 1, TotalTokens: 1}
+	if _, err := cache.putUsage(key, usage); err != nil {
+		t.Fatalf("put usage update: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read recovered cache: %v", err)
+	}
+	duplicateUpdate := []byte(
+		fmt.Sprintf(
+			`{"type":"usage","key":%q,"usage":{"prompt_tokens":1,"total_tokens":1}}`+"\n",
+			key,
+		),
+	)
+	if err := os.WriteFile(path, append(data, duplicateUpdate...), 0644); err != nil {
+		t.Fatalf("write duplicate usage update: %v", err)
+	}
+	if _, err := openLongMemEvalEmbeddingResponseCache(path); err == nil ||
+		!strings.Contains(err.Error(), "duplicate") {
+		t.Fatalf("duplicate usage update error = %v", err)
+	}
+}
+
 func TestNormalizeLongMemEvalEmbeddingUsageMarksUnknownLegacyCosts(
 	t *testing.T,
 ) {
@@ -365,6 +591,7 @@ func TestLongMemEvalTrackingEmbedderRequireHitBlocksProviderCall(
 		t.Fatalf("open cache: %v", err)
 	}
 	cache.requireHit = true
+	cache.recoverMissingUsage = true
 	base := embeddingopenai.New(
 		embeddingopenai.WithAPIKey("test"),
 		embeddingopenai.WithBaseURL(server.URL),
@@ -400,6 +627,24 @@ func TestConfiguredLongMemEvalEmbeddingCacheRequireHitNeedsPath(
 	if _, err := openConfiguredLongMemEvalEmbeddingResponseCache(); err == nil ||
 		!strings.Contains(err.Error(), "requires -lme-embedding-response-cache") {
 		t.Fatalf("missing required cache path error = %v", err)
+	}
+}
+
+func TestConfiguredLongMemEvalEmbeddingCacheUsageRecoveryNeedsRequireHit(
+	t *testing.T,
+) {
+	restoreStringFlag(
+		t, flagLMEEmbeddingResponseCache,
+		filepath.Join(t.TempDir(), "embeddings.jsonl"),
+	)
+	restoreBoolFlag(t, flagLMEEmbeddingResponseCacheRequireHit, false)
+	restoreBoolFlag(
+		t, flagLMEEmbeddingResponseCacheRecoverMissingUsage, true,
+	)
+
+	if _, err := openConfiguredLongMemEvalEmbeddingResponseCache(); err == nil ||
+		!strings.Contains(err.Error(), "requires -lme-embedding-response-cache-require-hit") {
+		t.Fatalf("missing require-hit error = %v", err)
 	}
 }
 

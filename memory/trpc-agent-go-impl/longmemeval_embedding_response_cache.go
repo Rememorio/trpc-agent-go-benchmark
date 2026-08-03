@@ -11,6 +11,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -24,9 +25,10 @@ import (
 )
 
 const (
-	lmeEmbeddingCacheRecordHeader  = "header"
-	lmeEmbeddingCacheRecordEntry   = "entry"
-	lmeEmbeddingCacheMaxRecordSize = 64 << 20
+	lmeEmbeddingCacheRecordHeader      = "header"
+	lmeEmbeddingCacheRecordEntry       = "entry"
+	lmeEmbeddingCacheRecordUsageUpdate = "usage"
+	lmeEmbeddingCacheMaxRecordSize     = 64 << 20
 )
 
 type lmeEmbeddingResponseCacheIdentity struct {
@@ -54,17 +56,27 @@ type lmeEmbeddingResponseCacheRecord struct {
 	LedgerID string                          `json:"ledger_id,omitempty"`
 	Key      string                          `json:"key,omitempty"`
 	Entry    *lmeEmbeddingResponseCacheEntry `json:"entry,omitempty"`
+	Usage    *lmeEmbeddingLogicalUsage       `json:"usage,omitempty"`
+}
+
+type lmeEmbeddingUsageRecovery struct {
+	done  chan struct{}
+	usage *lmeEmbeddingLogicalUsage
+	err   error
 }
 
 type longMemEvalEmbeddingResponseCache struct {
-	mu         sync.Mutex
-	path       string
-	ledgerID   string
-	entries    map[string]lmeEmbeddingResponseCacheEntry
-	requireHit bool
-	hits       int
-	misses     int
-	errors     int
+	mu                  sync.Mutex
+	path                string
+	ledgerID            string
+	entries             map[string]lmeEmbeddingResponseCacheEntry
+	recovering          map[string]*lmeEmbeddingUsageRecovery
+	requireHit          bool
+	recoverMissingUsage bool
+	hits                int
+	misses              int
+	errors              int
+	usageRecoveries     int
 }
 
 func openConfiguredLongMemEvalEmbeddingResponseCache() (
@@ -72,6 +84,8 @@ func openConfiguredLongMemEvalEmbeddingResponseCache() (
 	error,
 ) {
 	path := strings.TrimSpace(*flagLMEEmbeddingResponseCache)
+	recoverMissingUsage :=
+		*flagLMEEmbeddingResponseCacheRecoverMissingUsage
 	if path == "" {
 		if *flagLMEEmbeddingResponseCacheRequireHit {
 			return nil, fmt.Errorf(
@@ -79,13 +93,26 @@ func openConfiguredLongMemEvalEmbeddingResponseCache() (
 					"-lme-embedding-response-cache",
 			)
 		}
+		if recoverMissingUsage {
+			return nil, fmt.Errorf(
+				"-lme-embedding-response-cache-recover-missing-usage " +
+					"requires -lme-embedding-response-cache",
+			)
+		}
 		return nil, nil
+	}
+	if recoverMissingUsage && !*flagLMEEmbeddingResponseCacheRequireHit {
+		return nil, fmt.Errorf(
+			"-lme-embedding-response-cache-recover-missing-usage " +
+				"requires -lme-embedding-response-cache-require-hit",
+		)
 	}
 	cache, err := openLongMemEvalEmbeddingResponseCache(path)
 	if err != nil {
 		return nil, err
 	}
 	cache.requireHit = *flagLMEEmbeddingResponseCacheRequireHit
+	cache.recoverMissingUsage = recoverMissingUsage
 	return cache, nil
 }
 
@@ -94,8 +121,9 @@ func openLongMemEvalEmbeddingResponseCache(
 ) (*longMemEvalEmbeddingResponseCache, error) {
 	path = strings.TrimSpace(path)
 	cache := &longMemEvalEmbeddingResponseCache{
-		path:    path,
-		entries: make(map[string]lmeEmbeddingResponseCacheEntry),
+		path:       path,
+		entries:    make(map[string]lmeEmbeddingResponseCacheEntry),
+		recovering: make(map[string]*lmeEmbeddingUsageRecovery),
 	}
 	if path == "" {
 		return cache, nil
@@ -133,27 +161,9 @@ func openLongMemEvalEmbeddingResponseCache(
 			}
 			continue
 		}
-		if record.Type != lmeEmbeddingCacheRecordEntry || record.Entry == nil {
-			return nil, fmt.Errorf(
-				"invalid LongMemEval embedding response cache record on line %d",
-				line,
-			)
+		if err := cache.loadRecord(record, line); err != nil {
+			return nil, err
 		}
-		if _, duplicate := cache.entries[record.Key]; duplicate {
-			return nil, fmt.Errorf(
-				"duplicate LongMemEval embedding response cache key %q on line %d",
-				record.Key, line,
-			)
-		}
-		if err := validateLongMemEvalEmbeddingResponseCacheEntry(
-			record.Key, *record.Entry,
-		); err != nil {
-			return nil, fmt.Errorf(
-				"validate LongMemEval embedding response cache line %d: %w",
-				line, err,
-			)
-		}
-		cache.entries[record.Key] = *record.Entry
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf(
@@ -166,6 +176,65 @@ func openLongMemEvalEmbeddingResponseCache(
 		)
 	}
 	return cache, nil
+}
+
+func (c *longMemEvalEmbeddingResponseCache) loadRecord(
+	record lmeEmbeddingResponseCacheRecord,
+	line int,
+) error {
+	switch record.Type {
+	case lmeEmbeddingCacheRecordEntry:
+		if record.Entry == nil || record.Usage != nil {
+			break
+		}
+		if _, duplicate := c.entries[record.Key]; duplicate {
+			return fmt.Errorf(
+				"duplicate LongMemEval embedding response cache key %q on line %d",
+				record.Key, line,
+			)
+		}
+		if err := validateLongMemEvalEmbeddingResponseCacheEntry(
+			record.Key, *record.Entry,
+		); err != nil {
+			return fmt.Errorf(
+				"validate LongMemEval embedding response cache line %d: %w",
+				line, err,
+			)
+		}
+		c.entries[record.Key] = *record.Entry
+		return nil
+	case lmeEmbeddingCacheRecordUsageUpdate:
+		if record.Entry != nil || record.Usage == nil {
+			break
+		}
+		entry, ok := c.entries[record.Key]
+		if !ok {
+			return fmt.Errorf(
+				"LongMemEval embedding usage update for unknown key %q on line %d",
+				record.Key, line,
+			)
+		}
+		if entry.Usage != nil {
+			return fmt.Errorf(
+				"duplicate LongMemEval embedding usage update for key %q on line %d",
+				record.Key, line,
+			)
+		}
+		if err := validateLongMemEvalEmbeddingLogicalUsage(*record.Usage); err != nil {
+			return fmt.Errorf(
+				"validate LongMemEval embedding usage update line %d: %w",
+				line, err,
+			)
+		}
+		usage := *record.Usage
+		entry.Usage = &usage
+		c.entries[record.Key] = entry
+		return nil
+	}
+	return fmt.Errorf(
+		"invalid LongMemEval embedding response cache record on line %d",
+		line,
+	)
 }
 
 func (c *longMemEvalEmbeddingResponseCache) initializePersistentFile() error {
@@ -226,6 +295,10 @@ func (c *longMemEvalEmbeddingResponseCache) RequireHit() bool {
 	return c != nil && c.requireHit
 }
 
+func (c *longMemEvalEmbeddingResponseCache) RecoverMissingUsage() bool {
+	return c != nil && c.recoverMissingUsage
+}
+
 func (c *longMemEvalEmbeddingResponseCache) LedgerID() string {
 	if c == nil || !c.Persistent() {
 		return ""
@@ -253,6 +326,15 @@ func (c *longMemEvalEmbeddingResponseCache) Stats() (
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.hits, c.misses, c.errors
+}
+
+func (c *longMemEvalEmbeddingResponseCache) UsageRecoveries() int {
+	if c == nil {
+		return 0
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.usageRecoveries
 }
 
 func (c *longMemEvalEmbeddingResponseCache) Lookup(
@@ -307,44 +389,150 @@ func (c *longMemEvalEmbeddingResponseCache) Put(
 	if existing, ok := c.entries[key]; ok {
 		return append([]float64(nil), existing.Embedding...), nil
 	}
-	if c.Persistent() {
-		record := lmeEmbeddingResponseCacheRecord{
-			Type:  lmeEmbeddingCacheRecordEntry,
-			Key:   key,
-			Entry: &entry,
-		}
-		data, err := json.Marshal(record)
-		if err != nil {
-			c.errors++
-			return nil, fmt.Errorf(
-				"marshal LongMemEval embedding response cache entry: %w", err,
-			)
-		}
-		data = append(data, '\n')
-		file, err := os.OpenFile(c.path, os.O_APPEND|os.O_WRONLY, 0644)
-		if err != nil {
-			c.errors++
-			return nil, fmt.Errorf(
-				"open LongMemEval embedding response cache for append: %w", err,
-			)
-		}
-		_, writeErr := file.Write(data)
-		closeErr := file.Close()
-		if writeErr != nil {
-			c.errors++
-			return nil, fmt.Errorf(
-				"append LongMemEval embedding response cache: %w", writeErr,
-			)
-		}
-		if closeErr != nil {
-			c.errors++
-			return nil, fmt.Errorf(
-				"close LongMemEval embedding response cache: %w", closeErr,
-			)
-		}
+	if err := c.appendRecordLocked(lmeEmbeddingResponseCacheRecord{
+		Type:  lmeEmbeddingCacheRecordEntry,
+		Key:   key,
+		Entry: &entry,
+	}); err != nil {
+		return nil, err
 	}
 	c.entries[key] = entry
 	return append([]float64(nil), entry.Embedding...), nil
+}
+
+func (c *longMemEvalEmbeddingResponseCache) RecoverUsage(
+	ctx context.Context,
+	key string,
+	recoverUsage func() (*lmeEmbeddingLogicalUsage, error),
+) (*lmeEmbeddingLogicalUsage, error) {
+	if c == nil {
+		return nil, fmt.Errorf("LongMemEval embedding response cache is nil")
+	}
+	c.mu.Lock()
+	entry, ok := c.entries[key]
+	if !ok {
+		c.errors++
+		c.mu.Unlock()
+		return nil, fmt.Errorf(
+			"recover LongMemEval embedding usage for unknown key %q", key,
+		)
+	}
+	if entry.Usage != nil {
+		usage := *entry.Usage
+		c.mu.Unlock()
+		return &usage, nil
+	}
+	if active, ok := c.recovering[key]; ok {
+		c.mu.Unlock()
+		select {
+		case <-active.done:
+			return copyLongMemEvalEmbeddingLogicalUsage(active.usage), active.err
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	active := &lmeEmbeddingUsageRecovery{done: make(chan struct{})}
+	c.recovering[key] = active
+	c.mu.Unlock()
+
+	usage, err := recoverUsage()
+	if err == nil {
+		usage, err = c.putUsage(key, usage)
+	}
+
+	c.mu.Lock()
+	active.usage = copyLongMemEvalEmbeddingLogicalUsage(usage)
+	active.err = err
+	delete(c.recovering, key)
+	close(active.done)
+	c.mu.Unlock()
+	return copyLongMemEvalEmbeddingLogicalUsage(usage), err
+}
+
+func (c *longMemEvalEmbeddingResponseCache) putUsage(
+	key string,
+	usage *lmeEmbeddingLogicalUsage,
+) (*lmeEmbeddingLogicalUsage, error) {
+	if usage == nil {
+		c.recordError()
+		return nil, fmt.Errorf("LongMemEval embedding usage is nil")
+	}
+	if err := validateLongMemEvalEmbeddingLogicalUsage(*usage); err != nil {
+		c.recordError()
+		return nil, err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry, ok := c.entries[key]
+	if !ok {
+		c.errors++
+		return nil, fmt.Errorf(
+			"update LongMemEval embedding usage for unknown key %q", key,
+		)
+	}
+	if entry.Usage != nil {
+		return copyLongMemEvalEmbeddingLogicalUsage(entry.Usage), nil
+	}
+	copied := *usage
+	if err := c.appendRecordLocked(lmeEmbeddingResponseCacheRecord{
+		Type:  lmeEmbeddingCacheRecordUsageUpdate,
+		Key:   key,
+		Usage: &copied,
+	}); err != nil {
+		return &copied, err
+	}
+	entry.Usage = &copied
+	c.entries[key] = entry
+	c.usageRecoveries++
+	return &copied, nil
+}
+
+func (c *longMemEvalEmbeddingResponseCache) appendRecordLocked(
+	record lmeEmbeddingResponseCacheRecord,
+) error {
+	if !c.Persistent() {
+		return nil
+	}
+	data, err := json.Marshal(record)
+	if err != nil {
+		c.errors++
+		return fmt.Errorf(
+			"marshal LongMemEval embedding response cache record: %w", err,
+		)
+	}
+	data = append(data, '\n')
+	file, err := os.OpenFile(c.path, os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		c.errors++
+		return fmt.Errorf(
+			"open LongMemEval embedding response cache for append: %w", err,
+		)
+	}
+	_, writeErr := file.Write(data)
+	closeErr := file.Close()
+	if writeErr != nil {
+		c.errors++
+		return fmt.Errorf(
+			"append LongMemEval embedding response cache: %w", writeErr,
+		)
+	}
+	if closeErr != nil {
+		c.errors++
+		return fmt.Errorf(
+			"close LongMemEval embedding response cache: %w", closeErr,
+		)
+	}
+	return nil
+}
+
+func copyLongMemEvalEmbeddingLogicalUsage(
+	usage *lmeEmbeddingLogicalUsage,
+) *lmeEmbeddingLogicalUsage {
+	if usage == nil {
+		return nil
+	}
+	copied := *usage
+	return &copied
 }
 
 func (c *longMemEvalEmbeddingResponseCache) recordError() {
@@ -409,13 +597,23 @@ func validateLongMemEvalEmbeddingResponseCacheEntry(
 			return fmt.Errorf("embedding value %d is not finite", i)
 		}
 	}
-	if entry.Usage != nil &&
-		(entry.Usage.PromptTokens < 0 ||
-			entry.Usage.TotalTokens < entry.Usage.PromptTokens) {
+	if entry.Usage != nil {
+		if err := validateLongMemEvalEmbeddingLogicalUsage(
+			*entry.Usage,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateLongMemEvalEmbeddingLogicalUsage(
+	usage lmeEmbeddingLogicalUsage,
+) error {
+	if usage.PromptTokens < 0 || usage.TotalTokens < usage.PromptTokens {
 		return fmt.Errorf(
 			"embedding usage prompt=%d total=%d is invalid",
-			entry.Usage.PromptTokens,
-			entry.Usage.TotalTokens,
+			usage.PromptTokens, usage.TotalTokens,
 		)
 	}
 	return nil
@@ -437,7 +635,9 @@ func initializeLongMemEvalEmbeddingResponseCacheMetadata(
 	}
 	metadata["embedding_response_cache_initial_entries"] = cache.Len()
 	metadata["embedding_response_cache_require_hit"] = cache.RequireHit()
-	metadata["embedding_response_cache_note"] = "Identical embedding texts share an exact vector across paired runs; raw text is represented only by a hash. Embedding requests count logical embedder calls; calls and tokens count provider misses; logical tokens include cache hits when the cache entry carries usage; logical_usage_missing_requests identifies legacy or failed requests without reconstructable usage."
+	metadata["embedding_response_cache_recover_missing_usage"] =
+		cache.RecoverMissingUsage()
+	metadata["embedding_response_cache_note"] = "Identical embedding texts share an exact vector across paired runs; raw text is represented only by a hash. Embedding requests count logical embedder calls; calls and tokens count provider misses or usage-recovery calls. Usage recovery discards provider vectors and preserves the sealed cached vector. Logical tokens include cache hits when the cache entry carries usage; logical_usage_missing_requests identifies legacy or failed requests without reconstructable usage."
 }
 
 func updateLongMemEvalEmbeddingResponseCacheMetadata(
@@ -452,6 +652,8 @@ func updateLongMemEvalEmbeddingResponseCacheMetadata(
 	metadata["embedding_response_cache_hits"] = hits
 	metadata["embedding_response_cache_misses"] = misses
 	metadata["embedding_response_cache_errors"] = cacheErrors
+	metadata["embedding_response_cache_recovered_usage_entries"] =
+		cache.UsageRecoveries()
 }
 
 func clearLongMemEvalEmbeddingResponseCacheMetadata(metadata map[string]any) {
@@ -461,10 +663,12 @@ func clearLongMemEvalEmbeddingResponseCacheMetadata(metadata map[string]any) {
 		"embedding_response_cache_ledger_id",
 		"embedding_response_cache_initial_entries",
 		"embedding_response_cache_require_hit",
+		"embedding_response_cache_recover_missing_usage",
 		"embedding_response_cache_final_entries",
 		"embedding_response_cache_hits",
 		"embedding_response_cache_misses",
 		"embedding_response_cache_errors",
+		"embedding_response_cache_recovered_usage_entries",
 		"embedding_response_cache_note",
 	} {
 		delete(metadata, key)
