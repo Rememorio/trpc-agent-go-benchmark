@@ -46,8 +46,10 @@ type lmeStagedExtractorStub struct {
 }
 
 type lmePairProvenanceBackend struct {
-	ingested       int
-	providerErrors int
+	ingested             int
+	providerErrors       int
+	ingestErrors         map[int]error
+	continueIngestErrors bool
 }
 
 func (b *lmePairProvenanceBackend) Name() string { return "pair-provenance" }
@@ -58,7 +60,11 @@ func (b *lmePairProvenanceBackend) IngestPair(
 	ingestMeta,
 ) (*extractionTrace, error) {
 	b.ingested++
-	return nil, nil
+	return nil, b.ingestErrors[b.ingested]
+}
+
+func (b *lmePairProvenanceBackend) continueAfterIngestError(error) bool {
+	return b.continueIngestErrors
 }
 
 func (b *lmePairProvenanceBackend) Flush(context.Context) error { return nil }
@@ -1551,6 +1557,7 @@ func TestRetryableMem0Response(t *testing.T) {
 		"provider_timeout",
 		"provider_unavailable",
 		"provider_bad_request",
+		"provider_invalid_response",
 	} {
 		body := []byte(fmt.Sprintf(`{"code":%q}`, code))
 		if !isRetryableMem0Response(http.StatusBadGateway, body) {
@@ -1583,6 +1590,30 @@ func TestRetryableMem0Response(t *testing.T) {
 		`mem0 api request failed: status=502 body={"code":"provider_auth_failed"}`,
 	)) {
 		t.Fatal("provider authentication error should not be retryable")
+	}
+}
+
+func TestMem0ContinuesOnlyAfterInvalidStructuredResponse(t *testing.T) {
+	t.Parallel()
+
+	backend := &mem0Backend{selfHosted: true}
+	invalid := newMem0OSSRequestError(
+		http.StatusBadGateway,
+		[]byte(`{"code":"provider_invalid_response"}`),
+	)
+	if !backend.continueAfterIngestError(invalid) {
+		t.Fatal("invalid structured response should be recorded and skipped")
+	}
+	unavailable := newMem0OSSRequestError(
+		http.StatusBadGateway,
+		[]byte(`{"code":"provider_unavailable"}`),
+	)
+	if backend.continueAfterIngestError(unavailable) {
+		t.Fatal("ambiguous provider outage should remain fatal")
+	}
+	backend.selfHosted = false
+	if backend.continueAfterIngestError(invalid) {
+		t.Fatal("cloud Mem0 errors should remain fatal")
 	}
 }
 
@@ -4006,6 +4037,66 @@ func TestRunCaseBackendStopsIngestionOnEmbeddingProviderError(t *testing.T) {
 	if result.EmbeddingUsage == nil ||
 		result.EmbeddingUsage.ProviderErrors != 1 {
 		t.Fatalf("embedding usage = %+v", result.EmbeddingUsage)
+	}
+}
+
+func TestRunCaseBackendRecordsContinuableIngestFailure(t *testing.T) {
+	oldAnswer := *flagLMEAnswer
+	oldIngestWait := *flagLMEIngestWait
+	oldMaxSessions := *flagLMEMaxSessions
+	oldMaxPairs := *flagLMEMaxPairs
+	oldTopK := *flagVectorTopK
+	*flagLMEAnswer = false
+	*flagLMEIngestWait = 0
+	*flagLMEMaxSessions = 0
+	*flagLMEMaxPairs = 0
+	*flagVectorTopK = 30
+	t.Cleanup(func() {
+		*flagLMEAnswer = oldAnswer
+		*flagLMEIngestWait = oldIngestWait
+		*flagLMEMaxSessions = oldMaxSessions
+		*flagLMEMaxPairs = oldMaxPairs
+		*flagVectorTopK = oldTopK
+	})
+
+	instance := &lmeInstance{
+		QuestionID:   "question-1",
+		QuestionType: "single-session-user",
+		Question:     "What fact was retained?",
+		Answer:       flexString("second fact"),
+		HaystackDates: []string{
+			"2026/07/20 (Mon) 12:00",
+		},
+		HaystackSessionIDs: []string{
+			"session-1",
+		},
+		HaystackSessions: [][]lmeTurn{{
+			{Role: "user", Content: "first fact"},
+			{Role: "assistant", Content: "acknowledged"},
+			{Role: "user", Content: "second fact"},
+			{Role: "assistant", Content: "acknowledged"},
+		}},
+	}
+	backend := &lmePairProvenanceBackend{
+		ingestErrors:         map[int]error{1: errors.New("invalid structured output")},
+		continueIngestErrors: true,
+	}
+	result := runCaseBackend(
+		context.Background(), nil, &lmeTokenTracker{}, backend,
+		instance, "run-1", "continuation-scope", "glm52", "glm", nil,
+	)
+
+	if result.Error != "" {
+		t.Fatalf("runCaseBackend() error = %q", result.Error)
+	}
+	if result.IngestedPairs != 2 || result.IngestFailedPairs != 1 ||
+		len(result.IngestTraces) != 2 ||
+		!result.IngestTraces[0].ContinuedAfterError ||
+		result.IngestTraces[1].ContinuedAfterError {
+		t.Fatalf("unexpected ingest failure accounting: %+v", result)
+	}
+	if backend.ingested != 2 {
+		t.Fatalf("ingested pairs = %d, want 2", backend.ingested)
 	}
 }
 

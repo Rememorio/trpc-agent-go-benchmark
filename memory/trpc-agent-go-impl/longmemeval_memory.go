@@ -51,15 +51,16 @@ const (
 	lmePGVectorTableBase          = "lme_memory_eval"
 	lmePGVectorMaxTableNameLength = 63
 
-	defaultMem0Host          = "http://localhost:8888"
-	lmeMem0RequestRetries    = 8
-	lmeMem0InitialRetryDelay = time.Second
-	lmeMem0MaximumRetryDelay = time.Minute
-	lmeMem0RequestOverhead   = time.Minute
-	lmeMem0RequestTimeout    = 10 * time.Minute
-	lmeAutoMemoryPoll        = 20 * time.Millisecond
-	lmeAutoMemoryGrace       = time.Second
-	lmeAutoMemoryTimeout     = 10 * time.Minute
+	defaultMem0Host               = "http://localhost:8888"
+	lmeMem0RequestRetries         = 8
+	lmeMem0InvalidResponseRetries = 4
+	lmeMem0InitialRetryDelay      = time.Second
+	lmeMem0MaximumRetryDelay      = time.Minute
+	lmeMem0RequestOverhead        = time.Minute
+	lmeMem0RequestTimeout         = 10 * time.Minute
+	lmeAutoMemoryPoll             = 20 * time.Millisecond
+	lmeAutoMemoryGrace            = time.Second
+	lmeAutoMemoryTimeout          = 10 * time.Minute
 
 	// This diagnostic state is optional: upstream main does not write it,
 	// while candidate builds can surface asynchronous extraction failures.
@@ -144,6 +145,10 @@ type memoryBackend interface {
 	Close() error
 }
 
+type ingestErrorContinuationPolicy interface {
+	continueAfterIngestError(error) bool
+}
+
 // Mem0 OSS exposes a capped top_k list API rather than pagination. Reading at
 // the server cap captures normal runs and lets the result mark the ambiguous
 // boundary instead of silently treating a partial snapshot as complete.
@@ -212,6 +217,7 @@ type ingestTrace struct {
 	ProviderUsageReported bool               `json:"provider_usage_reported,omitempty"`
 	ProviderUsageError    string             `json:"provider_usage_error,omitempty"`
 	Error                 string             `json:"error,omitempty"`
+	ContinuedAfterError   bool               `json:"continued_after_error,omitempty"`
 	DurationMs            int64              `json:"duration_ms"`
 }
 
@@ -270,6 +276,7 @@ type backendResult struct {
 	UserID                string              `json:"user_id"`
 	SessionID             string              `json:"session_id"`
 	IngestedPairs         int                 `json:"ingested_pairs"`
+	IngestFailedPairs     int                 `json:"ingest_failed_pairs,omitempty"`
 	IngestTraces          []ingestTrace       `json:"ingest_traces"`
 	FinalMemories         []memorySnapshot    `json:"final_memories"`
 	SnapshotTruncated     bool                `json:"snapshot_truncated,omitempty"`
@@ -399,6 +406,7 @@ type backendSummary struct {
 	JudgedCases                    int               `json:"judged_cases,omitempty"`
 	JudgeCorrect                   int               `json:"judge_correct,omitempty"`
 	TotalPairs                     int               `json:"total_pairs"`
+	IngestFailedPairs              int               `json:"ingest_failed_pairs,omitempty"`
 	TotalMemories                  int               `json:"total_memories"`
 	TruncatedSnapshots             int               `json:"truncated_snapshots,omitempty"`
 	TotalHits                      int               `json:"total_hits"`
@@ -659,6 +667,24 @@ type mem0Backend struct {
 	usage      *lmeProviderUsageTracker
 }
 
+type mem0OSSRequestError struct {
+	status int
+	body   string
+	code   string
+}
+
+func (e *mem0OSSRequestError) Error() string {
+	return fmt.Sprintf("mem0 OSS ingest failed: status=%d body=%s", e.status, e.body)
+}
+
+func newMem0OSSRequestError(status int, body []byte) *mem0OSSRequestError {
+	return &mem0OSSRequestError{
+		status: status,
+		body:   strings.TrimSpace(string(body)),
+		code:   mem0ProviderErrorCode(body),
+	}
+}
+
 type mem0RuntimeConfiguration struct {
 	Version             string   `json:"version,omitempty"`
 	LLMProvider         string   `json:"llm_provider,omitempty"`
@@ -671,6 +697,15 @@ type mem0RuntimeConfiguration struct {
 }
 
 func (b *mem0Backend) Name() string { return "mem0" }
+
+func (b *mem0Backend) continueAfterIngestError(err error) bool {
+	if !b.selfHosted {
+		return false
+	}
+	var requestErr *mem0OSSRequestError
+	return errors.As(err, &requestErr) &&
+		requestErr.code == "provider_invalid_response"
+}
 
 func (b *mem0Backend) Flush(ctx context.Context) error { return b.svc.Close() }
 
@@ -784,9 +819,13 @@ func (b *mem0Backend) ingestPairOSS(ctx context.Context, sess *session.Session, 
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 			return nil
 		}
-		lastErr = fmt.Errorf("mem0 OSS ingest failed: status=%d body=%s",
-			resp.StatusCode, strings.TrimSpace(string(body)))
+		requestErr := newMem0OSSRequestError(resp.StatusCode, body)
+		lastErr = requestErr
 		if !isRetryableMem0Response(resp.StatusCode, body) {
+			return lastErr
+		}
+		if requestErr.code == "provider_invalid_response" &&
+			attempt >= lmeMem0InvalidResponseRetries {
 			return lastErr
 		}
 	}
@@ -1514,8 +1553,8 @@ func longMemEvalCaseActionProgress(
 
 func longMemEvalBackendProgress(backendName string, br *backendResult, blind bool) string {
 	if blind {
-		return fmt.Sprintf("  %s pairs=%d memories=%d snapshot_truncated=%v hits=%d calls=%d tokens=%d cached=%d embed_requests=%d embed_calls=%d embed_provider_tokens=%d embed_logical_tokens=%d embed_logical_missing=%d provider_usage=%v",
-			backendName, br.IngestedPairs, len(br.FinalMemories), br.SnapshotTruncated, len(br.Retrieval),
+		return fmt.Sprintf("  %s pairs=%d failed_pairs=%d memories=%d snapshot_truncated=%v hits=%d calls=%d tokens=%d cached=%d embed_requests=%d embed_calls=%d embed_provider_tokens=%d embed_logical_tokens=%d embed_logical_missing=%d provider_usage=%v",
+			backendName, br.IngestedPairs, br.IngestFailedPairs, len(br.FinalMemories), br.SnapshotTruncated, len(br.Retrieval),
 			tokenCalls(br.TokenUsage), tokenTotal(br.TokenUsage), tokenCached(br.TokenUsage),
 			embeddingRequests(br.EmbeddingUsage),
 			embeddingCalls(br.EmbeddingUsage),
@@ -1524,8 +1563,8 @@ func longMemEvalBackendProgress(backendName string, br *backendResult, blind boo
 			embeddingLogicalUsageMissing(br.EmbeddingUsage),
 			br.ProviderUsageReported)
 	}
-	return fmt.Sprintf("  %s pairs=%d memories=%d snapshot_truncated=%v hits=%d evidence=%s calls=%d tokens=%d cached=%d embed_requests=%d embed_calls=%d embed_provider_tokens=%d embed_logical_tokens=%d embed_logical_missing=%d provider_usage=%v em=%v f1=%.3f answer=%q",
-		backendName, br.IngestedPairs, len(br.FinalMemories), br.SnapshotTruncated, len(br.Retrieval),
+	return fmt.Sprintf("  %s pairs=%d failed_pairs=%d memories=%d snapshot_truncated=%v hits=%d evidence=%s calls=%d tokens=%d cached=%d embed_requests=%d embed_calls=%d embed_provider_tokens=%d embed_logical_tokens=%d embed_logical_missing=%d provider_usage=%v em=%v f1=%.3f answer=%q",
+		backendName, br.IngestedPairs, br.IngestFailedPairs, len(br.FinalMemories), br.SnapshotTruncated, len(br.Retrieval),
 		br.FailureStage,
 		tokenCalls(br.TokenUsage), tokenTotal(br.TokenUsage), tokenCached(br.TokenUsage),
 		embeddingRequests(br.EmbeddingUsage),
@@ -1674,9 +1713,17 @@ func runCaseBackend(
 			trace.NewMemories = newOrChanged
 			br.FinalMemories = memories
 			br.SnapshotTruncated = snapshotTruncated
+			continueAfterError := false
 			if err != nil {
 				trace.Error = err.Error()
-				br.Error = err.Error()
+				if policy, ok := backend.(ingestErrorContinuationPolicy); ok &&
+					policy.continueAfterIngestError(err) {
+					trace.ContinuedAfterError = true
+					br.IngestFailedPairs++
+					continueAfterError = true
+				} else {
+					br.Error = err.Error()
+				}
 			}
 			trace.DurationMs = time.Since(pairStart).Milliseconds()
 			br.IngestTraces = append(br.IngestTraces, trace)
@@ -1698,7 +1745,7 @@ func runCaseBackend(
 					*flagLMEBlindProgress,
 				))
 			}
-			if err != nil {
+			if err != nil && !continueAfterError {
 				goto afterIngest
 			}
 		}
@@ -3987,9 +4034,9 @@ func printLongMemEvalSummary(result *runResult) {
 		if summary.JudgedCases > 0 {
 			judgeText = fmt.Sprintf(" judge=%d/%d", summary.JudgeCorrect, summary.JudgedCases)
 		}
-		fmt.Printf("  %s: cases=%d EM=%d%s truncatedSnapshots=%d evidence=%d extractAny=%d retrievalAny=%d retrievalAll=%d turnEvidence=%d turnExtractAny=%d turnRetrievalAny=%d avgF1=%.3f avgBLEU=%.3f calls=%d tokens=%d cached=%d cacheHit=%.3f answerTokens=%d answerLogicalTokens=%d answerLogical=%d/%d judgeTokens=%d judgeLogicalTokens=%d judgeLogical=%d/%d embedRequests=%d embedCalls=%d embedProviderTokens=%d embedLogicalTokens=%d embedLogicalMissing=%d providerUsage=%d/%d\n",
+		fmt.Printf("  %s: cases=%d EM=%d%s failedPairs=%d truncatedSnapshots=%d evidence=%d extractAny=%d retrievalAny=%d retrievalAll=%d turnEvidence=%d turnExtractAny=%d turnRetrievalAny=%d avgF1=%.3f avgBLEU=%.3f calls=%d tokens=%d cached=%d cacheHit=%.3f answerTokens=%d answerLogicalTokens=%d answerLogical=%d/%d judgeTokens=%d judgeLogicalTokens=%d judgeLogical=%d/%d embedRequests=%d embedCalls=%d embedProviderTokens=%d embedLogicalTokens=%d embedLogicalMissing=%d providerUsage=%d/%d\n",
 			backend, summary.Cases, summary.ExactMatches,
-			judgeText, summary.TruncatedSnapshots,
+			judgeText, summary.IngestFailedPairs, summary.TruncatedSnapshots,
 			summary.EvidenceCases, summary.ExtractRecallAny, summary.RetrievalRecallAny, summary.RetrievalRecallAll,
 			summary.TurnEvidenceCases, summary.ExtractTurnAny, summary.RetrievalTurnAny,
 			summary.AvgF1, summary.AvgBLEU,
@@ -4045,6 +4092,7 @@ func buildLongMemEvalSummary(cases []*caseResult) *runSummary {
 				}
 			}
 			bs.TotalPairs += br.IngestedPairs
+			bs.IngestFailedPairs += br.IngestFailedPairs
 			bs.TotalMemories += len(br.FinalMemories)
 			if br.SnapshotTruncated {
 				bs.TruncatedSnapshots++
@@ -4951,21 +4999,26 @@ func isRetryableMem0Error(err error) bool {
 }
 
 func mem0ProviderErrorRetryable(body []byte) bool {
-	var payload struct {
-		Code string `json:"code"`
-	}
-	if json.Unmarshal(body, &payload) != nil {
-		return false
-	}
-	switch payload.Code {
+	switch mem0ProviderErrorCode(body) {
 	case "provider_rate_limited",
 		"provider_timeout",
 		"provider_unavailable",
-		"provider_bad_request":
+		"provider_bad_request",
+		"provider_invalid_response":
 		return true
 	default:
 		return false
 	}
+}
+
+func mem0ProviderErrorCode(body []byte) string {
+	var payload struct {
+		Code string `json:"code"`
+	}
+	if json.Unmarshal(body, &payload) != nil {
+		return ""
+	}
+	return payload.Code
 }
 
 func mem0RequestRetryDelay(attempt int) time.Duration {
