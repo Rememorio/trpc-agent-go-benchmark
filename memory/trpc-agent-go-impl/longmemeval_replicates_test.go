@@ -1575,6 +1575,58 @@ func TestValidateLongMemEvalReplicateRegisteredCacheTimelines(t *testing.T) {
 		t.Fatalf("registered cache timelines: %v", err)
 	}
 
+	baselineJudged := filepath.Join(dir, "a-judged.json")
+	candidateJudged := filepath.Join(dir, "c-judged.json")
+	for source, destination := range map[string]string{
+		paths[0]: baselineJudged,
+		paths[2]: candidateJudged,
+	} {
+		result, err := loadLongMemEvalResults(filepath.Join(dir, source))
+		if err != nil {
+			t.Fatalf("load answer-stage result: %v", err)
+		}
+		result.Metadata["judged_at"] = "2026-08-12T00:00:00Z"
+		result.Metadata["judge_model"] = "judge-model"
+		result.Cases[0].BackendResults["pgvector"].EvaluatedFailureStage = "ok"
+		if err := writeLongMemEvalResults(destination, result); err != nil {
+			t.Fatalf("write judged result: %v", err)
+		}
+	}
+	answerStageSpec := spec
+	answerStageSpec.BaselineResults = filepath.Base(baselineJudged)
+	answerStageSpec.CandidateResults = filepath.Base(candidateJudged)
+	answerStageSpec.AnswerCacheTimelineResults = paths
+	answerStageSpec.JudgeCacheTimelineResults = []string{
+		filepath.Base(candidateJudged), paths[1], filepath.Base(baselineJudged),
+	}
+	if err := validateLongMemEvalReplicateRegisteredCacheTimelines(
+		dir, answerStageSpec,
+	); err != nil {
+		t.Fatalf("answer-stage cache timeline: %v", err)
+	}
+
+	candidateAnswer, err := loadLongMemEvalResults(filepath.Join(dir, paths[2]))
+	if err != nil {
+		t.Fatalf("load candidate answer-stage result: %v", err)
+	}
+	originalAnswer := candidateAnswer.Cases[0].BackendResults["pgvector"].Answer
+	candidateAnswer.Cases[0].BackendResults["pgvector"].Answer = "tampered answer"
+	if err := writeLongMemEvalResults(
+		filepath.Join(dir, paths[2]), candidateAnswer,
+	); err != nil {
+		t.Fatalf("tamper candidate answer-stage result: %v", err)
+	}
+	err = validateLongMemEvalReplicateRegisteredCacheTimelines(dir, answerStageSpec)
+	if err == nil || !strings.Contains(err.Error(), "does not contain") {
+		t.Fatalf("tampered answer-stage error = %v", err)
+	}
+	candidateAnswer.Cases[0].BackendResults["pgvector"].Answer = originalAnswer
+	if err := writeLongMemEvalResults(
+		filepath.Join(dir, paths[2]), candidateAnswer,
+	); err != nil {
+		t.Fatalf("restore candidate answer-stage result: %v", err)
+	}
+
 	middle, err := loadLongMemEvalResults(filepath.Join(dir, paths[1]))
 	if err != nil {
 		t.Fatalf("load middle result: %v", err)

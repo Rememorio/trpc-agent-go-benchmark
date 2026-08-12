@@ -640,6 +640,16 @@ memory cost; cache-independent logical usage remains the promotion-gate basis.
 Judging a `reanswered_results.json` artifact writes
 `reanswered_judged_results.json`, which is the file referenced by each
 independent-reanswer manifest entry.
+When another arm shares the same answer or judge ledger but is not itself part
+of a pairwise comparison, register the complete execution order with
+`answer_cache_timeline_results` and `judge_cache_timeline_results`. The answer
+timeline may reference the corresponding pre-judge `reanswered_results.json`
+files; the validator matches them to the compared judged files by hashing the
+full answer-stage state while excluding only fields added by judging. The judge
+timeline references the final judged files. Both timelines must start from an
+empty ledger, remain contiguous, use one ledger ID, and contain an artifact for
+each compared arm. This keeps a third arm from making an otherwise valid shared
+ledger look non-fresh without weakening answer or usage integrity checks.
 The aggregator verifies that ingestion,
 persisted memories, retrieval hits, and memory-layer usage are byte-stable after
 normalizing answer and judge fields. It then reports primary accuracy, majority

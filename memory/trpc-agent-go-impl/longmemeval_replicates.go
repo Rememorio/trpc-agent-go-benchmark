@@ -790,8 +790,30 @@ func validateLongMemEvalReplicateCacheTimeline(
 	paths, requiredPaths []string,
 ) error {
 	required := make(map[string]bool, len(requiredPaths))
+	requiredAnswerDigests := make(map[string][]string, len(requiredPaths))
 	for _, path := range requiredPaths {
-		required[resolveLongMemEvalReplicatePath(baseDir, path)] = false
+		resolved := resolveLongMemEvalReplicatePath(baseDir, path)
+		required[resolved] = false
+		if prefix != "answer_cache" {
+			continue
+		}
+		result, err := loadLongMemEvalResults(resolved)
+		if err != nil {
+			return fmt.Errorf(
+				"load replicate %q comparison result %q: %w",
+				replicate, resolved, err,
+			)
+		}
+		digest, err := longMemEvalReplicateAnswerTimelineDigest(result)
+		if err != nil {
+			return fmt.Errorf(
+				"hash replicate %q comparison result %q: %w",
+				replicate, resolved, err,
+			)
+		}
+		requiredAnswerDigests[digest] = append(
+			requiredAnswerDigests[digest], resolved,
+		)
 	}
 	ledgerKey := prefix + "_ledger_id"
 	initialKey := prefix + "_initial_entries"
@@ -809,6 +831,18 @@ func validateLongMemEvalReplicateCacheTimeline(
 		}
 		if _, ok := required[resolved]; ok {
 			required[resolved] = true
+		}
+		if prefix == "answer_cache" {
+			digest, err := longMemEvalReplicateAnswerTimelineDigest(result)
+			if err != nil {
+				return fmt.Errorf(
+					"hash replicate %q %s timeline item %d: %w",
+					replicate, prefix, index, err,
+				)
+			}
+			for _, requiredPath := range requiredAnswerDigests[digest] {
+				required[requiredPath] = true
+			}
 		}
 		currentLedger, ok := lmeMetadataString(
 			result.Metadata, ledgerKey,
@@ -868,6 +902,40 @@ func validateLongMemEvalReplicateCacheTimeline(
 		}
 	}
 	return nil
+}
+
+func longMemEvalReplicateAnswerTimelineDigest(result *runResult) (string, error) {
+	if result == nil {
+		return "", errors.New("results are nil")
+	}
+	stable := runResult{Metadata: make(map[string]any, len(result.Metadata))}
+	for key, value := range result.Metadata {
+		if strings.HasPrefix(key, "judge_") || key == "judged_at" {
+			continue
+		}
+		stable.Metadata[key] = value
+	}
+	stable.Cases = make([]*caseResult, 0, len(result.Cases))
+	for _, cr := range result.Cases {
+		if cr == nil {
+			stable.Cases = append(stable.Cases, nil)
+			continue
+		}
+		copyCR := *cr
+		copyCR.BackendResults = make(map[string]*backendResult, len(cr.BackendResults))
+		for backend, br := range cr.BackendResults {
+			if br == nil {
+				copyCR.BackendResults[backend] = nil
+				continue
+			}
+			copyBR := *br
+			copyBR.Judge = nil
+			copyBR.EvaluatedFailureStage = ""
+			copyCR.BackendResults[backend] = &copyBR
+		}
+		stable.Cases = append(stable.Cases, &copyCR)
+	}
+	return longMemEvalJSONSHA256(stable)
 }
 
 func validateLongMemEvalReplicateJudges(
