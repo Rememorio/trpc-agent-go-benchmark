@@ -74,8 +74,7 @@ type locomoReplicateArmSpec struct {
 	BuildProfile                string                     `json:"build_profile"`
 	ModuleReplacementVersion    string                     `json:"module_replacement_version"`
 	UpdatePolicy                string                     `json:"update_policy"`
-	AssistantResultExtraction   bool                       `json:"assistant_result_extraction"`
-	AssistantResultUpdatePolicy string                     `json:"assistant_result_update_policy,omitempty"`
+	AssistantEpisodeExtraction  bool                       `json:"assistant_episode_extraction"`
 	TableSuffix                 string                     `json:"table_suffix"`
 	TableStats                  string                     `json:"table_stats"`
 	MemorySnapshot              string                     `json:"memory_snapshot"`
@@ -749,10 +748,8 @@ func validateLoCoMoReplicateResult(
 	}
 	if metadata.PGVectorExtraction == nil ||
 		string(metadata.PGVectorExtraction.UpdatePolicy) != arm.UpdatePolicy ||
-		metadata.PGVectorExtraction.AssistantResultExtraction !=
-			arm.AssistantResultExtraction ||
-		metadata.PGVectorExtraction.AssistantResultUpdatePolicy !=
-			arm.AssistantResultUpdatePolicy {
+		metadata.PGVectorExtraction.AssistantEpisodeExtraction !=
+			arm.AssistantEpisodeExtraction {
 		return fmt.Errorf("result extraction configuration does not match the manifest")
 	}
 	if summary.TotalSamples != protocol.ExpectedSamples ||

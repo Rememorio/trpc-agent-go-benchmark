@@ -224,28 +224,6 @@ func TestWaitForAutoExtraction(t *testing.T) {
 	}
 }
 
-func TestWaitForAutoExtractionChecksEarlierErrors(t *testing.T) {
-	first := autoExtractionTestSession("first", time.Now().UTC())
-	first.SetState(autoMemoryLastErrorStateKey, []byte("embedding failed"))
-	final := autoExtractionTestSession(
-		"final", time.Now().UTC().Add(time.Second),
-	)
-	want := latestAutoExtractionTimestamp(final)
-	final.SetState(
-		memory.SessionStateKeyAutoMemoryLastExtractAt,
-		[]byte(want.Format(time.RFC3339Nano)),
-	)
-
-	err := waitForAutoExtraction(
-		context.Background(),
-		[]*session.Session{first, final},
-		time.Second,
-	)
-	if err == nil || !strings.Contains(err.Error(), "embedding failed") {
-		t.Fatalf("error = %v, want earlier extraction failure", err)
-	}
-}
-
 func TestWaitForAutoExtractionRejectsInvalidMarker(t *testing.T) {
 	final := autoExtractionTestSession("final", time.Now().UTC())
 	final.SetState(
@@ -478,11 +456,7 @@ func (s *controlledAutoExtractionEnqueuer) EnqueueAutoMemoryJob(
 ) error {
 	s.enqueued <- sess.ID
 	if sess.ID == s.firstSession && s.failFirst {
-		sess.SetState(
-			autoMemoryLastErrorStateKey,
-			[]byte("injected failure"),
-		)
-		return nil
+		return errors.New("injected failure")
 	}
 	complete := func() {
 		want := latestAutoExtractionTimestamp(sess)

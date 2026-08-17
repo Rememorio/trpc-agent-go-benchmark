@@ -164,9 +164,7 @@ func TestCompareLongMemEvalReplicates(t *testing.T) {
 				"## Resource Accounting by Type",
 				"## Pairwise Majority Outcomes",
 				"## Extraction Diagnostics",
-				"## Post-Policy Diagnostics",
-				"## Raw Persistence Diagnostics",
-				"## Post-Policy Persistence Diagnostics",
+				"## Persistence Diagnostics",
 				"## Case Failure Attribution",
 			} {
 				if !strings.Contains(string(contents), section) {
@@ -1848,12 +1846,8 @@ func TestAddLongMemEvalReplicateTraceDiagnostics(t *testing.T) {
 	t.Parallel()
 
 	diagnostics := lmeReplicateExtractionDiagnostics{
-		OperationsByStage:             make(map[string]int),
-		OperationsByType:              make(map[string]int),
-		PostPolicyOperationsByStage:   make(map[string]int),
-		PostPolicyOperationsByType:    make(map[string]int),
-		PostPolicyPersistenceByStatus: make(map[string]int),
-		PostPolicyPersistenceByEffect: make(map[string]int),
+		OperationsByStage: make(map[string]int),
+		OperationsByType:  make(map[string]int),
 	}
 	addLongMemEvalReplicateTraceDiagnostics(
 		&diagnostics,
@@ -1866,15 +1860,15 @@ func TestAddLongMemEvalReplicateTraceDiagnostics(t *testing.T) {
 			Extraction: &extractionTrace{
 				Operations: []extractionOperation{
 					{
-						Stage: "primary",
+						Stage: "ordinary",
 						Type:  extractor.OperationAdd,
 					},
 					{
-						Stage: "primary",
+						Stage: "ordinary",
 						Type:  extractor.OperationUpdate,
 					},
 					{
-						Stage: "assistant_result",
+						Stage: "assistant_episode",
 						Type:  extractor.OperationAdd,
 					},
 				},
@@ -1885,28 +1879,6 @@ func TestAddLongMemEvalReplicateTraceDiagnostics(t *testing.T) {
 					},
 					{Status: lmePersistenceAlreadySatisfied},
 					{Status: lmePersistenceNotObserved},
-				},
-				PostPolicyObserved: true,
-				PostPolicyOperations: []extractionOperation{
-					{
-						Stage:    "primary",
-						Type:     extractor.OperationUpdate,
-						MemoryID: "existing",
-					},
-					{
-						Stage: "assistant_result",
-						Type:  extractor.OperationAdd,
-					},
-				},
-				PostPolicyPersistence: []extractionPersistenceTrace{
-					{
-						Status: lmePersistenceObserved,
-						Effect: string(extractor.OperationUpdate),
-					},
-					{
-						Status: lmePersistenceObserved,
-						Effect: string(extractor.OperationAdd),
-					},
 				},
 				ModelCalls: []lmeModelCallTrace{{}, {}, {}},
 			},
@@ -1921,18 +1893,10 @@ func TestAddLongMemEvalReplicateTraceDiagnostics(t *testing.T) {
 		diagnostics.OperationPairs != 1 ||
 		diagnostics.ZeroOperationPairs != 0 ||
 		diagnostics.Operations != 3 ||
-		diagnostics.OperationsByStage["primary"] != 2 ||
-		diagnostics.OperationsByStage["assistant_result"] != 1 ||
+		diagnostics.OperationsByStage["ordinary"] != 2 ||
+		diagnostics.OperationsByStage["assistant_episode"] != 1 ||
 		diagnostics.OperationsByType[string(extractor.OperationAdd)] != 2 ||
 		diagnostics.OperationsByType[string(extractor.OperationUpdate)] != 1 ||
-		diagnostics.PostPolicyObservedPairs != 1 ||
-		diagnostics.PostPolicyOperationPairs != 1 ||
-		diagnostics.PostPolicyZeroOperationPairs != 0 ||
-		diagnostics.PostPolicyOperations != 2 ||
-		diagnostics.PostPolicyOperationsByStage["primary"] != 1 ||
-		diagnostics.PostPolicyOperationsByStage["assistant_result"] != 1 ||
-		diagnostics.PostPolicyOperationsByType[string(extractor.OperationAdd)] != 1 ||
-		diagnostics.PostPolicyOperationsByType[string(extractor.OperationUpdate)] != 1 ||
 		diagnostics.MultiCallPairs != 1 ||
 		diagnostics.AdditionalModelRequests != 2 ||
 		diagnostics.PersistenceTracedOperations != 3 ||
@@ -1940,10 +1904,6 @@ func TestAddLongMemEvalReplicateTraceDiagnostics(t *testing.T) {
 		diagnostics.PersistenceByStatus[lmePersistenceAlreadySatisfied] != 1 ||
 		diagnostics.PersistenceByStatus[lmePersistenceNotObserved] != 1 ||
 		diagnostics.PersistenceByEffect[string(extractor.OperationAdd)] != 1 ||
-		diagnostics.PostPolicyPersistenceTraced != 2 ||
-		diagnostics.PostPolicyPersistenceByStatus[lmePersistenceObserved] != 2 ||
-		diagnostics.PostPolicyPersistenceByEffect[string(extractor.OperationAdd)] != 1 ||
-		diagnostics.PostPolicyPersistenceByEffect[string(extractor.OperationUpdate)] != 1 ||
 		diagnostics.PersistedNewMemoriesByAttribution.User != 1 ||
 		diagnostics.PersistedNewMemoriesByAttribution.Assistant != 1 ||
 		diagnostics.PersistedNewMemoriesByAttribution.Unknown != 2 {

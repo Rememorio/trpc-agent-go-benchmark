@@ -20,14 +20,11 @@ const (
 	pgvectorUpdatePolicyMergeSimilar    pgvectorUpdatePolicy = "merge_similar"
 	pgvectorUpdatePolicyPreserveHistory pgvectorUpdatePolicy = "preserve_history"
 	pgvectorUpdatePolicyAppendOnly      pgvectorUpdatePolicy = "append_only"
-
-	assistantResultPolicyPreserving = "assistant-result-preserving"
 )
 
 type pgvectorExtractionConfig struct {
-	UpdatePolicy                pgvectorUpdatePolicy `json:"update_policy"`
-	AssistantResultExtraction   bool                 `json:"assistant_result_extraction"`
-	AssistantResultUpdatePolicy string               `json:"assistant_result_update_policy,omitempty"`
+	UpdatePolicy               pgvectorUpdatePolicy `json:"update_policy"`
+	AssistantEpisodeExtraction bool                 `json:"assistant_episode_extraction"`
 }
 
 func validatePGVectorExtractionFlags(backends []string) error {
@@ -69,23 +66,7 @@ func currentPGVectorExtractionConfig() (
 		)
 	}
 	return pgvectorExtractionConfig{
-		UpdatePolicy:              policy,
-		AssistantResultExtraction: *flagPGVectorAssistantResultExtraction,
-		AssistantResultUpdatePolicy: assistantResultUpdatePolicy(
-			policy, *flagPGVectorAssistantResultExtraction,
-		),
+		UpdatePolicy:               policy,
+		AssistantEpisodeExtraction: *flagPGVectorAssistantEpisodeExtraction,
 	}, nil
-}
-
-func assistantResultUpdatePolicy(
-	policy pgvectorUpdatePolicy,
-	enabled bool,
-) string {
-	if !enabled {
-		return ""
-	}
-	if policy == pgvectorUpdatePolicyAppendOnly {
-		return string(pgvectorUpdatePolicyAppendOnly)
-	}
-	return assistantResultPolicyPreserving
 }

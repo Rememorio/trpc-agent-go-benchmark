@@ -15,7 +15,6 @@ revision="$(git -C "${repo_root}" rev-parse HEAD)"
 modfile="${script_dir}/go.mod"
 sumfile="${script_dir}/go.sum"
 go_mod_flags=()
-go_build_flags=()
 temp_dir=""
 
 cleanup() {
@@ -47,7 +46,6 @@ case "${build_profile}" in
   candidate)
     ;;
   upstream)
-    go_build_flags=(-tags=lme_upstream)
     ;;
   *)
     echo "LME_AGENT_PROFILE must be candidate or upstream." >&2
@@ -85,5 +83,5 @@ ldflags="-X=main.lmeInjectedBuildRevision=${revision} -X=main.lmeInjectedBuildMo
 ldflags+=" -X=main.lmeInjectedModuleManifestSHA256=${manifest_sha}"
 ldflags+=" -X=main.lmeInjectedModuleSumSHA256=${sum_sha}"
 ldflags+=" -X=main.lmeInjectedBuildProfile=${build_profile}"
-GOWORK=off go run -mod=readonly "${go_build_flags[@]}" \
+GOWORK=off go run -mod=readonly \
   "${go_mod_flags[@]}" -ldflags "${ldflags}" . "$@"

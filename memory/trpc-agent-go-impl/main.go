@@ -199,10 +199,10 @@ var (
 		"PGVector auto-memory update policy: merge_similar, "+
 			"preserve_history, or append_only",
 	)
-	flagPGVectorAssistantResultExtraction = flag.Bool(
-		"pgvector-assistant-result-extraction",
+	flagPGVectorAssistantEpisodeExtraction = flag.Bool(
+		"pgvector-assistant-episode-extraction",
 		false,
-		"Extract concrete assistant-produced results into PGVector auto memory",
+		"Extract reusable assistant episodes into PGVector auto memory",
 	)
 	flagLMEModelCallTimeout = flag.Duration(
 		"lme-model-call-timeout",

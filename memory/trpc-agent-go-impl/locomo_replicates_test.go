@@ -760,12 +760,12 @@ func newLoCoMoReplicateTestFixture(
 	}
 	main := writeLoCoMoTestArm(
 		t, root, protocol, "main-arm", locomoReplicateRoleMain,
-		"upstream", "main-version", "reconcile", false, "", 0.8,
+		"upstream", "main-version", "reconcile", false, 0.8,
 	)
 	candidate := writeLoCoMoTestArm(
 		t, root, protocol, "candidate-arm",
 		locomoReplicateRoleCandidate, "candidate", "candidate-version",
-		"history-preserving", true, "assistant-result-preserving", 0.85,
+		"history-preserving", true, 0.85,
 	)
 	manifest := locomoReplicateManifest{
 		SchemaVersion:   locomoReplicateManifestSchemaVersion,
@@ -809,7 +809,6 @@ func writeLoCoMoTestArm(
 	moduleVersion string,
 	updatePolicy string,
 	assistantExtraction bool,
-	assistantPolicy string,
 	f1 float64,
 ) locomoReplicateArmSpec {
 	t.Helper()
@@ -846,8 +845,7 @@ func writeLoCoMoTestArm(
 		BuildProfile:                buildProfile,
 		ModuleReplacementVersion:    moduleVersion,
 		UpdatePolicy:                updatePolicy,
-		AssistantResultExtraction:   assistantExtraction,
-		AssistantResultUpdatePolicy: assistantPolicy,
+		AssistantEpisodeExtraction:  assistantExtraction,
 		TableSuffix:                 "_" + role,
 		TableStats:                  relativeLoCoMoTestPath(t, root, statsPath),
 		MemorySnapshot:              relativeLoCoMoTestPath(t, root, snapshotPath),
@@ -989,9 +987,8 @@ func newLoCoMoTestResult(
 			ReuseMemories:     reuse,
 			TableSuffix:       arm.TableSuffix,
 			PGVectorExtraction: &pgvectorExtractionConfig{
-				UpdatePolicy:                pgvectorUpdatePolicy(arm.UpdatePolicy),
-				AssistantResultExtraction:   arm.AssistantResultExtraction,
-				AssistantResultUpdatePolicy: arm.AssistantResultUpdatePolicy,
+				UpdatePolicy:               pgvectorUpdatePolicy(arm.UpdatePolicy),
+				AssistantEpisodeExtraction: arm.AssistantEpisodeExtraction,
 			},
 			Build: lmeBuildProvenance{
 				Revision:             protocol.BenchmarkRevision,

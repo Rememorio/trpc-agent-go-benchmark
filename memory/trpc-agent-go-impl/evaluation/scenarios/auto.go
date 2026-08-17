@@ -419,8 +419,6 @@ func qaResultFromError(qa dataset.QAItem, err error) *QAResult {
 	}
 }
 
-const autoMemoryLastErrorStateKey = "memory:last_extract_error"
-
 func autoExtractionWaitTimeout(
 	sessionCount int,
 	configured time.Duration,
@@ -487,10 +485,6 @@ func waitForAutoExtraction(
 	for {
 		allComplete := true
 		for i, sess := range sessions {
-			if raw, ok := sess.GetState(autoMemoryLastErrorStateKey); ok &&
-				len(raw) > 0 {
-				return fmt.Errorf("session %s: %s", sess.ID, raw)
-			}
 			raw, ok := sess.GetState(
 				memory.SessionStateKeyAutoMemoryLastExtractAt,
 			)

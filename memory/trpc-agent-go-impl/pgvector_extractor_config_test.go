@@ -11,37 +11,12 @@ package main
 
 import "testing"
 
-func TestAssistantResultUpdatePolicy(t *testing.T) {
-	t.Parallel()
-
-	if got := assistantResultUpdatePolicy(
-		pgvectorUpdatePolicyMergeSimilar, false,
-	); got != "" {
-		t.Fatalf("disabled policy = %q, want empty", got)
-	}
-	if got := assistantResultUpdatePolicy(
-		pgvectorUpdatePolicyMergeSimilar, true,
-	); got != assistantResultPolicyPreserving {
-		t.Fatalf("merge-similar result policy = %q", got)
-	}
-	if got := assistantResultUpdatePolicy(
-		pgvectorUpdatePolicyPreserveHistory, true,
-	); got != assistantResultPolicyPreserving {
-		t.Fatalf("preserve-history result policy = %q", got)
-	}
-	if got := assistantResultUpdatePolicy(
-		pgvectorUpdatePolicyAppendOnly, true,
-	); got != string(pgvectorUpdatePolicyAppendOnly) {
-		t.Fatalf("append-only result policy = %q", got)
-	}
-}
-
 func TestCurrentPGVectorExtractionConfig(t *testing.T) {
 	oldPolicy := *flagPGVectorUpdatePolicy
-	oldAssistantResults := *flagPGVectorAssistantResultExtraction
+	oldAssistantEpisodes := *flagPGVectorAssistantEpisodeExtraction
 	defer func() {
 		*flagPGVectorUpdatePolicy = oldPolicy
-		*flagPGVectorAssistantResultExtraction = oldAssistantResults
+		*flagPGVectorAssistantEpisodeExtraction = oldAssistantEpisodes
 	}()
 
 	for _, test := range []struct {
@@ -54,7 +29,7 @@ func TestCurrentPGVectorExtractionConfig(t *testing.T) {
 		{input: "APPEND_ONLY", want: pgvectorUpdatePolicyAppendOnly},
 	} {
 		*flagPGVectorUpdatePolicy = test.input
-		*flagPGVectorAssistantResultExtraction = true
+		*flagPGVectorAssistantEpisodeExtraction = true
 		got, err := currentPGVectorExtractionConfig()
 		if err != nil {
 			t.Fatalf("policy %q returned error: %v", test.input, err)
@@ -63,8 +38,8 @@ func TestCurrentPGVectorExtractionConfig(t *testing.T) {
 			t.Fatalf("policy %q = %q, want %q",
 				test.input, got.UpdatePolicy, test.want)
 		}
-		if !got.AssistantResultExtraction {
-			t.Fatalf("policy %q lost assistant-result setting", test.input)
+		if !got.AssistantEpisodeExtraction {
+			t.Fatalf("policy %q lost assistant-episode setting", test.input)
 		}
 	}
 
@@ -85,14 +60,14 @@ func TestCurrentPGVectorExtractionConfig(t *testing.T) {
 
 func TestValidatePGVectorExtractionFlags(t *testing.T) {
 	oldPolicy := *flagPGVectorUpdatePolicy
-	oldAssistantResults := *flagPGVectorAssistantResultExtraction
+	oldAssistantEpisodes := *flagPGVectorAssistantEpisodeExtraction
 	defer func() {
 		*flagPGVectorUpdatePolicy = oldPolicy
-		*flagPGVectorAssistantResultExtraction = oldAssistantResults
+		*flagPGVectorAssistantEpisodeExtraction = oldAssistantEpisodes
 	}()
 
 	*flagPGVectorUpdatePolicy = "custom"
-	*flagPGVectorAssistantResultExtraction = false
+	*flagPGVectorAssistantEpisodeExtraction = false
 	if err := validatePGVectorExtractionFlags([]string{"mem0"}); err != nil {
 		t.Fatalf("irrelevant pgvector flags returned error: %v", err)
 	}
@@ -110,14 +85,14 @@ func TestValidatePGVectorExtractionFlags(t *testing.T) {
 
 func TestBuildMemoryServiceOptionsAppliesPGVectorExtractionConfig(t *testing.T) {
 	oldPolicy := *flagPGVectorUpdatePolicy
-	oldAssistantResults := *flagPGVectorAssistantResultExtraction
+	oldAssistantEpisodes := *flagPGVectorAssistantEpisodeExtraction
 	defer func() {
 		*flagPGVectorUpdatePolicy = oldPolicy
-		*flagPGVectorAssistantResultExtraction = oldAssistantResults
+		*flagPGVectorAssistantEpisodeExtraction = oldAssistantEpisodes
 	}()
 
 	*flagPGVectorUpdatePolicy = "merge_similar"
-	*flagPGVectorAssistantResultExtraction = true
+	*flagPGVectorAssistantEpisodeExtraction = true
 	opts, err := buildMemoryServiceOptions(memoryConfig{
 		backend: "pgvector",
 		mode:    memoryModeAuto,
@@ -128,7 +103,7 @@ func TestBuildMemoryServiceOptionsAppliesPGVectorExtractionConfig(t *testing.T) 
 	if !opts.enableExtractor ||
 		opts.pgvectorExtraction.UpdatePolicy !=
 			pgvectorUpdatePolicyMergeSimilar ||
-		!opts.pgvectorExtraction.AssistantResultExtraction {
+		!opts.pgvectorExtraction.AssistantEpisodeExtraction {
 		t.Fatalf("unexpected pgvector extraction options: %#v", opts)
 	}
 }

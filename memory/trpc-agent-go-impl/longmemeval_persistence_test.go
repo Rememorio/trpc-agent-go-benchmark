@@ -32,46 +32,46 @@ func TestTraceExtractionPersistence(t *testing.T) {
 	extraction := &extractionTrace{
 		Operations: []extractionOperation{
 			{
-				Stage:  "primary",
+				Stage:  "ordinary",
 				Type:   extractor.OperationAdd,
 				Memory: "New value.",
 			},
 			{
-				Stage:  "primary",
+				Stage:  "ordinary",
 				Type:   extractor.OperationAdd,
 				Memory: "Already stored.",
 			},
 			{
-				Stage:    "primary",
+				Stage:    "ordinary",
 				Type:     extractor.OperationUpdate,
 				MemoryID: "update",
 				Memory:   "Updated value.",
 			},
 			{
-				Stage:    "primary",
+				Stage:    "ordinary",
 				Type:     extractor.OperationUpdate,
 				MemoryID: "missing-history-target",
 				Memory:   "Historical value.",
 			},
 			{
-				Stage:    "primary",
+				Stage:    "ordinary",
 				Type:     extractor.OperationDelete,
 				MemoryID: "delete",
 			},
 			{
-				Stage:    "primary",
+				Stage:    "ordinary",
 				Type:     extractor.OperationDelete,
 				MemoryID: "already-absent",
 			},
-			{Stage: "primary", Type: extractor.OperationClear},
-			{Stage: "primary", Type: extractor.OperationType("custom")},
+			{Stage: "ordinary", Type: extractor.OperationClear},
+			{Stage: "ordinary", Type: extractor.OperationType("custom")},
 			{
-				Stage:  "primary",
+				Stage:  "ordinary",
 				Type:   extractor.OperationAdd,
 				Memory: "Not persisted.",
 			},
 			{
-				Stage:  "primary",
+				Stage:  "ordinary",
 				Type:   extractor.OperationAdd,
 				Memory: "New value.",
 			},
@@ -168,7 +168,7 @@ func TestUnverifiableExtractionPersistence(t *testing.T) {
 	}
 	extraction := &extractionTrace{Operations: []extractionOperation{
 		{
-			Stage:    "primary",
+			Stage:    "ordinary",
 			Type:     extractor.OperationUpdate,
 			MemoryID: "target",
 		},
@@ -179,39 +179,21 @@ func TestUnverifiableExtractionPersistence(t *testing.T) {
 	)
 	if len(got) != 1 ||
 		got[0].OperationIndex != 0 ||
-		got[0].Stage != "primary" ||
+		got[0].Stage != "ordinary" ||
 		got[0].Type != extractor.OperationUpdate ||
 		got[0].TargetMemoryID != "target" ||
 		got[0].Status != lmePersistenceUnverifiable ||
 		got[0].Reason != "snapshot_read_error" {
 		t.Fatalf("unverifiable persistence = %+v", got)
 	}
-
-	extraction.PostPolicyObserved = true
-	extraction.PostPolicyOperations = []extractionOperation{{
-		Stage:  "assistant_result",
-		Type:   extractor.OperationAdd,
-		Memory: "Assistant result.",
-	}}
-	postPolicy := unverifiablePostPolicyPersistence(
-		extraction,
-		"snapshot_read_error",
-	)
-	if len(postPolicy) != 1 ||
-		postPolicy[0].Stage != "assistant_result" ||
-		postPolicy[0].Type != extractor.OperationAdd ||
-		postPolicy[0].Reason != "snapshot_read_error" {
-		t.Fatalf("post-policy unverifiable persistence = %+v", postPolicy)
-	}
 }
 
-func TestTracePostPolicyPersistenceRecognizesRotatedUpdate(t *testing.T) {
+func TestTraceExtractionPersistenceRecognizesRotatedUpdate(t *testing.T) {
 	t.Parallel()
 
 	extraction := &extractionTrace{
-		PostPolicyObserved: true,
-		PostPolicyOperations: []extractionOperation{{
-			Stage:    "primary",
+		Operations: []extractionOperation{{
+			Stage:    "ordinary",
 			Type:     extractor.OperationUpdate,
 			MemoryID: "old-id",
 			Memory:   "Updated value.",
@@ -223,7 +205,7 @@ func TestTracePostPolicyPersistenceRecognizesRotatedUpdate(t *testing.T) {
 	after := []memorySnapshot{{
 		ID: "new-id", Memory: "Updated value.",
 	}}
-	got := tracePostPolicyPersistence(
+	got := traceExtractionPersistence(
 		extraction,
 		before,
 		after,
@@ -414,12 +396,12 @@ func TestTraceExtractionPersistencePrefersTargetAndAttribution(t *testing.T) {
 	staged := traceExtractionPersistence(
 		&extractionTrace{Operations: []extractionOperation{
 			{
-				Stage:  "assistant_result",
+				Stage:  "assistant_episode",
 				Type:   extractor.OperationAdd,
 				Memory: "Shared text.",
 			},
 			{
-				Stage:  "primary",
+				Stage:  "ordinary",
 				Type:   extractor.OperationAdd,
 				Memory: "Shared text.",
 			},
@@ -445,7 +427,7 @@ func TestTraceExtractionPersistencePrefersTargetAndAttribution(t *testing.T) {
 	}
 	targeted := traceExtractionPersistence(
 		&extractionTrace{Operations: []extractionOperation{{
-			Stage:    "primary",
+			Stage:    "ordinary",
 			Type:     extractor.OperationUpdate,
 			MemoryID: "target",
 			Memory:   "Updated text.",

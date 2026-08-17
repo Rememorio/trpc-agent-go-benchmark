@@ -721,9 +721,9 @@ func buildMemoryServiceOptions(
 		if err != nil {
 			return memoryServiceOptions{}, err
 		}
-		if config.AssistantResultExtraction {
+		if config.AssistantEpisodeExtraction {
 			log.Printf("Warning: LoCoMo maps one human speaker per session to the assistant role; " +
-				"assistant-result extraction is a synthetic-role ablation, not a real assistant-output evaluation")
+				"assistant-episode extraction is a synthetic-role ablation, not a real assistant-output evaluation")
 		}
 		opts.pgvectorExtraction = config
 	}

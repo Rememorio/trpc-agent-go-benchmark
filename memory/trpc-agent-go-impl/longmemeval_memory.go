@@ -62,11 +62,7 @@ const (
 	lmeAutoMemoryGrace            = time.Second
 	lmeAutoMemoryTimeout          = 10 * time.Minute
 
-	// This diagnostic state is optional: upstream main does not write it,
-	// while candidate builds can surface asynchronous extraction failures.
-	// Keep the key local so the same benchmark source builds against both.
-	lmeAutoMemoryLastErrorStateKey = "memory:last_extract_error"
-	lmeAnswerRepairToolName        = "submit_longmemeval_answer"
+	lmeAnswerRepairToolName = "submit_longmemeval_answer"
 )
 
 var lmePGVectorTableNameRE = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
@@ -222,14 +218,11 @@ type ingestTrace struct {
 }
 
 type extractionTrace struct {
-	ExistingMemoryCount   int                          `json:"existing_memory_count"`
-	Operations            []extractionOperation        `json:"operations,omitempty"`
-	Persistence           []extractionPersistenceTrace `json:"persistence,omitempty"`
-	PostPolicyObserved    bool                         `json:"post_policy_observed,omitempty"`
-	PostPolicyOperations  []extractionOperation        `json:"post_policy_operations,omitempty"`
-	PostPolicyPersistence []extractionPersistenceTrace `json:"post_policy_persistence,omitempty"`
-	ModelCalls            []lmeModelCallTrace          `json:"model_calls,omitempty"`
-	Error                 string                       `json:"error,omitempty"`
+	ExistingMemoryCount int                          `json:"existing_memory_count"`
+	Operations          []extractionOperation        `json:"operations,omitempty"`
+	Persistence         []extractionPersistenceTrace `json:"persistence,omitempty"`
+	ModelCalls          []lmeModelCallTrace          `json:"model_calls,omitempty"`
+	Error               string                       `json:"error,omitempty"`
 }
 
 type lmeModelCallTrace struct {
@@ -470,116 +463,57 @@ type lmeTracingExtractor struct {
 	trace *extractionTrace
 }
 
-type lmeStagedOperationExtractor interface {
-	ExtractOperationStages(
-		ctx context.Context,
-		messages []model.Message,
-		existing []*memory.Entry,
-	) (primary, assistantResults []*extractor.Operation, err error)
-}
-
 func (e *lmeTracingExtractor) Extract(
 	ctx context.Context,
 	messages []model.Message,
 	existing []*memory.Entry,
 ) ([]*extractor.Operation, error) {
 	ops, err := e.MemoryExtractor.Extract(ctx, messages, existing)
-	e.recordExtraction(existing, err, extractionStage{ops: ops})
+	e.recordExtraction(existing, ops, err)
 	return ops, err
-}
-
-func (e *lmeTracingExtractor) ExtractOperationStages(
-	ctx context.Context,
-	messages []model.Message,
-	existing []*memory.Entry,
-) ([]*extractor.Operation, []*extractor.Operation, error) {
-	staged, ok := e.MemoryExtractor.(lmeStagedOperationExtractor)
-	if !ok {
-		ops, err := e.MemoryExtractor.Extract(ctx, messages, existing)
-		e.recordExtraction(existing, err, extractionStage{
-			name: "primary",
-			ops:  ops,
-		})
-		return ops, nil, err
-	}
-	primary, assistantResults, err := staged.ExtractOperationStages(
-		ctx, messages, existing,
-	)
-	e.recordExtraction(
-		existing,
-		err,
-		extractionStage{name: "primary", ops: primary},
-		extractionStage{name: "assistant_result", ops: assistantResults},
-	)
-	return primary, assistantResults, err
-}
-
-type extractionStage struct {
-	name string
-	ops  []*extractor.Operation
 }
 
 func (e *lmeTracingExtractor) recordExtraction(
 	existing []*memory.Entry,
+	ops []*extractor.Operation,
 	err error,
-	stages ...extractionStage,
 ) {
 	trace := &extractionTrace{ExistingMemoryCount: len(existing)}
 	if err != nil {
 		trace.Error = err.Error()
 	}
-	trace.Operations = traceExtractionOperations(stages...)
+	trace.Operations = traceExtractionOperations(ops)
 	e.mu.Lock()
 	e.trace = trace
 	e.mu.Unlock()
 }
 
-// ObservePostPolicyMemoryOperations is an optional capability consumed by the
-// auto-memory worker without expanding the public MemoryExtractor interface.
-func (e *lmeTracingExtractor) ObservePostPolicyMemoryOperations(
-	ctx context.Context,
-	primary, assistantResults []*extractor.Operation,
-) {
-	operations := traceExtractionOperations(
-		extractionStage{name: "primary", ops: primary},
-		extractionStage{
-			name: "assistant_result",
-			ops:  assistantResults,
-		},
-	)
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if e.trace == nil {
-		e.trace = &extractionTrace{}
-	}
-	e.trace.PostPolicyObserved = true
-	e.trace.PostPolicyOperations = operations
-}
-
 func traceExtractionOperations(
-	stages ...extractionStage,
+	ops []*extractor.Operation,
 ) []extractionOperation {
 	var operations []extractionOperation
-	for _, stage := range stages {
-		for _, op := range stage.ops {
-			if op == nil {
-				continue
-			}
-			item := extractionOperation{
-				Stage:        stage.name,
-				Type:         op.Type,
-				Memory:       op.Memory,
-				MemoryID:     op.MemoryID,
-				Topics:       append([]string(nil), op.Topics...),
-				MemoryKind:   op.MemoryKind,
-				Participants: append([]string(nil), op.Participants...),
-				Location:     op.Location,
-			}
-			if op.EventTime != nil {
-				item.EventTime = op.EventTime.UTC().Format(time.RFC3339Nano)
-			}
-			operations = append(operations, item)
+	for _, op := range ops {
+		if op == nil {
+			continue
 		}
+		stage := "ordinary"
+		if attributionFromMemoryText(op.Memory) == lmeAttributionAssistant {
+			stage = "assistant_episode"
+		}
+		item := extractionOperation{
+			Stage:        stage,
+			Type:         op.Type,
+			Memory:       op.Memory,
+			MemoryID:     op.MemoryID,
+			Topics:       append([]string(nil), op.Topics...),
+			MemoryKind:   op.MemoryKind,
+			Participants: append([]string(nil), op.Participants...),
+			Location:     op.Location,
+		}
+		if op.EventTime != nil {
+			item.EventTime = op.EventTime.UTC().Format(time.RFC3339Nano)
+		}
+		operations = append(operations, item)
 	}
 	return operations
 }
@@ -1289,7 +1223,7 @@ func runLongMemEvalMemory(ctx context.Context) error {
 				"memory:last_extract_at completion after each pair",
 			"retrieval_note": "retrieval hits are searched memories, not raw transcript chunks",
 			"evidence_note":  "source_sessions are inferred from the pair after which a memory first appeared or changed.",
-			"extraction_trace_note": "pgvector captures model-emitted operations, post-policy/reconciliation operations, and separately inferred persistence effects so extraction, reconciliation, and persistence misses can be separated; " +
+			"extraction_trace_note": "pgvector captures model-emitted operations and separately inferred persistence effects so extraction and persistence misses can be separated; " +
 				"Mem0 has no equivalent internal operation trace and keeps the conservative persisted-memory classification.",
 			"answer_scoring": "raw model output; no retrieval-assisted answer post-processing",
 			"blind_progress": *flagLMEBlindProgress,
@@ -1335,9 +1269,9 @@ func runLongMemEvalMemory(ctx context.Context) error {
 		}
 	}
 
-	log.Printf("LongMemEval memory run: cases=%d backends=%v model=%s pgvector_update_policy=%s pgvector_assistant_results=%t",
+	log.Printf("LongMemEval memory run: cases=%d backends=%v model=%s pgvector_update_policy=%s pgvector_assistant_episodes=%t",
 		len(cases), backends, modelName, pgExtractionConfig.UpdatePolicy,
-		pgExtractionConfig.AssistantResultExtraction)
+		pgExtractionConfig.AssistantEpisodeExtraction)
 	for i, inst := range cases {
 		log.Print(longMemEvalCaseProgress(i+1, len(cases), inst, *flagLMEBlindProgress))
 		cr := &caseResult{
@@ -1683,11 +1617,6 @@ func runCaseBackend(
 							trace.Extraction,
 							"snapshot_read_error",
 						)
-					trace.Extraction.PostPolicyPersistence =
-						unverifiablePostPolicyPersistence(
-							trace.Extraction,
-							"snapshot_read_error",
-						)
 				} else {
 					trace.Extraction.Persistence = traceExtractionPersistence(
 						trace.Extraction,
@@ -1697,15 +1626,6 @@ func runCaseBackend(
 						beforeSnapshotTruncated,
 						snapshotTruncated,
 					)
-					trace.Extraction.PostPolicyPersistence =
-						tracePostPolicyPersistence(
-							trace.Extraction,
-							beforeMemories,
-							memories,
-							newOrChanged,
-							beforeSnapshotTruncated,
-							snapshotTruncated,
-						)
 				}
 			}
 			trace.MemoryCount = len(memories)
@@ -2082,10 +2002,6 @@ func waitForAutoMemory(
 	defer ticker.Stop()
 
 	for {
-		if raw, ok := sess.GetState(lmeAutoMemoryLastErrorStateKey); ok &&
-			len(raw) > 0 {
-			return fmt.Errorf("auto memory job failed: %s", raw)
-		}
 		if raw, ok := sess.GetState(memory.SessionStateKeyAutoMemoryLastExtractAt); ok {
 			got, err := time.Parse(time.RFC3339Nano, string(raw))
 			if err != nil {
@@ -3786,11 +3702,9 @@ func saveCaseLog(
 				tr.ProviderUsageReported, tr.ProviderUsageError)
 		}
 		if tr.Extraction != nil {
-			fmt.Fprintf(&b, "  extraction: existing=%d operations=%d post_policy_observed=%v post_policy_operations=%d error=%s\n",
+			fmt.Fprintf(&b, "  extraction: existing=%d operations=%d error=%s\n",
 				tr.Extraction.ExistingMemoryCount,
 				len(tr.Extraction.Operations),
-				tr.Extraction.PostPolicyObserved,
-				len(tr.Extraction.PostPolicyOperations),
 				tr.Extraction.Error)
 			persistenceByOperation := make(
 				map[int]extractionPersistenceTrace,
@@ -3811,34 +3725,6 @@ func saveCaseLog(
 					truncate(op.Memory, 220))
 				if persistence, ok := persistenceByOperation[index]; ok {
 					fmt.Fprintf(&b, "      persistence: status=%s effect=%s reason=%s observed_id=%s observed_attribution=%s\n",
-						persistence.Status,
-						persistence.Effect,
-						persistence.Reason,
-						persistence.ObservedMemoryID,
-						persistence.ObservedAttribution)
-				}
-			}
-			postPolicyPersistenceByOperation := make(
-				map[int]extractionPersistenceTrace,
-				len(tr.Extraction.PostPolicyPersistence),
-			)
-			for _, persistence := range tr.Extraction.PostPolicyPersistence {
-				postPolicyPersistenceByOperation[persistence.OperationIndex] =
-					persistence
-			}
-			for index, op := range tr.Extraction.PostPolicyOperations {
-				fmt.Fprintf(&b, "    post_policy_op[%d] stage=%s type=%s id=%s kind=%s event_time=%s topics=%s memory=%s\n",
-					index,
-					op.Stage,
-					op.Type,
-					op.MemoryID,
-					op.MemoryKind,
-					op.EventTime,
-					strings.Join(op.Topics, ","),
-					truncate(op.Memory, 220))
-				if persistence, ok :=
-					postPolicyPersistenceByOperation[index]; ok {
-					fmt.Fprintf(&b, "      post_policy_persistence: status=%s effect=%s reason=%s observed_id=%s observed_attribution=%s\n",
 						persistence.Status,
 						persistence.Effect,
 						persistence.Reason,

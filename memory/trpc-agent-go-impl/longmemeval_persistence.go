@@ -43,20 +43,6 @@ func unverifiableExtractionPersistence(
 	return unverifiableOperationPersistence(extraction.Operations, reason)
 }
 
-func unverifiablePostPolicyPersistence(
-	extraction *extractionTrace,
-	reason string,
-) []extractionPersistenceTrace {
-	if extraction == nil || !extraction.PostPolicyObserved ||
-		len(extraction.PostPolicyOperations) == 0 {
-		return nil
-	}
-	return unverifiableOperationPersistence(
-		extraction.PostPolicyOperations,
-		reason,
-	)
-}
-
 func unverifiableOperationPersistence(
 	operations []extractionOperation,
 	reason string,
@@ -91,28 +77,6 @@ func traceExtractionPersistence(
 	}
 	return traceOperationPersistence(
 		extraction.Operations,
-		before,
-		after,
-		changed,
-		beforeSnapshotTruncated,
-		afterSnapshotTruncated,
-	)
-}
-
-func tracePostPolicyPersistence(
-	extraction *extractionTrace,
-	before []memorySnapshot,
-	after []memorySnapshot,
-	changed []memorySnapshot,
-	beforeSnapshotTruncated bool,
-	afterSnapshotTruncated bool,
-) []extractionPersistenceTrace {
-	if extraction == nil || !extraction.PostPolicyObserved ||
-		len(extraction.PostPolicyOperations) == 0 {
-		return nil
-	}
-	return traceOperationPersistence(
-		extraction.PostPolicyOperations,
 		before,
 		after,
 		changed,
@@ -380,9 +344,9 @@ func findSnapshotForOperation(
 
 func persistenceOperationAttribution(stage string) string {
 	switch strings.TrimSpace(stage) {
-	case "primary":
+	case "ordinary":
 		return lmeAttributionUser
-	case "assistant_result":
+	case "assistant_episode":
 		return lmeAttributionAssistant
 	default:
 		return ""
