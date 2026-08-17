@@ -17,9 +17,9 @@ import (
 type pgvectorUpdatePolicy string
 
 const (
-	pgvectorUpdatePolicyReconcile         pgvectorUpdatePolicy = "reconcile"
-	pgvectorUpdatePolicyHistoryPreserving pgvectorUpdatePolicy = "history-preserving"
-	pgvectorUpdatePolicyAddOnly           pgvectorUpdatePolicy = "add-only"
+	pgvectorUpdatePolicyMergeSimilar    pgvectorUpdatePolicy = "merge_similar"
+	pgvectorUpdatePolicyPreserveHistory pgvectorUpdatePolicy = "preserve_history"
+	pgvectorUpdatePolicyAppendOnly      pgvectorUpdatePolicy = "append_only"
 
 	assistantResultPolicyPreserving = "assistant-result-preserving"
 )
@@ -55,16 +55,16 @@ func currentPGVectorExtractionConfig() (
 ) {
 	var policy pgvectorUpdatePolicy
 	switch strings.ToLower(strings.TrimSpace(*flagPGVectorUpdatePolicy)) {
-	case "", string(pgvectorUpdatePolicyReconcile):
-		policy = pgvectorUpdatePolicyReconcile
-	case string(pgvectorUpdatePolicyHistoryPreserving):
-		policy = pgvectorUpdatePolicyHistoryPreserving
-	case string(pgvectorUpdatePolicyAddOnly):
-		policy = pgvectorUpdatePolicyAddOnly
+	case "", string(pgvectorUpdatePolicyMergeSimilar):
+		policy = pgvectorUpdatePolicyMergeSimilar
+	case string(pgvectorUpdatePolicyPreserveHistory):
+		policy = pgvectorUpdatePolicyPreserveHistory
+	case string(pgvectorUpdatePolicyAppendOnly):
+		policy = pgvectorUpdatePolicyAppendOnly
 	default:
 		return pgvectorExtractionConfig{}, fmt.Errorf(
-			"unsupported pgvector-update-policy %q: expected reconcile, "+
-				"history-preserving, or add-only",
+			"unsupported pgvector-update-policy %q: expected merge_similar, "+
+				"preserve_history, or append_only",
 			*flagPGVectorUpdatePolicy,
 		)
 	}
@@ -84,11 +84,8 @@ func assistantResultUpdatePolicy(
 	if !enabled {
 		return ""
 	}
-	if policy == pgvectorUpdatePolicyAddOnly {
-		return string(pgvectorUpdatePolicyAddOnly)
+	if policy == pgvectorUpdatePolicyAppendOnly {
+		return string(pgvectorUpdatePolicyAppendOnly)
 	}
-	if policy == pgvectorUpdatePolicyHistoryPreserving {
-		return assistantResultPolicyPreserving
-	}
-	return string(pgvectorUpdatePolicyReconcile)
+	return assistantResultPolicyPreserving
 }

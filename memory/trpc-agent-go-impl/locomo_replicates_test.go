@@ -159,7 +159,7 @@ func TestCompareLoCoMoReplicatesRejectsInvalidInputs(t *testing.T) {
 			mutate: func(t *testing.T, fixture locomoReplicateTestFixture) {
 				result := readLoCoMoTestResult(t, fixture.mainFreshResult)
 				result.Metadata.PGVectorExtraction.UpdatePolicy =
-					pgvectorUpdatePolicyAddOnly
+					pgvectorUpdatePolicyAppendOnly
 				writeLoCoMoTestJSON(t, fixture.mainFreshResult, result)
 			},
 			wantError: "extraction configuration",

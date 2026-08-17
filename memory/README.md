@@ -385,7 +385,7 @@ LME_AGENT_REPLACEMENT="trpc.group/trpc-go/trpc-agent-go@<upstream-pseudo-version
   -lme-exclude-question-ids-file ../results/lme-observed-question-ids.txt \
   -lme-implementation upstream-holdout-<commit> \
   -lme-blind-progress=true \
-  -pgvector-update-policy reconcile \
+  -pgvector-update-policy merge_similar \
   -pgvector-assistant-result-extraction=false \
   -model "$LME_ANSWER_MODEL" \
   -eval-model "$LME_JUDGE_MODEL" \
@@ -424,7 +424,7 @@ LME_AGENT_REPLACEMENT="trpc.group/trpc-go/trpc-agent-go@<candidate-pseudo-versio
   -lme-user-scope "$LME_BLIND_USER_SCOPE" \
   -lme-model-response-cache "$LME_CANDIDATE_MODEL_CACHE" \
   -lme-embedding-response-cache "$LME_CANDIDATE_EMBEDDING_CACHE" \
-  -pgvector-update-policy history-preserving \
+  -pgvector-update-policy merge_similar \
   -pgvector-assistant-result-extraction=true \
   -vector-topk 30 \
   -table-suffix _lme_holdout_candidate \
@@ -450,7 +450,7 @@ LME_AGENT_PROFILE=upstream \
   -lme-abstention-count 4 \
   -lme-sample-seed 48 \
   -lme-implementation upstream-main-<commit> \
-  -pgvector-update-policy reconcile \
+  -pgvector-update-policy merge_similar \
   -pgvector-assistant-result-extraction=false \
   -lme-answer=true \
   -lme-answer-cache ../results/lme-answer-cache.json \
@@ -471,7 +471,7 @@ LME_AGENT_PROFILE=candidate \
   -lme-abstention-count 4 \
   -lme-sample-seed 48 \
   -lme-implementation candidate-<commit> \
-  -pgvector-update-policy history-preserving \
+  -pgvector-update-policy merge_similar \
   -pgvector-assistant-result-extraction=true \
   -lme-answer=true \
   -lme-answer-cache ../results/lme-answer-cache.json \
@@ -866,7 +866,7 @@ build provenance.
 | `-scenario`         | long_context           | Evaluation scenario (comma-separated)  |
 | `-memory-backend`   | inmemory               | Memory backend (comma-separated)       |
 | `-pgvector-dsn`     | (env)                  | PostgreSQL DSN for pgvector            |
-| `-pgvector-update-policy` | reconcile            | `reconcile`, `history-preserving`, or `add-only` |
+| `-pgvector-update-policy` | merge_similar        | `merge_similar`, `preserve_history`, or `append_only` |
 | `-pgvector-assistant-result-extraction` | false | Retain concrete assistant results   |
 | `-mysql-dsn`        | (env)                  | MySQL DSN for mysql backend            |
 | `-embed-model`      | text-embedding-3-small | Embedding model for vector backends    |

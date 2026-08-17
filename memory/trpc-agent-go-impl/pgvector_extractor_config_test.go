@@ -15,24 +15,24 @@ func TestAssistantResultUpdatePolicy(t *testing.T) {
 	t.Parallel()
 
 	if got := assistantResultUpdatePolicy(
-		pgvectorUpdatePolicyReconcile, false,
+		pgvectorUpdatePolicyMergeSimilar, false,
 	); got != "" {
 		t.Fatalf("disabled policy = %q, want empty", got)
 	}
 	if got := assistantResultUpdatePolicy(
-		pgvectorUpdatePolicyReconcile, true,
-	); got != string(pgvectorUpdatePolicyReconcile) {
-		t.Fatalf("reconcile result policy = %q", got)
-	}
-	if got := assistantResultUpdatePolicy(
-		pgvectorUpdatePolicyHistoryPreserving, true,
+		pgvectorUpdatePolicyMergeSimilar, true,
 	); got != assistantResultPolicyPreserving {
-		t.Fatalf("history-preserving result policy = %q", got)
+		t.Fatalf("merge-similar result policy = %q", got)
 	}
 	if got := assistantResultUpdatePolicy(
-		pgvectorUpdatePolicyAddOnly, true,
-	); got != string(pgvectorUpdatePolicyAddOnly) {
-		t.Fatalf("add-only result policy = %q", got)
+		pgvectorUpdatePolicyPreserveHistory, true,
+	); got != assistantResultPolicyPreserving {
+		t.Fatalf("preserve-history result policy = %q", got)
+	}
+	if got := assistantResultUpdatePolicy(
+		pgvectorUpdatePolicyAppendOnly, true,
+	); got != string(pgvectorUpdatePolicyAppendOnly) {
+		t.Fatalf("append-only result policy = %q", got)
 	}
 }
 
@@ -48,10 +48,10 @@ func TestCurrentPGVectorExtractionConfig(t *testing.T) {
 		input string
 		want  pgvectorUpdatePolicy
 	}{
-		{input: "", want: pgvectorUpdatePolicyReconcile},
-		{input: " RECONCILE ", want: pgvectorUpdatePolicyReconcile},
-		{input: " HISTORY-PRESERVING ", want: pgvectorUpdatePolicyHistoryPreserving},
-		{input: "ADD-ONLY", want: pgvectorUpdatePolicyAddOnly},
+		{input: "", want: pgvectorUpdatePolicyMergeSimilar},
+		{input: " MERGE_SIMILAR ", want: pgvectorUpdatePolicyMergeSimilar},
+		{input: " PRESERVE_HISTORY ", want: pgvectorUpdatePolicyPreserveHistory},
+		{input: "APPEND_ONLY", want: pgvectorUpdatePolicyAppendOnly},
 	} {
 		*flagPGVectorUpdatePolicy = test.input
 		*flagPGVectorAssistantResultExtraction = true
@@ -68,17 +68,18 @@ func TestCurrentPGVectorExtractionConfig(t *testing.T) {
 		}
 	}
 
-	*flagPGVectorUpdatePolicy = "custom"
-	if _, err := currentPGVectorExtractionConfig(); err == nil {
-		t.Fatal("expected unsupported update policy error")
-	}
-	*flagPGVectorUpdatePolicy = "conservative"
-	if _, err := currentPGVectorExtractionConfig(); err == nil {
-		t.Fatal("expected removed conservative policy error")
-	}
-	*flagPGVectorUpdatePolicy = "preserve-history"
-	if _, err := currentPGVectorExtractionConfig(); err == nil {
-		t.Fatal("expected misspelled history-preserving policy error")
+	for _, invalid := range []string{
+		"custom",
+		"conservative",
+		"reconcile",
+		"history-preserving",
+		"add-only",
+		"preserve-history",
+	} {
+		*flagPGVectorUpdatePolicy = invalid
+		if _, err := currentPGVectorExtractionConfig(); err == nil {
+			t.Fatalf("expected policy %q to be rejected", invalid)
+		}
 	}
 }
 
@@ -99,7 +100,7 @@ func TestValidatePGVectorExtractionFlags(t *testing.T) {
 		t.Fatal("unsupported pgvector policy passed early validation")
 	}
 
-	*flagPGVectorUpdatePolicy = "reconcile"
+	*flagPGVectorUpdatePolicy = "merge_similar"
 	if err := validatePGVectorExtractionFlags(
 		[]string{"pgvector", "mem0"},
 	); err != nil {
@@ -115,7 +116,7 @@ func TestBuildMemoryServiceOptionsAppliesPGVectorExtractionConfig(t *testing.T) 
 		*flagPGVectorAssistantResultExtraction = oldAssistantResults
 	}()
 
-	*flagPGVectorUpdatePolicy = "reconcile"
+	*flagPGVectorUpdatePolicy = "merge_similar"
 	*flagPGVectorAssistantResultExtraction = true
 	opts, err := buildMemoryServiceOptions(memoryConfig{
 		backend: "pgvector",
@@ -126,7 +127,7 @@ func TestBuildMemoryServiceOptionsAppliesPGVectorExtractionConfig(t *testing.T) 
 	}
 	if !opts.enableExtractor ||
 		opts.pgvectorExtraction.UpdatePolicy !=
-			pgvectorUpdatePolicyReconcile ||
+			pgvectorUpdatePolicyMergeSimilar ||
 		!opts.pgvectorExtraction.AssistantResultExtraction {
 		t.Fatalf("unexpected pgvector extraction options: %#v", opts)
 	}

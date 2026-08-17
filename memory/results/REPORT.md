@@ -26,10 +26,22 @@ strategies:
 
 These approaches are compared against four Python agent frameworks
 (AutoGen, Agno, ADK, CrewAI) and ten external memory systems
-(Mem0, Zep, etc.). The current LongMemEval protocol-v2 evaluation uses
-one fixed, already-observed 16-question development set with three
-independent answers per arm. It is a regression and mechanism study,
-not unseen evidence or a claim about the complete 500-question dataset.
+(Mem0, Zep, etc.). LongMemEval is evaluated as a staged evidence program:
+
+1. a fixed, already-observed 16-question Oracle set for development and
+   mechanism ablation;
+2. a preregistered 8-question, full-haystack unseen non-target gate; and
+3. a 48-question, full-haystack same-size regression on the previously
+   observed selection used by the baseline.
+
+On the 48-question regression, the final pgvector candidate reaches 43/48
+majority-correct questions and 127/144 correct answer replicates, compared
+with 41/48 and 124/144 for self-hosted Mem0 OSS and 24/48 and 73/144 for
+upstream main. This is a descriptive lead over Mem0, not a statistically
+significant one (exact McNemar p=0.6875). The quality gate passes, but the
+overall promotion gate does not: uncached memory LLM tokens are 1.5699x main
+against a preregistered 1.55x limit. The result therefore supports the
+candidate's quality mechanisms while explicitly retaining a cost limitation.
 
 The LoCoMo tables retain historical artifacts. The trpc-agent-go `Original`,
 `Optimized`, and Agentic runs used auto-replay-v3, which executed a placeholder
@@ -48,13 +60,15 @@ v4.
 | Benchmark | Scope | Categories | Model | Embedding |
 | --- | --- | --- | --- | --- |
 | LoCoMo-10 | 10 conversations, 1,986 QA | single-hop (282), multi-hop (321), temporal (96), open-domain (841), adversarial (446) | GPT-4o-mini (inference + judge) | text-embedding-3-small |
-| LongMemEval Oracle | Fixed observed 16-question development regression from 500 questions | knowledge-update, multi-session, single-session-assistant, single-session-preference, single-session-user, temporal-reasoning; four selected abstention questions | glm52 (memory, answer, and judge) | text-embedding-3-small |
+| LongMemEval Oracle development | Fixed observed 16-question development regression from 500 questions; 183 replayed pairs per arm | all six LongMemEval types; four selected abstention questions | glm52 (memory, answer, and judge) | text-embedding-3-small |
+| LongMemEval-S full-haystack | Preregistered unseen non-target 8-case gate plus observed same-size 48-case regression; 1,954 and 11,839 replayed pairs per arm | all available unseen non-target types in the 8-case gate; all six types in the 48-case regression | glm52 (memory, answer, and judge) | text-embedding-3-small |
 
-LoCoMo is the broad quality and cross-system benchmark. LongMemEval
-Oracle removes the large irrelevant-session haystack so that failures can
-be attributed more precisely to memory extraction, persistence, retrieval,
-or answer generation. The latter does not substitute for a future
-LongMemEval-M evaluation under noisy long histories. Earlier protocol-v1
+LoCoMo is the broad quality and cross-system benchmark. LongMemEval Oracle
+removes the large irrelevant-session haystack so that failures can be
+attributed more precisely to extraction, persistence, retrieval, or answer
+generation. LongMemEval-S then restores each selected question's complete
+haystack. Here, "full-haystack 48" means 48 selected questions with all of
+their sessions, not the complete 500-question dataset. Earlier protocol-v1
 subsets remain useful for diagnosis, but their date transport differed
 between backends and they no longer support the formal cross-backend claim.
 
@@ -156,8 +170,8 @@ turn cannot erase when an earlier state was observed. Focused source passages
 preserve the concrete entity or list that triggered assistant-result recovery,
 and temporal retrieval keeps a bounded tail of dated events alongside hybrid
 search results. These mechanisms are opt-in for the candidate arm; ordinary
-user-memory updates continue to use the compatible default reconciliation
-behavior.
+user-memory updates continue to use the compatible default Merge Similar
+reconciliation behavior.
 
 The final retrieval stage uses the source marker already stored with assistant
 results. Explicit references to a past assistant answer add an
@@ -168,11 +182,14 @@ public API. The intent classifier is deliberately narrow: a bare "remind me,"
 generic follow-up, or current recommendation request is not treated as an
 assistant-history query.
 
-An earlier candidate exposed a separate history-preserving update policy for
-ordinary memories. A fresh LoCoMo policy ablation did not support it: default
-reconcile scored slightly higher overall and won two of three answer repeats.
-The final design therefore removes that public policy and its specialized
-state-recovery path. Strict preservation remains private to assistant-result
+An earlier candidate exposed a parallel history-preserving policy surface for
+ordinary memories. A fresh LoCoMo policy ablation did not support selecting it
+for this candidate: the default Merge Similar behavior scored slightly higher
+overall and won two of three answer repeats. Upstream subsequently introduced
+the canonical `MergeSimilar`, `PreserveHistory`, and `AppendOnly` enum. The
+integrated implementation adopts that API and removes the candidate's
+duplicate names and policy plumbing; the LongMemEval candidate remains on
+`MergeSimilar`. Strict preservation remains private to assistant-result
 memories, where rewriting a cited answer or structured deliverable would lose
 the evidence the feature is intended to retain.
 
@@ -196,8 +213,9 @@ transcript.
 
 All arms use glm52 at temperature 0, `text-embedding-3-small`, and top-k 30
 retrieval. The accepted frozen baseline compares upstream-main pgvector with
-default reconcile, the candidate with default reconcile plus assistant-result
-extraction, and a pinned self-hosted Mem0 OSS image backed by pgvector. The
+default Merge Similar, the candidate with default Merge Similar plus
+assistant-result extraction, and a pinned self-hosted Mem0 OSS image backed by
+pgvector. The
 final provenance-ranking refinement refreshes retrieval from the candidate's
 exact persisted-memory snapshot and then runs fresh answers and judges. This
 separates a retrieval change from extraction variance and allows ingestion
@@ -206,21 +224,46 @@ records extraction operations, memory diffs, retrieval hits, evidence
 provenance, errors, timings, LLM and embedding usage, cached tokens, build
 revisions, and sanitized Mem0 configuration.
 
-The fixed development selection contains two answerable questions from each
-LongMemEval type plus four abstention questions, for 16 questions total and
-183 replayed user/assistant pairs per arm. Every arm answers from its saved
-top-k three times. Each answer receives three independent semantic-judge votes.
-An empty content-addressed answer and judge ledger is shared across arms within
-each replicate, while different replicates use distinct ledgers. One planned
-replicate contained an incomplete Mem0 answer; it was rejected and replaced
-for every arm and every case using fresh ledgers. No case-selective resampling
-was allowed. Exact match, F1, and BLEU remain secondary diagnostics.
+Every evaluated arm answers from its saved top-k three times, and each answer
+receives three independent semantic-judge votes. An empty content-addressed
+answer and judge ledger is shared across arms within a replicate; different
+replicates use distinct ledgers. Exact match, F1, and BLEU remain secondary
+diagnostics.
+
+The three LongMemEval phases have different roles:
+
+- **Observed Oracle16 development:** two answerable questions from each type
+  plus four abstention questions, with 183 replayed pairs per arm. It is used
+  for bad-case analysis and direct mechanism ablation, not promotion.
+- **Preregistered unseen non-target8 gate:** two questions each from
+  knowledge-update, multi-session, single-session-user, and
+  temporal-reasoning, with 1,954 replayed pairs per arm. It excludes 373
+  historically exposed IDs, forbids adaptive tuning, and compares the final
+  named-example candidate against its immediate control. All 56
+  single-session-assistant and all 30 single-session-preference questions had
+  already been exposed, so this phase can establish only non-target
+  non-regression, not unseen assistant-result benefit.
+- **Observed full-haystack48 regression:** the exact prior baseline selection,
+  containing 9 knowledge-update, 9 multi-session, 9
+  single-session-assistant, 3 single-session-preference, 9
+  single-session-user, and 9 temporal-reasoning questions. Each arm replays
+  11,839 pairs. Its evidence scope is post-blind observed same-size
+  regression, not an unseen holdout.
 
 Dataset, selection, protocol, prompt, model, build, and Mem0 runtime digests
-are checked before comparison. The promotion gate was frozen before execution
-and covers majority quality, total correct replicates, category regressions,
-provider usage, backend errors, token cost, embedding cost, and memory count.
-No new blind holdout was selected or run in this evaluation.
+are checked before comparison. Gates are frozen before provider calls and
+cover majority quality, correct answer replicates, category regressions,
+provider usage, backend errors, LLM and embedding cost, and memory count.
+Shared model and embedding response caches are content-addressed and applied
+symmetrically; consequently wall-clock latency is diagnostic rather than a
+fairness claim.
+
+The 48-case candidate run had one transient extraction timeout. Recovery was
+limited to that failed backend/case unit in an isolated table, under the same
+dataset, build, protocol, and cache lineage. The earliest technically valid
+retry replaced the failed unit; complete arms were not rerun or cherry-picked.
+Fresh answer and judge ledgers were then used for all three repetitions, and
+all final integrity audits and checksums passed.
 
 ## 3. Results
 
@@ -423,112 +466,151 @@ We also rerun the same configuration on another representative sample.
 
 ### 3.4 LongMemEval: pgvector vs Self-Hosted mem0
 
-> **Evidence scope:** This is a fixed, already-observed development regression
-> under `lme-memory-turn-pair-v2`. It validates protocol correctness and the
-> candidate mechanisms, but it is not an unseen holdout result. Earlier
-> protocol-v1 seed48/seed137 runs are retained only as historical diagnostics.
+> **Evidence scope:** The results below deliberately separate observed
+> development, preregistered unseen non-target non-regression, and observed
+> full-haystack regression. The 48-case result is not a claim about all 500
+> LongMemEval questions, and the 8 unseen cases do not test the target
+> assistant-history categories.
 
 The protocol-v2 comparison measures the production auto-memory path rather
-than the LoCoMo retrieval variants above. The accepted baseline replayed the
-same 183 user/assistant pairs with byte-identical message content,
-metadata-only observation dates, top-k 30, and isolated stores. Each arm then
-produced three independent answers; every answer received three independent
-semantic-judge votes.
+than the LoCoMo retrieval variants above. Its evidence ladder is:
 
-| Arm | Memory policy | Primary | Majority | Correct replicates | Unstable | Errors |
-| --- | --- | ---: | ---: | ---: | ---: | ---: |
-| pgvector main | default reconcile; assistant results off | 11/16 | 11/16 | 33/48 | 0 | 0 |
-| Mem0 OSS | pinned self-hosted OSS runtime | 14/16 | 14/16 | 42/48 | 0 | 0 |
-| pgvector before provenance ranking | reconcile; assistant results on | 15/16 | 15/16 | 46/48 | 1 | 0 |
-| final pgvector candidate | same memories; query-aware provenance RRF | **16/16** | **16/16** | **48/48** | **0** | **0** |
+| Phase | Selection | Purpose | Result |
+| --- | --- | --- | --- |
+| Oracle development | 16 observed questions, Oracle sessions, 183 pairs/arm | Find bad cases and isolate mechanisms | Final candidate 16/16 majority, 48/48 answer replicates |
+| Unseen non-target gate | 8 preregistered questions, full haystack, 1,954 pairs/arm | Detect regressions outside the target categories | PASS: candidate 8/8 and 24/24; control 8/8 and 23/24 |
+| Same-size regression | 48 previously observed questions, full haystack, 11,839 pairs/arm | Compare final candidate with frozen main and Mem0 baselines | Quality PASS; cost FAIL; overall gate FAIL |
 
-The first three rows use the accepted all-arm replacement manifest. One earlier
-replicate was discarded because a Mem0 answer remained truncated; the entire
-replicate was rerun for all arms and all cases with fresh answer and judge
-ledgers. The final row is a retrieval-only follow-up over the exact candidate
-memory snapshot, with three new answer ledgers and three votes per answer. It
-therefore inherits memory-layer cost but not answer outcomes.
+**Observed development and mechanism selection.** On Oracle16, upstream main
+scored 11/16 majority and 33/48 answer replicates, Mem0 scored 14/16 and 42/48,
+and assistant-result extraction without provenance ranking scored 15/16 and
+46/48. Query-aware provenance RRF over the exact same candidate memory snapshot
+reached 16/16 and 48/48. The last change corrected an abstention failure by
+ranking user-grounded evidence above an assistant estimate while retaining 3/3
+accuracy on the explicit assistant-history cases.
 
-The majority result spans all six categories:
+These observed ablations determined the final shape rather than adding every
+candidate mechanism. Conservative assistant-result recovery was retained
+because removing it caused a zero-memory extraction failure. Preserve History
+was not selected for the candidate after the default Merge Similar policy
+scored slightly higher in a fresh LoCoMo ablation and won two of three
+repetitions. The post-experiment integration adopts upstream's canonical
+policy enum while keeping strict assistant-result preservation private and
+applying a narrow, query-aware retrieval signal.
 
-| LongMemEval type | Cases | pgvector main | Mem0 OSS | Before ranking | Final candidate |
+The evaluated artifacts predate the final upstream merge. Their scores remain
+tied to the revisions and digests below; `ed61e8956932` is the post-evaluation
+integration head, not a relabeling of an evaluated build. The merge preserves
+the selected algorithm, replaces duplicate policy APIs with upstream's API,
+and is covered by unit and package tests, but it has not been re-run as another
+48-case experiment.
+
+**Preregistered unseen non-target gate.** Before provider calls, the experiment
+froze seed 20260812, excluded 373 historically exposed question IDs, prohibited
+adaptive tuning, and selected two questions from each of the four categories
+that still had unexposed examples. Candidate and control both reached 8/8
+majority; the candidate improved replicate stability from 23/24 to 24/24.
+Every category tied 2/2. Candidate/control cost ratios were 1.0087 for logical
+memory LLM tokens, 1.0137 for uncached tokens, 1.0140 for embedding requests,
+1.0106 for logical embedding tokens, and 1.0287 for final memories, all below
+the frozen 1.25 limit. Six answer/judge integrity audits and the final checksum
+manifest passed. This result supports non-target non-regression only.
+
+**Observed full-haystack48 quality.** The final comparison uses three fresh
+answers per arm and three judge votes per answer:
+
+| Arm | Primary | Majority | Correct replicates | Unstable | Backend/answer/judge errors |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| knowledge-update | 2 | 2 | 2 | 2 | **2** |
-| multi-session | 4 | 2 | 3 | 3 | **4** |
-| single-session-assistant | 2 | 0 | **2** | **2** | **2** |
-| single-session-preference | 2 | **2** | **2** | **2** | **2** |
-| single-session-user | 3 | **3** | **3** | **3** | **3** |
-| temporal-reasoning | 3 | 2 | 2 | **3** | **3** |
+| pgvector main | 24/48 | 24/48 | 73/144 | 1 | 0/0/0 |
+| Mem0 OSS | 40/48 | 41/48 | 124/144 | 5 | 0/0/0 |
+| final pgvector candidate | **43/48** | **43/48** | **127/144** | **2** | **0/0/0** |
 
-Provider-reported memory-layer usage excludes answer and judge calls. The final
-candidate rows below are inherited from the byte-stable pre-ranking snapshot:
+At question-majority level, candidate versus main has 19 wins, 0 losses, and
+29 ties, a +39.58 percentage-point delta with exact McNemar p=0.0000038147.
+Candidate versus Mem0 has 4 wins, 2 losses, and 42 ties, a +4.17 point delta
+with p=0.6875. The candidate therefore clearly improves main, but its lead over
+Mem0 is descriptive and statistically inconclusive at this sample size.
 
-| Arm | LLM calls | Prompt tokens | Completion tokens | Total tokens | Cached tokens | Cache hit rate |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| pgvector main | 183 | 1,114,204 | 69,853 | 1,184,057 | 441,472 | 39.62% |
-| Mem0 OSS | 183 | 1,667,854 | 97,377 | 1,765,231 | 1,292,992 | 77.52% |
-| pgvector before provenance ranking | 209 | 1,520,533 | 121,276 | 1,641,809 | 558,400 | 36.72% |
-| final pgvector candidate | 209 | 1,520,533 | 121,276 | 1,641,809 | 558,400 | 36.72% |
+| LongMemEval type | Cases | pgvector main | Mem0 OSS | Candidate |
+| --- | ---: | ---: | ---: | ---: |
+| knowledge-update | 9 | 6 | **7** | **7** |
+| multi-session | 9 | 5 | **9** | **9** |
+| single-session-assistant | 9 | 1 | 7 | **8** |
+| single-session-preference | 3 | 1 | 2 | **3** |
+| single-session-user | 9 | 6 | **9** | **9** |
+| temporal-reasoning | 9 | 5 | **7** | **7** |
 
-| Arm | Embedding requests | Response-cache hits | Provider calls | Embedding tokens | Final memories | Ingest time | Search time |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| pgvector main | 663 | 210 | 453 | 16,500 | 141 | 1,697.6s | 21.0s |
-| Mem0 OSS | - | - | 373 | 116,822 | 492 | 1,941.4s | 21.9s |
-| pgvector before provenance ranking | 627 | 231 | 396 | 27,946 | 311 | 2,770.2s | 0.085s |
-| final pgvector candidate | 627 | 231 | 396 | 27,946 | 311 | 2,770.2s | refreshed |
+The candidate wins two category-majority rows and ties Mem0 on four; no
+category regresses. Replicate-level differences inside tied categories remain:
+candidate/Mem0 are 21/21 on knowledge-update, 27/27 on multi-session, 26/27 on
+single-session-user, and 20/21 on temporal-reasoning.
 
-Against main, the final candidate uses 1.3866x memory LLM tokens, 1.6937x
-embedding tokens, 0.9457x logical embedding requests, and 2.2057x final
-memories. Against Mem0 it uses 6.99% fewer memory LLM tokens, 76.08% fewer
-embedding tokens, and 36.79% fewer final memories, although ingestion is 42.69%
-longer. Prompt-cache tokens are reported separately because billing semantics
-depend on the provider. The final answer follow-up consumed 140,568 answer
-tokens over 54 model calls and 39,997 judge tokens over 144 calls; all ledgers
-started empty and had zero cache hits.
+**Memory-layer resource accounting.** Values below exclude answer and judge
+calls. Logical totals include response-cache hits so that each arm is charged
+for equivalent work; cached and uncached tokens are shown separately. Ingest
+time is diagnostic because shared caches and sequential execution make latency
+order-dependent.
 
-The saved trajectories localize the remaining baseline failures:
+| Arm | LLM calls | Logical LLM tokens | Cached | Uncached | Embedding requests | Logical embedding tokens | Final memories | Ingest hours |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| pgvector main | 11,839 | 73,513,494 | 46,871,488 | 26,642,006 | 38,806 | 1,286,558 | 10,020 | 18.10 |
+| Mem0 OSS | 11,873 | 118,491,412 | 92,562,432 | 25,928,980 | 22,643 | 6,464,761 | 26,413 | 22.51 |
+| final pgvector candidate | 12,874 | 102,369,375 | 60,543,936 | 41,825,439 | 34,819 | 2,292,799 | 21,330 | 27.83 |
 
-- `cc539528` and `e3fc4d6e` are extraction failures in main. The candidate
-  preserves the assistant's `Ruby, Python, PHP` list and the named entity
-  `Dr. Arati Prabhakar`; both assistant-history questions are 3/3 correct.
-- `d682f1a2` is primarily an answer-context failure in main: all three delivery
-  services are present in retrieval, but main answers `2`. It does not justify
-  another extraction rule.
-- Mem0's `09ba9854_abs` treats suggested bus/taxi prices as user-grounded and
-  answers an abstention question. Its `gpt4_7abb270c` retrieval contains all six
-  source sessions but is crowded by recommendations and loses usable temporal
-  structure; both failures are stable across three answers.
-- Before provenance ranking, `09ba9854_abs` is also the candidate's sole
-  majority failure: an assistant estimate ranks first and only one of three
-  answers abstains. Query-aware RRF moves the user's grounded statement about a
-  roughly $60 taxi above that estimate. Three fresh answers then abstain, while
-  the two explicit assistant-history cases remain 3/3 correct.
+Relative to Mem0, the candidate uses 13.6% fewer total logical LLM tokens,
+64.5% fewer logical embedding tokens, and 19.2% fewer final memories, but 61.3%
+more uncached LLM tokens. Relative to main, the frozen cost gate evaluates:
 
-The retrieval refinement changed order in 14 of 16 observed questions but
-changed neither persisted memories nor evidence coverage. Tightening the intent
-classifier afterward produced byte-for-byte identical retrieval arrays on all
-16 questions, including scores and order. The cross-dataset check replayed 60
-top-30 LoCoMo trajectories over 31 unique queries and a frozen table of 139
-active memories. That table contained no assistant-result memories, so the new
-RRF signal was empty in every call and exactly matched the former three-signal
-merge; the inherited target mean F1 was 0.7122. This is a zero-provider
-component-inactivity regression, not evidence that provenance ranking improves
-LoCoMo or an independent sample.
+| Cost check vs main | Candidate ratio | Limit | Result |
+| --- | ---: | ---: | --- |
+| Logical memory LLM tokens | 1.3925x | 1.55x | PASS |
+| Uncached memory LLM tokens | **1.5699x** | **1.55x** | **FAIL** |
+| Embedding requests | 0.8973x | 2.00x | PASS |
+| Logical embedding tokens | 1.7821x | 2.50x | PASS |
+| Final memories | 2.1287x | 3.00x | PASS |
 
-Earlier ablations still constrain the design. Removing conservative recovery
-was rejected because `e3fc4d6e` produced no memory. A public
-history-preserving update policy was removed after default reconcile scored
-slightly higher on its direct LoCoMo ablation and won two of three repeats.
-Prompt compaction's formal gate was retained as rejected after exceeding its
-exact model-call bound, even though later quality diagnostics supported the
-smaller internal prompt. These outcomes favor a private, narrow retrieval
-signal over another public policy or special-case extraction rule.
+The only failed check exceeds its allowed token cap by about 530,330 tokens,
+or 1.28% of that cap. This is small enough to motivate later cost work, but it
+must not be rounded into a pass or tuned away on the already-observed 48 IDs.
 
-All current LongMemEval evidence comes from the already-observed 16-question
-development set. The final candidate is integrated with observed evidence only
-and is not promotion-eligible. An authorized, preregistered unseen
-full-haystack holdout and a larger LongMemEval-M run remain necessary before
-making a generalization claim.
+**Bad-case attribution.** Automated labels mark all five stable candidate
+failures as `evidence_or_answer_miss` because the relevant source sessions are
+present in extraction and retrieval. Manual trajectory inspection gives a more
+useful diagnosis:
+
+| Question | Type | Candidate / Mem0 / main | Earliest actionable failure |
+| --- | --- | ---: | --- |
+| `6071bd76` | knowledge-update | 0/3 / 3/3 / 0/3 | Reconcile updates the French-press ratio from 6 to 5 ounces but removes the old value, so the directional change cannot be answered. |
+| `6e984301` | temporal-reasoning | 0/3 / 2/3 / 0/3 | Extraction normalizes the sculpting-class start and tool-purchase dates into a 9-week interval instead of the referenced 3 weeks. |
+| `9ea5eabc` | knowledge-update | 0/3 / 1/3 / 0/3 | Paris, Hawaii, and Japan memories are retrieved, but inconsistent event dating and ranking select an older family trip as the latest. |
+| `eaca4986` | single-session-assistant | 0/3 / 0/3 / 0/3 | Assistant-result compression stores a different song's patterns but omits the exact chorus sequence for the second song. |
+| `gpt4_e414231e` | temporal-reasoning | 0/3 / 0/3 / 0/3 | Both bike events are retrieved, but both are normalized to 2023-03-15, producing 0 days instead of 4 (or 5 inclusive). |
+
+These failures point to state-transition representation, temporal grounding,
+and lossless structured-result extraction. They do not justify increasing
+top-k or adding a generic similarity heuristic: the source sessions were
+already retrieved in every case.
+
+**Recovery and decision.** One candidate unit (`77eafa52`) timed out during
+the original 48-case extraction. Three isolated retries all completed 265/265
+pairs; an orchestration validator initially rejected them because omitted Go
+`omitempty` zero fields were interpreted as nonzero. A deterministic amendment
+selected the earliest technically valid retry, retained later retries only as
+operational overhead, and merged no other case. One continuation stopped
+before model calls because its output directory was absent, and another
+completed judging but invoked audit without the explicit dataset; the final
+continuation bound the exact dataset and reused already-valid artifacts. All
+three final candidate audits, source/result hashes, and aggregate checksums
+pass.
+
+The research iteration can now be closed without another observed-set tuning
+round. The candidate has a robust, large improvement over main and a small
+descriptive lead over Mem0, while the report preserves the non-significant
+Mem0 comparison and the failed uncached-token gate. A future promotion study
+should freeze this candidate, reduce uncached cost on independently selected
+data, and use a genuinely hidden target-category set or a new benchmark split;
+the current LongMemEval-S pool no longer contains unexposed assistant or
+preference questions.
 
 ---
 
@@ -1037,14 +1119,16 @@ Agno                |====================                      | 0.267
    came from legacy replay-v3 and are not current evidence. Long-Context
    remains an unaffected reference for short single-session histories.
 
-3. **The opt-in pgvector candidate leads both upstream main and self-hosted
-   Mem0 on the fixed LongMemEval development regression.** Under protocol v2,
-   it scores 16/16 and 48/48 correct answer replicates, versus main's 11/16
-   and 33/48 and Mem0's 14/16 and 42/48. Assistant-result extraction repairs
+3. **The opt-in pgvector candidate strongly improves upstream main and
+   descriptively leads self-hosted Mem0 on the 48-case full-haystack
+   regression.** It reaches 43/48 majority and 127/144 correct answer
+   replicates, versus main's 24/48 and 73/144 and Mem0's 41/48 and 124/144.
+   The main comparison is significant (exact McNemar p=0.0000038147); the
+   Mem0 comparison is not (p=0.6875). Assistant-result extraction repairs
    assistant-history recall, while query-aware provenance RRF prevents those
-   results from displacing user-grounded evidence on ordinary queries. Direct
-   ablation rejects a separate history-preserving ordinary-update policy. No
-   new unseen holdout has been run under this protocol.
+   results from displacing user-grounded evidence on ordinary queries. A
+   preregistered unseen 8-case gate also passes, but it covers only non-target
+   categories and must not be presented as unseen target benefit.
 
 4. **trpc-agent-go now surpasses dedicated memory systems by a wide
    margin.** Session Recall's 4-category weighted F1 of 0.531 is well
@@ -1084,14 +1168,15 @@ Agno                |====================                      | 0.267
    while the optimized version provides a second memory strategy built on
    extracted persistent memories.
 
-7. **The next target is unseen generalization, not more observed-set tuning.**
-   The current candidate closes every observed LongMemEval development gap and
-   uses 1.3866x main's memory tokens, 1.6937x its embedding tokens, and 2.2057x
-   its final memories while retaining 48/48 correct replicates. The LoCoMo
-   replay proves that the new component is inert on one frozen snapshot, not
-   that it generalizes. Further quality tuning on these observed IDs would risk
-   overfitting; the next promotion step is a preregistered unseen
-   full-haystack holdout.
+7. **The current iteration should be frozen, not tuned to the observed gate.**
+   The full-haystack48 outcome and integrity gates pass, but the overall gate
+   fails because uncached memory tokens are 1.5699x main against a 1.55x
+   limit. The overage is only 1.28% of the allowed cap, yet tuning these known
+   IDs to cross the threshold would weaken the evidence. The next promotion
+   step is cost reduction on independently selected data followed by a hidden
+   target-category evaluation. The current LongMemEval-S pool cannot supply
+   that holdout because every assistant and preference question has already
+   been exposed.
 
 ### Production Recommendations
 
@@ -1102,7 +1187,8 @@ Agno                |====================                      | 0.267
 | Long-running agents with durable extracted memory | Optimized pgvector auto memory |
 | History exceeding context window | Session Recall or optimized |
 | Memory regression development | Fixed observed Oracle set with saved stage-level traces |
-| Candidate promotion | Preregistered unseen full-haystack holdout plus LoCoMo regression gate |
+| Non-target safety gate | Preregistered unexposed full-haystack sample with frozen cost bounds |
+| Candidate promotion | Frozen candidate, independent cost validation, hidden target-category evaluation, and LoCoMo regression gate |
 
 ---
 
@@ -1116,7 +1202,7 @@ Agno                |====================                      | 0.267
 | Models | GPT-4o-mini (LoCoMo); glm52 (LongMemEval) |
 | Embedding | text-embedding-3-small |
 | PostgreSQL | 15+ with pgvector extension |
-| Datasets | LoCoMo-10 (10 samples, 1,986 QA); LongMemEval Oracle (fixed observed 16-question development regression) |
+| Datasets | LoCoMo-10 (10 samples, 1,986 QA); LongMemEval Oracle observed16; LongMemEval-S unseen non-target8 and observed full-haystack48 |
 | Comparison backend | Pinned self-hosted Mem0 OSS runtime with pgvector (LongMemEval) |
 
 ### B. Full Category Breakdown (F1 / BLEU / LLM)
@@ -1152,7 +1238,7 @@ The primary arm shape is:
   -dataset ../../summary/data/longmemeval-cleaned/longmemeval_oracle.json \
   -lme-question-ids "$FROZEN_QUESTION_IDS" \
   -memory-backend pgvector,mem0 \
-  -pgvector-update-policy reconcile \
+  -pgvector-update-policy merge_similar \
   -pgvector-assistant-result-extraction=false \
   -mem0-llm-temperature 0 \
   -model glm52 \
@@ -1165,18 +1251,42 @@ The primary arm shape is:
 ```
 
 Candidate pgvector reuses the exact IDs and protocol with
-`-pgvector-update-policy reconcile` and
-`-pgvector-assistant-result-extraction=true`. The accepted three-arm baseline
-uses default reconcile and remains immutable. Two saved-retrieval re-answer
-runs use fresh, distinct answer ledgers; all result sets use three judge votes
-per answer. One incomplete replicate is replaced across all arms and all cases,
-as frozen before its replacement calls. The final candidate refreshes only
-retrieval from the exact accepted candidate memory snapshot, then performs
-three fresh answer/judge repetitions. The original replicate manifest freezes
-its quality and cost gate.
+`-pgvector-update-policy merge_similar` and
+`-pgvector-assistant-result-extraction=true`. Archived artifacts record the
+same default policy under the earlier `reconcile` label; they remain immutable.
+Two saved-retrieval re-answer runs use fresh, distinct answer ledgers; all
+result sets use three judge votes
+per answer. One incomplete development replicate was replaced across all arms
+and all cases, as frozen before replacement calls. The final development
+candidate refreshes only retrieval from the exact accepted memory snapshot,
+then performs three fresh answer/judge repetitions.
+
+The later full-haystack experiments use the cleaned LongMemEval-S dataset. The
+unseen non-target8 plan was registered before provider calls, froze seed
+20260812 and 373 excluded IDs, prohibited adaptive tuning, and required six
+integrity audits. The observed48 comparison reuses the exact previous baseline
+selection and freezes three answer repetitions, three judge votes per answer,
+the three-arm quality rules, and all cost thresholds. Each phase keeps isolated
+stores, explicit dataset and selection digests, content-addressed cache lineage,
+fresh answer/judge ledgers, and a final checksum manifest.
+
+| Formal phase | Dataset/selection SHA-256 | Aggregate SHA-256 | Final status |
+| --- | --- | --- | --- |
+| Unseen non-target8 | dataset `d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442`; selection `51bfb910ff00239cdd3709c94148d42be8ae64d8a189c2db34b27795c93f5738` | `04a69a5d31ef851f9489f55858bbf124cdcfd3e0e330c31b2eaeeab9b161842e` | Integrity, outcome, and cost PASS |
+| Observed full-haystack48 recovery | manifest `48b5d98ebc8ae1a16f8a203e70c5d926cbc0828d49ed43f59a89abb3766daa0e` | `10f379ba140a09285f912ef92c3420be93553b955780a40329149dacf4123f09` | Integrity PASS; outcome PASS; cost FAIL |
+
+The full-haystack48 recovery replaces only the timed-out candidate unit with
+the earliest valid isolated retry. Its three final candidate audit digests are
+`46f92b60fbdbfdd433dd2f08b663bc8a92cbbad72071c73a3b0308bcb09477ad`,
+`eccb711f167931f0c31a36de4b63174c58f13e9b3e045daa0c79fe64e069dffc`,
+and `5622ed2b8f047ccccb7d0a1fc24fa2cf97c626d2c040748e52ced4367d79a274`.
+The exhaustive table below preserves the earlier Oracle16 development and
+mechanism-ablation lineage.
 
 | Provenance item | Digest or revision |
 | --- | --- |
+| Post-evaluation integrated trpc-agent-go head (not an evaluated artifact) | `ed61e8956932fa17740aa473d9a49017bc435d42` |
+| Current benchmark module replacement | `v0.0.0-20260817035228-ed61e8956932` |
 | Formal three-arm benchmark | `f7cf9370057daa382db925ca67500b9f66f173da` |
 | Compact-ablation benchmark | `8eb0bac316ee67938ab6ecb6052ff227f94363e0` |
 | pgvector main | `0c7774187da9330144df2a038ef18ee89ef2ae1c` |
@@ -1212,10 +1322,12 @@ its quality and cost gate.
 | LoCoMo provenance replay audit SHA-256 | `66c748d28c860832a5e28bfef2bf00201973a9aaff058153df219f40b565e898` |
 | Mem0 | source `b05cce58`, runtime `9d027353`, image `81d80e337521` |
 
-The audit verifies exact builds, complete provider usage, zero errors, isolated
-stores, all 16 cases and 183 pairs per arm, and `blind_holdout_authorized=false`.
-Raw model traces and stores remain local evaluation artifacts; the report
-contains only aggregate and stage-level diagnostic evidence.
+Audits verify exact builds, complete provider usage, isolated stores, per-case
+pair equality, cache lineage, and zero final backend/answer/judge errors.
+Recovery attempts that are not selected remain recorded as operational
+overhead and do not contribute to canonical quality or cost. Raw model traces
+and stores remain evaluation artifacts; the report contains only aggregates,
+digests, and stage-level diagnostics.
 
 ---
 

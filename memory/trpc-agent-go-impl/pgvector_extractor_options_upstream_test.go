@@ -19,7 +19,7 @@ import (
 func TestLongMemEvalExtractorOptionsUpstream(t *testing.T) {
 	t.Parallel()
 	if options, err := pgvectorExtractorOptions(
-		pgvectorExtractionConfig{UpdatePolicy: pgvectorUpdatePolicyReconcile},
+		pgvectorExtractionConfig{UpdatePolicy: pgvectorUpdatePolicyMergeSimilar},
 	); err != nil || len(options) != 0 {
 		t.Fatalf("default upstream options = %v, %v", options, err)
 	}
@@ -32,21 +32,21 @@ func TestLongMemEvalExtractorOptionsUpstream(t *testing.T) {
 		{
 			name: "history-preserving policy",
 			config: pgvectorExtractionConfig{
-				UpdatePolicy: pgvectorUpdatePolicyHistoryPreserving,
+				UpdatePolicy: pgvectorUpdatePolicyPreserveHistory,
 			},
 			want: "only supports update policy",
 		},
 		{
 			name: "add-only policy",
 			config: pgvectorExtractionConfig{
-				UpdatePolicy: pgvectorUpdatePolicyAddOnly,
+				UpdatePolicy: pgvectorUpdatePolicyAppendOnly,
 			},
 			want: "only supports update policy",
 		},
 		{
 			name: "assistant results",
 			config: pgvectorExtractionConfig{
-				UpdatePolicy:              pgvectorUpdatePolicyReconcile,
+				UpdatePolicy:              pgvectorUpdatePolicyMergeSimilar,
 				AssistantResultExtraction: true,
 			},
 			want: "does not support assistant-result extraction",

@@ -21,14 +21,14 @@ func TestLongMemEvalExtractorOptionsCandidate(t *testing.T) {
 	t.Parallel()
 	for _, config := range []pgvectorExtractionConfig{
 		{
-			UpdatePolicy:              pgvectorUpdatePolicyReconcile,
+			UpdatePolicy:              pgvectorUpdatePolicyMergeSimilar,
 			AssistantResultExtraction: true,
 		},
 		{
-			UpdatePolicy: pgvectorUpdatePolicyHistoryPreserving,
+			UpdatePolicy: pgvectorUpdatePolicyPreserveHistory,
 		},
 		{
-			UpdatePolicy: pgvectorUpdatePolicyAddOnly,
+			UpdatePolicy: pgvectorUpdatePolicyAppendOnly,
 		},
 	} {
 		options, err := pgvectorExtractorOptions(config)

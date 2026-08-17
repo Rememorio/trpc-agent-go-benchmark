@@ -11,23 +11,29 @@ This directory stores memory benchmark evaluation results.
 
 ## LongMemEval Memory Evaluation Summary
 
-The current production-style LongMemEval Oracle evaluation uses one fixed,
-already-observed 16-question development regression spanning all six types.
-Every arm replays all 183 selected user/assistant pairs, generates three
-independent answers per question, and judges every answer three times.
-Pgvector main scores 11/16 (33/48 answer replicates), self-hosted Mem0 OSS
-scores 14/16 (42/48), and pgvector with default reconcile plus
-assistant-result extraction scores 15/16 (46/48). A retrieval-only,
-query-aware provenance RRF refinement over the exact same memories reaches
-16/16 (48/48). Direct LoCoMo ablation found no support for a separate
-history-preserving policy, so ordinary memories retain default reconcile while
-assistant results keep a private provenance boundary. The final candidate
-inherits 1,641,809 memory LLM tokens and 311 final memories from its byte-stable
-pre-ranking snapshot: 1.3866x and 2.2057x pgvector main, while using 6.99% fewer
-memory LLM tokens and 36.79% fewer memories than Mem0. These are
-already-observed development results, not a generalization claim; the
-preregistered unseen protocol-v2 holdout has not run. See the unified reports
-for replay design, usage, bad cases, provenance, and limitations.
+The production-style LongMemEval evaluation now has three evidence layers. An
+observed 16-question Oracle set drives bad-case analysis and mechanism
+ablation. A preregistered 8-question full-haystack gate checks unseen
+non-target categories and passes with candidate/control majority scores of
+8/8 and replicate scores of 24/24 versus 23/24. The final same-size regression
+replays 11,839 pairs per arm for 48 previously observed full-haystack
+questions. Pgvector main scores 24/48 majority (73/144 answer replicates),
+self-hosted Mem0 OSS scores 41/48 (124/144), and the final pgvector candidate
+scores 43/48 (127/144). Candidate versus main is statistically significant;
+the 4-win, 2-loss comparison with Mem0 is descriptive rather than significant.
+
+Assistant-result extraction and query-aware provenance RRF account for the
+targeted quality gains. Direct LoCoMo ablation did not support selecting
+Preserve History for this candidate, so ordinary memories use the default
+Merge Similar policy while assistant results keep a private provenance
+boundary. The integrated implementation adopts upstream's canonical
+`MergeSimilar`, `PreserveHistory`, and `AppendOnly` enum instead of retaining a
+parallel candidate policy API. The 48-case integrity and outcome gates pass,
+but the overall gate fails because
+uncached memory LLM tokens are 1.5699x main against a frozen 1.55x limit. The
+candidate is therefore frozen rather than tuned on the observed selection.
+See the unified reports for replay design, resource accounting, pairwise
+statistics, bad cases, recovery provenance, and evidence limitations.
 
 ## LoCoMo Benchmark Evaluation Summary
 

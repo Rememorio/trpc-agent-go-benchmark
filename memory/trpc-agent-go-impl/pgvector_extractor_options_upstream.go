@@ -20,10 +20,10 @@ import (
 func pgvectorExtractorOptions(
 	config pgvectorExtractionConfig,
 ) ([]extractor.Option, error) {
-	if config.UpdatePolicy != pgvectorUpdatePolicyReconcile {
+	if config.UpdatePolicy != pgvectorUpdatePolicyMergeSimilar {
 		return nil, fmt.Errorf(
 			"upstream build profile only supports update policy %q",
-			pgvectorUpdatePolicyReconcile,
+			pgvectorUpdatePolicyMergeSimilar,
 		)
 	}
 	if config.AssistantResultExtraction {
