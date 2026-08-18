@@ -853,6 +853,20 @@ func TestLMETracingExtractorRecordsOperations(t *testing.T) {
 	}
 }
 
+func TestLMETracingExtractorExposesWrappedExtractor(t *testing.T) {
+	t.Parallel()
+
+	inner := &lmeExtractorStub{}
+	tracing := &lmeTracingExtractor{MemoryExtractor: inner}
+	if got := tracing.UnwrapMemoryExtractor(); got != inner {
+		t.Fatalf("unwrapped extractor = %T %p, want %T %p", got, got, inner, inner)
+	}
+	var nilTracing *lmeTracingExtractor
+	if got := nilTracing.UnwrapMemoryExtractor(); got != nil {
+		t.Fatalf("nil tracing extractor unwrapped to %T, want nil", got)
+	}
+}
+
 func TestLMETracingExtractorClassifiesOperationStages(t *testing.T) {
 	t.Parallel()
 

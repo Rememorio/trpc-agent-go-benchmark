@@ -463,6 +463,15 @@ type lmeTracingExtractor struct {
 	trace *extractionTrace
 }
 
+// UnwrapMemoryExtractor keeps optional built-in extractor capabilities visible
+// through the tracing decorator.
+func (e *lmeTracingExtractor) UnwrapMemoryExtractor() extractor.MemoryExtractor {
+	if e == nil {
+		return nil
+	}
+	return e.MemoryExtractor
+}
+
 func (e *lmeTracingExtractor) Extract(
 	ctx context.Context,
 	messages []model.Message,
