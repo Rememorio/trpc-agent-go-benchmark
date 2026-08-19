@@ -41,7 +41,7 @@ const (
 	// version whenever replay, prompting, or judging semantics change.
 	lmeProtocolVersion             = "lme-memory-role-round-v4"
 	lmeAttributionProtocolVersion  = "lme-memory-attribution-v2"
-	lmeAnswerPromptVersion         = "lme-memory-answer-v14"
+	lmeAnswerPromptVersion         = "lme-memory-answer-v15"
 	lmeAnswerRetryPromptVersion    = "lme-memory-answer-repair-v6"
 	lmeAnswerRetryStrategy         = "forced-answer-tool"
 	lmeAnswerRetryResponseFormat   = "forced_function_call"

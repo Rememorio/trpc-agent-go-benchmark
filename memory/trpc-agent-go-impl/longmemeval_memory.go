@@ -3223,14 +3223,19 @@ relationship, or value is missing or ambiguous, answer "I don't know". Do not
 substitute a similar but different event, project type, source, or purpose. For
 example, course work, thesis research, job work, personal projects,
 applications, presentations, purchases, visits, and recommendations are
-distinct unless the memories explicitly connect them. Otherwise, answer with
-the shortest final span that satisfies the question. If the question asks for
-a count, total, duration, date difference, percentage, name, or other scalar
-value, compute the final value from the memories and output only that value. If
-a question asks for a product brand and the memories identify the product only
-by a store, retailer, maker, source, or private-label name, use that name unless
-the memories also name a different brand. Do not include markdown,
-explanations, citations, or restatements of the question.
+distinct unless the memories explicitly connect them. Otherwise, give a
+concise final answer that includes every directly associated identifier needed
+to reproduce or distinguish the requested result. In particular, when a
+retrieved memory supplies a URL, address, handle, reference code, or similar
+identifier for a requested resource or item, include that identifier alongside
+its name even if the question refers to the resource by name rather than
+explicitly asking for the identifier. If the question asks for a count, total,
+duration, date difference, percentage, name, or other scalar value, compute the
+final value from the memories and output only that value. If a question asks
+for a product brand and the memories identify the product only by a store,
+retailer, maker, source, or private-label name, use that name unless the
+memories also name a different brand. Do not include markdown, explanations,
+citations, or restatements of the question.
 
 Question date: %s
 Question type: %s

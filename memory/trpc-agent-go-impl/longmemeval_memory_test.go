@@ -1879,8 +1879,13 @@ func TestBuildLongMemEvalAnswerPromptNonPreference(t *testing.T) {
 	if !strings.Contains(prompt, "(no memories retrieved)") {
 		t.Fatalf("missing empty-memory marker: %s", prompt)
 	}
-	if !strings.Contains(normalizedPrompt, "shortest final span") {
-		t.Fatalf("missing concise scalar guidance: %s", prompt)
+	if !strings.Contains(normalizedPrompt,
+		"concise final answer that includes every directly associated identifier") {
+		t.Fatalf("missing complete-identifier guidance: %s", prompt)
+	}
+	if !strings.Contains(normalizedPrompt,
+		"URL, address, handle, reference code") {
+		t.Fatalf("missing resource-identifier examples: %s", prompt)
 	}
 	if !strings.Contains(normalizedPrompt,
 		"ordered from most to least relevant") {
