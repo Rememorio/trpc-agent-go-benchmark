@@ -1,5 +1,13 @@
 # Long-Term Conversational Memory Evaluation on LoCoMo and LongMemEval
 
+> [!NOTE]
+> **Research archive (2026-08-26).** This report preserves the completed
+> formal evaluations and their original interpretation. A later confirmatory
+> observed48 run stopped after two runtime-incomplete baseline attempts; the
+> candidate and judges were never run, so that attempt adds no comparative
+> quality result. No merge is requested for the companion draft PRs. See
+> [ARCHIVE.md](ARCHIVE.md) for the terminal status and artifact policy.
+
 ## 1. Introduction
 
 This report evaluates the long-term conversational memory of

@@ -2,10 +2,19 @@
 
 This directory stores memory benchmark evaluation results.
 
+> [!NOTE]
+> This research line was archived on 2026-08-26. The completed formal
+> evaluations below remain the accepted evidence. A later confirmatory run
+> stopped after two runtime-incomplete baseline attempts; it never ran the
+> candidate or judges and does not supersede the completed results. See
+> [ARCHIVE.md](ARCHIVE.md).
+
 ## Reports
 
 | File | Description |
 |------|-------------|
+| [ARCHIVE.md](ARCHIVE.md) | Final research status, evidence boundary, and stopped-run diagnostics |
+| [ARCHIVE_MANIFEST.json](ARCHIVE_MANIFEST.json) | Machine-readable revisions, checksums, and terminal status |
 | [REPORT.md](REPORT.md) | Unified LoCoMo and LongMemEval evaluation report (English) |
 | [REPORT.zh_CN.md](REPORT.zh_CN.md) | Unified LoCoMo and LongMemEval evaluation report (Chinese) |
 

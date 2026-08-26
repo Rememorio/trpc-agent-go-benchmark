@@ -1,0 +1,138 @@
+{
+  "schema_version": 1,
+  "archived_at": "2026-08-26T00:00:00Z",
+  "status": "archived_no_merge_requested",
+  "pull_requests": {
+    "implementation": "https://github.com/trpc-group/trpc-agent-go/pull/2196",
+    "benchmark": "https://github.com/trpc-group/trpc-agent-go-benchmark/pull/17"
+  },
+  "pre_archive_heads": {
+    "implementation_pr": "daabd5cecc630170022f4478c555f4ee06a7d9d8",
+    "benchmark_pr": "4252e04e1878066a34afe92c7b095f673ecea329"
+  },
+  "accepted_evidence": {
+    "oracle_development": {
+      "questions": 16,
+      "pairs_per_arm": 183,
+      "candidate_majority_correct": 16,
+      "candidate_answer_replicates_correct": 48,
+      "candidate_answer_replicates_total": 48
+    },
+    "unseen_non_target_gate": {
+      "questions": 8,
+      "pairs_per_arm": 1954,
+      "candidate_majority_correct": 8,
+      "candidate_answer_replicates_correct": 24,
+      "candidate_answer_replicates_total": 24,
+      "integrity_passed": true,
+      "outcome_passed": true,
+      "cost_passed": true,
+      "aggregate_sha256": "04a69a5d31ef851f9489f55858bbf124cdcfd3e0e330c31b2eaeeab9b161842e"
+    },
+    "observed_same_size_regression": {
+      "questions": 48,
+      "pairs_per_arm": 11839,
+      "pgvector_main_majority_correct": 24,
+      "mem0_oss_majority_correct": 41,
+      "pgvector_candidate_majority_correct": 43,
+      "integrity_passed": true,
+      "outcome_passed": true,
+      "cost_passed": false,
+      "aggregate_sha256": "10f379ba140a09285f912ef92c3420be93553b955780a40329149dacf4123f09"
+    }
+  },
+  "stopped_confirmation_run": {
+    "run_id": "lme-assistant-fallback-observed48-three-arm-20260820-v1",
+    "registered_at": "2026-08-20T07:20:00Z",
+    "started_at": "2026-08-20T07:24:27Z",
+    "stopped_at": "2026-08-26T02:16:00Z",
+    "terminal_status": "stopped_runtime_incomplete",
+    "dataset_sha256": "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442",
+    "selection_manifest_sha256": "ac13bb3dbe62ea859911ed11e10b512e2f4047de57f57f7663a277edd06f7b64",
+    "selection_sha256": "2e4229e34614b2a581035cf0707816007bdb48168c4facbb0e75ccb869cfa862",
+    "question_ids_sha256": "fcb54c397028f5714783cb8dbcc8a8c8b6a493f98d068756a5fbf8c7af9b4559",
+    "protocol_sha256": "54092cd3db44f4ed2f028e4af664eda964077214f5e1a03ce9c3a9273053b752",
+    "builds": {
+      "benchmark": "f3c01f8d2d60bf4ff7935b0ca2f577da3abb9cbb",
+      "pgvector_main": "5fba9e5f62d28f4e007cea5e556fef707cd0917b",
+      "pgvector_candidate": "5ba5ce7e5ab6045f7e4a9b70c6e8c4ed7ce602c1",
+      "mem0_oss": "42986025d5d41877cc6ff7c37b96d188cf3aea01"
+    },
+    "expected": {
+      "cases_per_arm": 48,
+      "pairs_per_arm": 11839,
+      "answer_replicates": 3,
+      "judge_runs_per_answer": 3
+    },
+    "attempts": [
+      {
+        "arm": "baseline",
+        "attempt": 1,
+        "cases": 48,
+        "pgvector_pairs": 11692,
+        "mem0_pairs": 11839,
+        "runtime_errors": 1,
+        "accepted": false
+      },
+      {
+        "arm": "baseline",
+        "attempt": 2,
+        "cases": 48,
+        "pgvector_pairs": 11624,
+        "mem0_pairs": 11839,
+        "runtime_errors": 3,
+        "accepted": false
+      }
+    ],
+    "failed_units": [
+      {
+        "attempt": 1,
+        "case": 27,
+        "question_id": "gpt4_f420262d",
+        "backend": "pgvector",
+        "failure": "embedding_provider_request_failed"
+      },
+      {
+        "attempt": 2,
+        "case": 2,
+        "question_id": "7527f7e2",
+        "backend": "pgvector",
+        "failure": "embedding_provider_request_failed"
+      },
+      {
+        "attempt": 2,
+        "case": 29,
+        "question_id": "gpt4_483dd43c",
+        "backend": "mem0",
+        "failure": "answer_remained_truncated_after_repair"
+      },
+      {
+        "attempt": 2,
+        "case": 46,
+        "question_id": "7a8d0b71",
+        "backend": "pgvector",
+        "failure": "embedding_provider_request_failed"
+      }
+    ],
+    "candidate_started": false,
+    "judging_started": false,
+    "aggregate_created": false,
+    "comparative_conclusion_allowed": false,
+    "baseline_quality_outcomes_inadvertently_inspected": true,
+    "candidate_quality_outcomes_inspected": false,
+    "adaptive_tuning_performed": false
+  },
+  "artifact_policy": {
+    "compact_release_tag": "memory-lme-archive-20260826",
+    "full_local_run_bytes": 2397209917,
+    "full_local_run_published": false,
+    "excluded": [
+      "credentials",
+      "machine_specific_paths",
+      "provider_response_caches",
+      "databases",
+      "raw_memory_snapshots",
+      "incomplete_quality_outputs"
+    ]
+  }
+}

@@ -1,5 +1,12 @@
 # 基于 LoCoMo 与 LongMemEval 的长期对话记忆评估
 
+> [!NOTE]
+> **研究归档（2026-08-26）。** 本报告保留已经完成的正式评测及其原始解释。
+> 后续一次 observed48 确认性实验在两轮 baseline 均出现运行时错误后停止；
+> candidate 与 judge 均未运行，因此该实验不产生新的跨方案质量结论。
+> 两个关联 Draft PR 均不再请求合入。最终状态与制品保留策略见
+> [ARCHIVE.md](ARCHIVE.md)。
+
 ## 1. 引言
 
 本报告使用两个互补基准评估 **trpc-agent-go** 的长期对话记忆能力：
